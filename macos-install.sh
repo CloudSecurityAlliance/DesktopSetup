@@ -123,10 +123,10 @@ brew_install_or_upgrade_cask() {
   local cask="$1"
   if brew list --cask "$cask" >/dev/null 2>&1; then
     ohai "Upgrading $cask (if outdated)"
-    brew upgrade "${BREW_VERBOSE[@]}" --cask "$cask" || true
+    brew upgrade "${BREW_VERBOSE[@]}" --cask "$cask" || warn "Failed to upgrade $cask (cask); continuing"
   else
     ohai "Installing $cask (cask)"
-    brew install "${BREW_VERBOSE[@]}" --cask "$cask" || abort "Failed to install $cask"
+    brew install "${BREW_VERBOSE[@]}" --cask "$cask" || warn "Failed to install $cask (cask); continuing"
   fi
 }
 
@@ -143,17 +143,75 @@ npm_install_or_update() {
   fi
 }
 
+brew_item_type() {
+  # Echoes 'formula' or 'cask' if found, empty otherwise
+  local name="$1"
+  if brew info --formula "$name" >/dev/null 2>&1; then
+    echo formula; return 0
+  elif brew info --cask "$name" >/dev/null 2>&1; then
+    echo cask; return 0
+  else
+    return 1
+  fi
+}
+
+brew_try_install_or_upgrade() {
+  # Try install/upgrade via brew for a given name and type; never abort.
+  local name="$1"; local type="$2"
+  if [[ "$type" == "formula" ]]; then
+    if brew list --formula "$name" >/dev/null 2>&1; then
+      ohai "Upgrading $name (if outdated)"
+      brew upgrade "${BREW_VERBOSE[@]}" "$name" || return 1
+    else
+      ohai "Installing $name"
+      brew install "${BREW_VERBOSE[@]}" "$name" || return 1
+    fi
+  elif [[ "$type" == "cask" ]]; then
+    if brew list --cask "$name" >/dev/null 2>&1; then
+      ohai "Upgrading $name (cask, if outdated)"
+      brew upgrade "${BREW_VERBOSE[@]}" --cask "$name" || return 1
+    else
+      ohai "Installing $name (cask)"
+      brew install "${BREW_VERBOSE[@]}" --cask "$name" || return 1
+    fi
+  else
+    return 1
+  fi
+}
+
 install_ai_tool() {
-  # Tries Homebrew formula first; falls back to npm global if formula not found.
+  # Prefer Homebrew if available; otherwise fall back to npm.
   local name="$1"; shift
-  local formula="$1"; shift
+  local brew_name="$1"; shift
   local npm_pkg="$1"; shift
   local bin_name="${1:-$npm_pkg}"
 
-  if brew info --json=v2 "$formula" >/dev/null 2>&1; then
-    brew_install_or_upgrade_formula "$formula"
+  local existing_bin
+  existing_bin="$(command -v "$bin_name" 2>/dev/null || true)"
+
+  # If the binary already exists but is not Brew-managed, skip to avoid conflicts
+  if [[ -n "$existing_bin" ]]; then
+    local t
+    t="$(brew_item_type "$brew_name" || true)"
+    if [[ -n "$t" ]] && { brew list --"$t" "$brew_name" >/dev/null 2>&1; }; then
+      # Managed by Brew: try to upgrade
+      brew_try_install_or_upgrade "$brew_name" "$t" || warn "Failed to upgrade $name via Homebrew; continuing"
+      return 0
+    fi
+    ohai "$name already present at $existing_bin; skipping installation to avoid conflicts"
+    return 0
+  fi
+
+  # Try Homebrew first if it's a known item
+  local item_type
+  item_type="$(brew_item_type "$brew_name" || true)"
+  if [[ -n "$item_type" ]]; then
+    if ! brew_try_install_or_upgrade "$brew_name" "$item_type"; then
+      warn "Homebrew failed for $name; falling back to npm ($npm_pkg)"
+      npm_install_or_update "$npm_pkg" "$bin_name"
+    fi
   else
-    warn "$name not available as Homebrew formula ($formula). Falling back to npm ($npm_pkg)."
+    warn "$name not available in Homebrew as '$brew_name'; installing via npm ($npm_pkg)"
     npm_install_or_update "$npm_pkg" "$bin_name"
   fi
 }
