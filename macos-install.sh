@@ -28,6 +28,27 @@ tty_reset="$(tty_escape 0)"
 ohai() { printf "${tty_blue}==>${tty_bold} %s${tty_reset}\n" "$*"; }
 warn() { printf "${tty_red}Warning${tty_reset}: %s\n" "$*" >&2; }
 
+# Confirmation prompt
+confirm_or_exit() {
+  if [[ -n "${NONINTERACTIVE-}" ]]; then
+    return 0
+  fi
+  echo
+  ohai "This script will:"
+  echo "- Install or update Homebrew"
+  echo "- Install or update pyenv and Python 3.12.x"
+  echo "- Install or update Node.js"
+  echo "- Install or update AI CLIs: claude-code, gemini-cli, codex"
+  echo "- Install or update 1Password (app)"
+  echo
+  read -r -p "Proceed? [Y/n] " reply
+  case "${reply:-Y}" in
+    [Yy]*) ;;
+    [Nn]*) abort "Aborted by user." ;;
+    *)     ;; # default yes
+  esac
+}
+
 # Modes
 if [[ -z "${NONINTERACTIVE-}" ]]; then
   if [[ -n "${CI-}" ]]; then
@@ -139,6 +160,8 @@ install_ai_tool() {
 main() {
   ohai "Starting Cloud Security Alliance macOS setup"
 
+  confirm_or_exit
+
   ensure_homebrew
   ensure_brew_in_path
 
@@ -219,4 +242,3 @@ main() {
 }
 
 main "$@"
-
