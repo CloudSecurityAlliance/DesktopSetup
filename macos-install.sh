@@ -34,12 +34,8 @@ confirm_or_exit() {
     return 0
   fi
   echo
-  ohai "This script will:"
-  echo "- Install or update Homebrew"
-  echo "- Install or update pyenv and Python 3.12.x"
-  echo "- Install or update Node.js"
-  echo "- Install or update AI CLIs: claude-code, gemini-cli, codex"
-  echo "- Install or update 1Password (app)"
+  ohai "Preflight plan (detected actions):"
+  preflight_plan
   echo
   read -r -p "Proceed? [Y/n] " reply
   case "${reply:-Y}" in
@@ -47,6 +43,136 @@ confirm_or_exit() {
     [Nn]*) abort "Aborted by user." ;;
     *)     ;; # default yes
   esac
+}
+
+# Helper: locate a binary via PATH or common Homebrew paths
+find_bin_relaxed() {
+  local name="$1"
+  local p
+  if p="$(command -v "$name" 2>/dev/null)"; then
+    printf "%s" "$p"
+    return 0
+  fi
+  for p in "/opt/homebrew/bin/$name" "/usr/local/bin/$name"; do
+    if [[ -x "$p" ]]; then
+      printf "%s" "$p"
+      return 0
+    fi
+  done
+  return 1
+}
+
+# Print a one-line plan for a Homebrew formula with an expected binary
+plan_formula() {
+  # Args: <label> <formula> <bin>
+  local label="$1" formula="$2" bin="$3"
+  local brew_present=1
+  if command -v brew >/dev/null 2>&1; then brew_present=0; fi
+  local bin_path
+  bin_path="$(find_bin_relaxed "$bin" 2>/dev/null || true)"
+
+  if [[ $brew_present -ne 0 ]]; then
+    if [[ -n "$bin_path" ]]; then
+      echo "- ${label}: skip (already present at ${bin_path}, Homebrew not installed yet)"
+    else
+      echo "- ${label}: install via Homebrew (after installing Homebrew)"
+    fi
+    return 0
+  fi
+
+  if brew list --formula "$formula" >/dev/null 2>&1; then
+    echo "- ${label}: upgrade (Homebrew-managed)"
+  else
+    if [[ -n "$bin_path" ]]; then
+      echo "- ${label}: skip (already present at ${bin_path}, non-Homebrew)"
+    else
+      echo "- ${label}: install"
+    fi
+  fi
+}
+
+# Print a one-line plan for an AI tool (formula or cask) with expected binary
+plan_ai() {
+  # Args: <label> <brew_name> <bin>
+  local label="$1" brew_name="$2" bin="$3"
+  local brew_present=1
+  if command -v brew >/dev/null 2>&1; then brew_present=0; fi
+  local bin_path
+  bin_path="$(find_bin_relaxed "$bin" 2>/dev/null || true)"
+
+  if [[ $brew_present -ne 0 ]]; then
+    if [[ -n "$bin_path" ]]; then
+      echo "- ${label}: skip (already present at ${bin_path}, Homebrew not installed yet)"
+      return 0
+    fi
+    echo "- ${label}: install via Homebrew (after installing Homebrew)"
+    return 0
+  fi
+
+  local t
+  t="$(brew_item_type "$brew_name" || true)"
+  if [[ -z "$t" ]]; then
+    echo "- ${label}: ERROR (not found in Homebrew as '${brew_name}', will abort)"
+    return 0
+  fi
+
+  if brew list --"$t" "$brew_name" >/dev/null 2>&1; then
+    echo "- ${label}: upgrade (Homebrew-managed, $t)"
+  else
+    if [[ -n "$bin_path" ]]; then
+      echo "- ${label}: skip (already present at ${bin_path}, non-Homebrew)"
+    else
+      echo "- ${label}: install ($t)"
+    fi
+  fi
+}
+
+plan_1password() {
+  local brew_present=1
+  if command -v brew >/dev/null 2>&1; then brew_present=0; fi
+  local app_paths=("/Applications/1Password.app" "$HOME/Applications/1Password.app")
+
+  if [[ $brew_present -ne 0 ]]; then
+    for p in "${app_paths[@]}"; do
+      [[ -d "$p" ]] && { echo "- 1Password: skip (already installed at $p)"; return 0; }
+    done
+    echo "- 1Password: install via Homebrew cask (after installing Homebrew)"
+    return 0
+  fi
+
+  if brew list --cask 1password >/dev/null 2>&1; then
+    echo "- 1Password: upgrade (Homebrew-managed cask)"
+    return 0
+  fi
+  for p in "${app_paths[@]}"; do
+    if [[ -d "$p" ]]; then
+      echo "- 1Password: skip (already installed at $p)"
+      return 0
+    fi
+  done
+  echo "- 1Password: install (cask)"
+}
+
+preflight_plan() {
+  # Homebrew
+  if command -v brew >/dev/null 2>&1; then
+    echo "- Homebrew: already installed"
+  else
+    echo "- Homebrew: install"
+  fi
+
+  # Core formulas
+  plan_formula "pyenv" "pyenv" "pyenv"
+  plan_formula "Node.js" "node" "node"
+  plan_formula "Python 3.12.x (via pyenv)" "pyenv" "python3" >/dev/null 2>&1 || true
+
+  # AI tools
+  plan_ai "Claude Code" "claude-code" "claude"
+  plan_ai "Google Gemini CLI" "gemini-cli" "gemini"
+  plan_ai "ChatGPT Codex" "codex" "codex"
+
+  # 1Password
+  plan_1password
 }
 
 # Modes
@@ -143,6 +269,24 @@ npm_install_or_update() {
   fi
 }
 
+install_or_upgrade_formula_checked() {
+  # Args: <formula> <bin_name>
+  local formula="$1"; local bin_name="$2"
+  local existing_bin
+  existing_bin="$(command -v "$bin_name" 2>/dev/null || true)"
+  if [[ -n "$existing_bin" ]]; then
+    if brew list --formula "$formula" >/dev/null 2>&1; then
+      ohai "Upgrading $formula (Homebrew-managed, if outdated)"
+      brew upgrade "${BREW_VERBOSE[@]}" "$formula" || warn "Failed to upgrade $formula; continuing"
+    else
+      ohai "$formula already present at $existing_bin; skipping Homebrew install to avoid conflicts"
+    fi
+    return 0
+  fi
+
+  brew_install_or_upgrade_formula "$formula"
+}
+
 brew_item_type() {
   # Echoes 'formula' or 'cask' if found, empty otherwise
   local name="$1"
@@ -180,39 +324,80 @@ brew_try_install_or_upgrade() {
 }
 
 install_ai_tool() {
-  # Prefer Homebrew if available; otherwise fall back to npm.
+  # Install or upgrade an AI tool strictly via Homebrew. No npm fallback.
+  # Args: <display_name> <brew_name> <unused_npm_pkg> <bin_name>
   local name="$1"; shift
   local brew_name="$1"; shift
-  local npm_pkg="$1"; shift
-  local bin_name="${1:-$npm_pkg}"
+  local _unused_npm="$1"; shift
+  local bin_name="${1:-$brew_name}"
 
   local existing_bin
   existing_bin="$(command -v "$bin_name" 2>/dev/null || true)"
+  # Also check common Homebrew bin paths in case PATH isn't updated yet
+  if [[ -z "$existing_bin" ]]; then
+    for p in "/opt/homebrew/bin/$bin_name" "/usr/local/bin/$bin_name"; do
+      if [[ -x "$p" ]]; then existing_bin="$p"; break; fi
+    done
+  fi
 
   # If the binary already exists but is not Brew-managed, skip to avoid conflicts
-  if [[ -n "$existing_bin" ]]; then
-    local t
-    t="$(brew_item_type "$brew_name" || true)"
-    if [[ -n "$t" ]] && { brew list --"$t" "$brew_name" >/dev/null 2>&1; }; then
-      # Managed by Brew: try to upgrade
-      brew_try_install_or_upgrade "$brew_name" "$t" || warn "Failed to upgrade $name via Homebrew; continuing"
-      return 0
-    fi
-    ohai "$name already present at $existing_bin; skipping installation to avoid conflicts"
+  local t
+  t="$(brew_item_type "$brew_name" || true)"
+  if [[ -z "$t" ]]; then
+    abort "$name not available in Homebrew as '$brew_name'. Please add/tap a formula or fix the package name."
+  fi
+
+  if [[ -n "$existing_bin" ]] && ! brew list --"$t" "$brew_name" >/dev/null 2>&1; then
+    warn "$name detected at $existing_bin but not Homebrew-managed; leaving as-is and skipping for now"
     return 0
   fi
 
-  # Try Homebrew first if it's a known item
-  local item_type
-  item_type="$(brew_item_type "$brew_name" || true)"
-  if [[ -n "$item_type" ]]; then
-    if ! brew_try_install_or_upgrade "$brew_name" "$item_type"; then
-      warn "Homebrew failed for $name; falling back to npm ($npm_pkg)"
-      npm_install_or_update "$npm_pkg" "$bin_name"
+  # Install or upgrade via Homebrew
+  if ! brew_try_install_or_upgrade "$brew_name" "$t"; then
+    abort "Failed to install/upgrade $name via Homebrew."
+  fi
+}
+
+install_or_report_1password() {
+  ONEPASSWORD_STATUS="not installed"
+  local app_paths=("/Applications/1Password.app" "$HOME/Applications/1Password.app")
+
+  if brew list --cask 1password >/dev/null 2>&1; then
+    ohai "Upgrading 1Password (cask, if outdated)"
+    if brew upgrade "${BREW_VERBOSE[@]}" --cask 1password; then
+      ONEPASSWORD_STATUS="installed via Homebrew cask"
+      return 0
+    else
+      warn "Failed to upgrade 1password (cask); continuing"
+      ONEPASSWORD_STATUS="installed via Homebrew cask (upgrade failed)"
+      return 0
     fi
+  fi
+
+  # Not managed by Homebrew cask; see if app already exists
+  for p in "${app_paths[@]}"; do
+    if [[ -d "$p" ]]; then
+      ohai "1Password already installed at $p; skipping cask installation"
+      ONEPASSWORD_STATUS="already installed at $p"
+      return 0
+    fi
+  done
+
+  # Try to install via cask
+  ohai "Installing 1Password (cask)"
+  if brew install "${BREW_VERBOSE[@]}" --cask 1password; then
+    ONEPASSWORD_STATUS="installed via Homebrew cask"
   else
-    warn "$name not available in Homebrew as '$brew_name'; installing via npm ($npm_pkg)"
-    npm_install_or_update "$npm_pkg" "$bin_name"
+    # If installation failed but app now exists, treat as installed
+    for p in "${app_paths[@]}"; do
+      if [[ -d "$p" ]]; then
+        ohai "Detected 1Password at $p after cask attempt; marking as installed"
+        ONEPASSWORD_STATUS="already installed at $p"
+        return 0
+      fi
+    done
+    warn "Failed to install 1password (cask); continuing"
+    ONEPASSWORD_STATUS="installation failed"
   fi
 }
 
@@ -227,9 +412,9 @@ main() {
   ohai "Updating Homebrew"
   brew update || warn "brew update failed; continuing"
 
-  # Core dev tools
-  brew_install_or_upgrade_formula pyenv
-  brew_install_or_upgrade_formula node
+  # Core dev tools (avoid conflicts if already present outside Homebrew)
+  install_or_upgrade_formula_checked pyenv pyenv
+  install_or_upgrade_formula_checked node node
 
   # Ensure pyenv usable in this script
   export PYENV_ROOT="${PYENV_ROOT:-$HOME/.pyenv}"
@@ -269,7 +454,7 @@ main() {
   # Defaults can be overridden via env vars CSA_* if your org uses different package names.
   CLAUDE_FORMULA="${CSA_CLAUDE_FORMULA:-claude-code}"
   CLAUDE_NPM="${CSA_CLAUDE_NPM:-claude-code}"
-  CLAUDE_BIN="${CSA_CLAUDE_BIN:-claude-code}"
+  CLAUDE_BIN="${CSA_CLAUDE_BIN:-claude}"
 
   GEMINI_FORMULA="${CSA_GEMINI_FORMULA:-gemini-cli}"
   GEMINI_NPM="${CSA_GEMINI_NPM:-gemini-cli}"
@@ -285,7 +470,7 @@ main() {
   install_ai_tool "ChatGPT Codex" "$CODEX_FORMULA" "$CODEX_NPM" "$CODEX_BIN"
 
   # 1Password (app)
-  brew_install_or_upgrade_cask 1password
+  install_or_report_1password
 
   ohai "All done. Summary:"
   echo "- Homebrew: $(brew --version | head -n1)"
@@ -297,7 +482,7 @@ main() {
     echo "- Node: $(node --version)"
     echo "- npm: $(npm --version)"
   fi
-  echo "- 1Password: installed via Homebrew cask"
+  echo "- 1Password: ${ONEPASSWORD_STATUS:-not installed}"
 }
 
 main "$@"
