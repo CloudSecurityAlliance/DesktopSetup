@@ -107,14 +107,15 @@ ensure_brew_in_path() {
 }
 
 # Brew helpers (idempotent)
+BREW_VERBOSE=(--display-times --verbose)
 brew_install_or_upgrade_formula() {
   local formula="$1"
   if brew list --formula "$formula" >/dev/null 2>&1; then
     ohai "Upgrading $formula (if outdated)"
-    brew upgrade "$formula" >/dev/null 2>&1 || true
+    brew upgrade "${BREW_VERBOSE[@]}" "$formula" || true
   else
     ohai "Installing $formula"
-    brew install "$formula" || abort "Failed to install $formula"
+    brew install "${BREW_VERBOSE[@]}" "$formula" || abort "Failed to install $formula"
   fi
 }
 
@@ -122,10 +123,10 @@ brew_install_or_upgrade_cask() {
   local cask="$1"
   if brew list --cask "$cask" >/dev/null 2>&1; then
     ohai "Upgrading $cask (if outdated)"
-    brew upgrade --cask "$cask" >/dev/null 2>&1 || true
+    brew upgrade "${BREW_VERBOSE[@]}" --cask "$cask" || true
   else
     ohai "Installing $cask (cask)"
-    brew install --cask "$cask" || abort "Failed to install $cask"
+    brew install "${BREW_VERBOSE[@]}" --cask "$cask" || abort "Failed to install $cask"
   fi
 }
 
@@ -135,7 +136,7 @@ npm_install_or_update() {
   local bin_name="${1:-$pkg}"
   if command -v "$bin_name" >/dev/null 2>&1; then
     ohai "Updating npm package $pkg"
-    npm update -g "$pkg" >/dev/null 2>&1 || npm install -g "$pkg" || warn "Failed to update $pkg"
+    npm update -g "$pkg" || npm install -g "$pkg" || warn "Failed to update $pkg"
   else
     ohai "Installing npm package $pkg"
     npm install -g "$pkg" || warn "Failed to install $pkg"
@@ -190,8 +191,8 @@ main() {
       warn "Could not determine latest 3.12.x from pyenv; falling back to 3.12.0"
       local_latest_312="3.12.0"
     fi
-    ohai "Ensuring Python ${local_latest_312} via pyenv"
-    pyenv install -s "${local_latest_312}" || abort "pyenv failed to install Python ${local_latest_312}"
+    ohai "Ensuring Python ${local_latest_312} via pyenv (verbose build output)"
+    pyenv install -sv "${local_latest_312}" || abort "pyenv failed to install Python ${local_latest_312}"
 
     # Optionally set as global if not already a 3.12.*
     current_global="$(pyenv global 2>/dev/null || true)"
