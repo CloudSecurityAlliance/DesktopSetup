@@ -62,6 +62,56 @@ find_bin_relaxed() {
   return 1
 }
 
+# Get version string by invoking a binary with args; prints empty on failure
+get_version() {
+  local bin="$1"; shift
+  local args=("$@")
+  if [[ -x "$bin" ]] || command -v "$bin" >/dev/null 2>&1; then
+    "$bin" "${args[@]}" 2>/dev/null | head -n1 | sed 's/^ *//;s/ *$//'
+    return 0
+  fi
+  return 1
+}
+
+# Brew JSON helpers (best-effort). Return empty if brew/python3 unavailable.
+brew_json() {
+  local id="$1"; shift
+  if ! command -v brew >/dev/null 2>&1; then return 1; fi
+  brew info --json=v2 "$id" 2>/dev/null
+}
+
+brew_formula_stable_version() {
+  local id="$1"
+  if ! command -v python3 >/dev/null 2>&1; then return 1; fi
+  brew_json "$id" | python3 - <<'PY' 2>/dev/null || true
+import sys, json
+data=json.load(sys.stdin)
+f=data.get('formulae', [{}])[0]
+print((f.get('versions') or {}).get('stable',''))
+PY
+}
+
+brew_cask_version() {
+  local id="$1"
+  if ! command -v python3 >/dev/null 2>&1; then return 1; fi
+  brew_json "$id" | python3 - <<'PY' 2>/dev/null || true
+import sys, json
+data=json.load(sys.stdin)
+c=data.get('casks', [{}])[0]
+print(c.get('version',''))
+PY
+}
+
+# Get app bundle version via mdls (macOS)
+get_app_version_mdls() {
+  local app_path="$1"
+  if [[ -d "$app_path" ]] && command -v mdls >/dev/null 2>&1; then
+    mdls -name kMDItemVersion -raw "$app_path" 2>/dev/null | head -n1
+    return 0
+  fi
+  return 1
+}
+
 # Print a one-line plan for a Homebrew formula with an expected binary
 plan_formula() {
   # Args: <label> <formula> <bin>
@@ -70,10 +120,14 @@ plan_formula() {
   if command -v brew >/dev/null 2>&1; then brew_present=0; fi
   local bin_path
   bin_path="$(find_bin_relaxed "$bin" 2>/dev/null || true)"
+  local current_v latest_v
+  current_v=""
+  latest_v=""
 
   if [[ $brew_present -ne 0 ]]; then
     if [[ -n "$bin_path" ]]; then
-      echo "- ${label}: skip (already present at ${bin_path}, Homebrew not installed yet)"
+      current_v="$(get_version "$bin_path" --version || true)"
+      echo "- ${label}: skip (already present at ${bin_path}${current_v:+, current: ${current_v}}; Homebrew not installed yet)"
     else
       echo "- ${label}: install via Homebrew (after installing Homebrew)"
     fi
@@ -81,12 +135,16 @@ plan_formula() {
   fi
 
   if brew list --formula "$formula" >/dev/null 2>&1; then
-    echo "- ${label}: upgrade (Homebrew-managed)"
+    latest_v="$(brew_formula_stable_version "$formula" || true)"
+    current_v="$(get_version "$bin" --version || true)"
+    echo "- ${label}: upgrade (Homebrew-managed)${current_v:+, current: ${current_v}}${latest_v:+, latest: ${latest_v}}"
   else
     if [[ -n "$bin_path" ]]; then
-      echo "- ${label}: skip (already present at ${bin_path}, non-Homebrew)"
+      current_v="$(get_version "$bin_path" --version || true)"
+      echo "- ${label}: skip (already present at ${bin_path}, non-Homebrew${current_v:+, current: ${current_v}})"
     else
-      echo "- ${label}: install"
+      latest_v="$(brew_formula_stable_version "$formula" || true)"
+      echo "- ${label}: install${latest_v:+, latest: ${latest_v}}"
     fi
   fi
 }
@@ -99,10 +157,14 @@ plan_ai() {
   if command -v brew >/dev/null 2>&1; then brew_present=0; fi
   local bin_path
   bin_path="$(find_bin_relaxed "$bin" 2>/dev/null || true)"
+  local current_v latest_v
+  current_v=""
+  latest_v=""
 
   if [[ $brew_present -ne 0 ]]; then
     if [[ -n "$bin_path" ]]; then
-      echo "- ${label}: skip (already present at ${bin_path}, Homebrew not installed yet)"
+      current_v="$(get_version "$bin_path" --version || true)"
+      echo "- ${label}: skip (already present at ${bin_path}${current_v:+, current: ${current_v}}; Homebrew not installed yet)"
       return 0
     fi
     echo "- ${label}: install via Homebrew (after installing Homebrew)"
@@ -117,12 +179,24 @@ plan_ai() {
   fi
 
   if brew list --"$t" "$brew_name" >/dev/null 2>&1; then
-    echo "- ${label}: upgrade (Homebrew-managed, $t)"
+    if [[ "$t" == "formula" ]]; then
+      latest_v="$(brew_formula_stable_version "$brew_name" || true)"
+    else
+      latest_v="$(brew_cask_version "$brew_name" || true)"
+    fi
+    current_v="$(get_version "$bin" --version || true)"
+    echo "- ${label}: upgrade (Homebrew-managed, $t)${current_v:+, current: ${current_v}}${latest_v:+, latest: ${latest_v}}"
   else
     if [[ -n "$bin_path" ]]; then
-      echo "- ${label}: skip (already present at ${bin_path}, non-Homebrew)"
+      current_v="$(get_version "$bin_path" --version || true)"
+      echo "- ${label}: skip (already present at ${bin_path}, non-Homebrew${current_v:+, current: ${current_v}})"
     else
-      echo "- ${label}: install ($t)"
+      if [[ "$t" == "formula" ]]; then
+        latest_v="$(brew_formula_stable_version "$brew_name" || true)"
+      else
+        latest_v="$(brew_cask_version "$brew_name" || true)"
+      fi
+      echo "- ${label}: install ($t)${latest_v:+, latest: ${latest_v}}"
     fi
   fi
 }
@@ -141,16 +215,22 @@ plan_1password() {
   fi
 
   if brew list --cask 1password >/dev/null 2>&1; then
-    echo "- 1Password: upgrade (Homebrew-managed cask)"
+    local latest_v
+    latest_v="$(brew_cask_version 1password || true)"
+    echo "- 1Password: upgrade (Homebrew-managed cask)${latest_v:+, latest: ${latest_v}}"
     return 0
   fi
   for p in "${app_paths[@]}"; do
     if [[ -d "$p" ]]; then
-      echo "- 1Password: skip (already installed at $p)"
+      local current_v
+      current_v="$(get_app_version_mdls "$p" || true)"
+      echo "- 1Password: skip (already installed at $p${current_v:+, current: ${current_v}})"
       return 0
     fi
   done
-  echo "- 1Password: install (cask)"
+  local latest_v
+  latest_v="$(brew_cask_version 1password || true)"
+  echo "- 1Password: install (cask)${latest_v:+, latest: ${latest_v}}"
 }
 
 preflight_plan() {
@@ -482,7 +562,28 @@ main() {
     echo "- Node: $(node --version)"
     echo "- npm: $(npm --version)"
   fi
-  echo "- 1Password: ${ONEPASSWORD_STATUS:-not installed}"
+  # AI CLIs versions (best-effort)
+  local v
+  v="$(get_version claude --version || true)"; [[ -n "$v" ]] && echo "- Claude Code: $v"
+  v="$(get_version gemini --version || true)"; [[ -n "$v" ]] && echo "- Gemini CLI: $v"
+  v="$(get_version codex --version || true)"; [[ -n "$v" ]] && echo "- Codex: $v"
+
+  # 1Password status and version (best-effort)
+  if [[ "${ONEPASSWORD_STATUS:-}" == already* ]]; then
+    local app_path
+    app_path="${ONEPASSWORD_STATUS#already installed at }"
+    app_path="${app_path%% *}"
+    v="$(get_app_version_mdls "$app_path" || true)"
+    echo "- 1Password: ${ONEPASSWORD_STATUS}${v:+, version: ${v}}"
+  else
+    # If installed via cask, print cask version
+    if brew list --cask 1password >/dev/null 2>&1; then
+      v="$(brew_cask_version 1password || true)"
+      echo "- 1Password: ${ONEPASSWORD_STATUS:-installed via Homebrew cask}${v:+, version: ${v}}"
+    else
+      echo "- 1Password: ${ONEPASSWORD_STATUS:-not installed}"
+    fi
+  fi
 }
 
 main "$@"
