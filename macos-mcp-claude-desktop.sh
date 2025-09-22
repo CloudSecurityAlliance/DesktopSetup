@@ -169,103 +169,26 @@ read_secret() {
   declare -g "$var_name=$value"
 }
 
-# Interactive menu using arrow keys and spacebar
-show_interactive_menu() {
-  local -a servers=("Tableau - Business Intelligence and Analytics")
-  local -a selected=()
-  local current=0
-  local key
-
-  # Initialize selected array (all false)
-  for ((i=0; i<${#servers[@]}; i++)); do
-    selected[i]=false
-  done
-
+# Simple menu that works reliably on macOS bash
+show_server_menu() {
   echo
   ohai "Cloud Security Alliance - Claude Desktop MCP Server Setup"
   echo
   echo "Available MCP Servers:"
-  echo "Use ↑/↓ arrow keys to navigate, SPACE to select/deselect, ENTER to continue"
+  echo "  1) Tableau - Business Intelligence and Analytics"
   echo
+  echo -n "Select server to configure [1]: "
+  read -r selection
+  selection="${selection:-1}"
 
-  while true; do
-    # Clear previous menu
-    for ((i=0; i<${#servers[@]}+1; i++)); do
-      echo -ne "\033[1A\033[2K"  # Move up one line and clear it
-    done
-
-    # Display menu
-    for ((i=0; i<${#servers[@]}; i++)); do
-      local marker=" "
-      local checkbox="[ ]"
-
-      # Set selection marker
-      if [[ $i -eq $current ]]; then
-        marker=">"
-      fi
-
-      # Set checkbox state
-      if [[ ${selected[i]} == true ]]; then
-        checkbox="[✓]"
-      fi
-
-      printf "%s %s %s\n" "$marker" "$checkbox" "${servers[i]}"
-    done
-
-    # Show instructions
-    echo "Press ENTER to continue with selected servers..."
-
-    # Read single keypress
-    read -rsn1 key
-    case "$key" in
-      $'\033')  # Arrow key sequence starts with ESC
-        read -rsn2 -t 0.1 key
-        case "$key" in
-          '[A'|'[D')  # Up arrow or Left arrow
-            ((current > 0)) && ((current--))
-            ;;
-          '[B'|'[C')  # Down arrow or Right arrow
-            ((current < ${#servers[@]}-1)) && ((current++))
-            ;;
-        esac
-        ;;
-      ' ')  # Spacebar - toggle selection
-        if [[ ${selected[current]} == true ]]; then
-          selected[current]=false
-        else
-          selected[current]=true
-        fi
-        ;;
-      $'\n'|$'\r')  # Enter - confirm selection
-        break
-        ;;
-      'q'|'Q')  # Quit
-        abort "Setup cancelled by user"
-        ;;
-    esac
-  done
-
-  # Clear menu lines
-  for ((i=0; i<${#servers[@]}+1; i++)); do
-    echo -ne "\033[1A\033[2K"
-  done
-
-  # Return selected servers
-  local selected_servers=()
-  for ((i=0; i<${#servers[@]}; i++)); do
-    if [[ ${selected[i]} == true ]]; then
-      case $i in
-        0) selected_servers+=("tableau") ;;
-      esac
-    fi
-  done
-
-  if [[ ${#selected_servers[@]} -eq 0 ]]; then
-    warn "No servers selected"
-    abort "Please run the script again and select at least one server"
-  fi
-
-  printf '%s\n' "${selected_servers[@]}"
+  case "$selection" in
+    1)
+      echo "tableau"
+      ;;
+    *)
+      abort "Invalid selection: $selection"
+      ;;
+  esac
 }
 
 # Show Tableau setup instructions
@@ -480,25 +403,22 @@ main() {
     missing) init_config_if_needed ;;
   esac
 
-  # Show interactive menu and get selections
-  local selected_servers
-  mapfile -t selected_servers < <(show_interactive_menu)
+  # Show menu and get selection
+  local selected_server
+  selected_server=$(show_server_menu)
 
   # Create backup before making changes
   backup_config
 
-  # Configure selected servers
-  for server in "${selected_servers[@]}"; do
-    echo
-    case "$server" in
-      tableau)
-        configure_tableau
-        ;;
-      *)
-        abort "Unknown server: $server"
-        ;;
-    esac
-  done
+  # Configure selected server
+  case "$selected_server" in
+    tableau)
+      configure_tableau
+      ;;
+    *)
+      abort "Unknown server: $selected_server"
+      ;;
+  esac
 
   # Final success message
   echo
