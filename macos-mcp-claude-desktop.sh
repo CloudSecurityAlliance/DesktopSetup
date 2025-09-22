@@ -34,25 +34,14 @@ CLAUDE_CONFIG_FILE="$CLAUDE_CONFIG_DIR/claude_desktop_config.json"
 
 # Ensure required tools are available
 check_dependencies() {
-  local missing=()
-
   if ! command -v python3 >/dev/null 2>&1; then
-    missing+=("python3")
-  fi
-
-  if [[ ${#missing[@]} -gt 0 ]]; then
-    error "Missing required dependencies: ${missing[*]}"
-    echo "Please install them first:"
-    for dep in "${missing[@]}"; do
-      case "$dep" in
-        python3) echo "  Install Python 3 via: brew install python3" ;;
-      esac
-    done
+    error "Missing required dependency: python3"
+    echo "Please install Python 3 via: brew install python3"
     exit 1
   fi
 }
 
-# Validate and manipulate JSON using Python
+# JSON operations using Python (compatible with all Python 3 versions)
 json_operation() {
   local operation="$1"; shift
 
@@ -123,6 +112,24 @@ with open('$config_file', 'w') as f:
 print('success')
 " || echo "failed"
       ;;
+    remove_server)
+      local config_file="$1" server_name="$2"
+      python3 -c "
+import json, sys
+try:
+    with open('$config_file', 'r') as f:
+        config = json.load(f)
+    if 'mcpServers' in config and '$server_name' in config['mcpServers']:
+        del config['mcpServers']['$server_name']
+        with open('$config_file', 'w') as f:
+            json.dump(config, f, indent=2)
+        print('success')
+    else:
+        print('not_found')
+except (FileNotFoundError, json.JSONDecodeError):
+    print('failed')
+"
+      ;;
   esac
 }
 
@@ -151,14 +158,14 @@ init_config_if_needed() {
   fi
 }
 
-# Read user input securely
+# Read user input securely for passwords/tokens
 read_secret() {
   local prompt="$1"
   local var_name="$2"
   local value=""
 
   echo -n "$prompt"
-  read -rs value
+  read -s value
   echo
 
   if [[ -z "$value" ]]; then
@@ -169,140 +176,26 @@ read_secret() {
   declare -g "$var_name=$value"
 }
 
-# Simple menu that works reliably on macOS bash
-show_server_menu() {
-  echo
-  ohai "Cloud Security Alliance - Claude Desktop MCP Server Setup"
-  echo
-  echo "Available MCP Servers:"
-  echo "  1) Tableau - Business Intelligence and Analytics"
-  echo
-  echo -n "Select server to configure [1]: "
-  read -r selection
-  selection="${selection:-1}"
+# Ask yes/no question
+ask_yn() {
+  local prompt="$1"
+  local default="${2:-n}"
+  local reply
 
-  case "$selection" in
-    1)
-      echo "tableau"
-      ;;
-    *)
-      abort "Invalid selection: $selection"
-      ;;
+  if [[ "$default" == "y" ]]; then
+    echo -n "$prompt [Y/n]: "
+  else
+    echo -n "$prompt [y/N]: "
+  fi
+
+  read -r reply
+  reply="${reply:-$default}"
+
+  case "$reply" in
+    [Yy]*) return 0 ;;
+    [Nn]*) return 1 ;;
+    *) return 1 ;;
   esac
-}
-
-# Show Tableau setup instructions
-show_tableau_instructions() {
-  echo
-  echo "You selected: Tableau"
-  echo
-  ohai "Setting up Tableau MCP Server"
-  echo
-  echo "This will connect Claude Desktop to your Tableau instance for data analysis."
-  echo "You'll need a Personal Access Token (PAT) from Tableau."
-  echo
-  echo "Please follow these steps to create your PAT:"
-  echo "  1. Go to: https://us-west-2b.online.tableau.com/#/site/cloudsecurityalliance/"
-  echo "  2. Login with your CSA credentials"
-  echo "  3. Click on your initials (top right corner)"
-  echo "  4. Select \"My Account Settings\""
-  echo "  5. Scroll down to \"Personal Access Tokens\""
-  echo "  6. Click \"Create New Token\""
-  echo "  7. Give it a name like \"Claude Desktop\""
-  echo "  8. Copy both the token name and the secret value"
-  echo
-}
-
-# Check if Tableau is already configured and handle existing config
-handle_existing_tableau_config() {
-  local server_status
-  server_status=$(json_operation check_server "$CLAUDE_CONFIG_FILE" "tableau")
-
-  if [[ "$server_status" == "exists" ]]; then
-    echo
-    success "Tableau MCP Server is already configured"
-    echo
-    echo "Current configuration:"
-    json_operation get_server_info "$CLAUDE_CONFIG_FILE" "tableau" | sed 's/^/  /'
-    echo
-    echo "What would you like to do?"
-    echo "  1) Keep existing configuration (do nothing)"
-    echo "  2) Update PAT token only (rotate credentials)"
-    echo "  3) Reconfigure completely (change server/site/credentials)"
-    echo
-    echo -n "Choose an option [1-3]: "
-    read -r choice
-
-    case "$choice" in
-      1|"")
-        echo "Keeping existing configuration."
-        return 1  # Skip configuration
-        ;;
-      2)
-        update_tableau_pat_only
-        return 1  # Skip full configuration
-        ;;
-      3)
-        echo "Proceeding with full reconfiguration..."
-        return 0  # Continue with full configuration
-        ;;
-      *)
-        abort "Invalid choice: $choice"
-        ;;
-    esac
-  fi
-
-  return 0  # Continue with configuration (not already configured)
-}
-
-# Update only PAT credentials for existing Tableau config
-update_tableau_pat_only() {
-  echo
-  ohai "Updating Tableau PAT Credentials"
-  echo
-  echo "Please create a new PAT token following the same steps as before:"
-  echo "  1. Go to: https://us-west-2b.online.tableau.com/#/site/cloudsecurityalliance/"
-  echo "  2. Login with your CSA credentials"
-  echo "  3. Click on your initials (top right corner)"
-  echo "  4. Select \"My Account Settings\""
-  echo "  5. Scroll down to \"Personal Access Tokens\""
-  echo "  6. Click \"Create New Token\" (or update existing)"
-  echo "  7. Give it a name like \"Claude Desktop\""
-  echo "  8. Copy both the token name and the secret value"
-  echo
-  echo -n "Ready to update PAT credentials? [Y/n] "
-  read -r ready
-  case "${ready:-Y}" in
-    [Yy]*) ;;
-    [Nn]*) echo "PAT update cancelled."; return ;;
-    *) ;;
-  esac
-
-  echo
-
-  # Get current config to preserve server and site
-  local current_info
-  current_info=$(json_operation get_server_info "$CLAUDE_CONFIG_FILE" "tableau")
-  local current_server current_site
-  current_server=$(echo "$current_info" | grep "Server:" | cut -d' ' -f2-)
-  current_site=$(echo "$current_info" | grep "Site:" | cut -d' ' -f2-)
-
-  # Get new PAT credentials
-  local pat_name pat_value
-  echo -n "New PAT Token Name: "
-  read -r pat_name
-
-  if [[ -z "$pat_name" ]]; then
-    abort "PAT Token Name is required"
-  fi
-
-  if ! read_secret "New PAT Token Value (hidden): " pat_value; then
-    abort "PAT Token Value is required"
-  fi
-
-  # Create updated config with existing server/site but new PAT
-  create_and_save_tableau_config "$current_server" "$current_site" "$pat_name" "$pat_value"
-  success "Tableau PAT credentials updated successfully"
 }
 
 # Create and save Tableau configuration
@@ -336,23 +229,96 @@ create_and_save_tableau_config() {
   fi
 }
 
-# Configure Tableau MCP Server
-configure_tableau() {
-  # Check if already configured and handle accordingly
-  if ! handle_existing_tableau_config; then
-    return 0  # Configuration was handled (kept existing, updated PAT, etc.)
+# Handle Tableau MCP Server
+handle_tableau() {
+  local server_status
+  server_status=$(json_operation check_server "$CLAUDE_CONFIG_FILE" "tableau")
+
+  if [[ "$server_status" == "exists" ]]; then
+    echo
+    success "Tableau MCP Server is already configured"
+    echo
+    echo "Current configuration:"
+    json_operation get_server_info "$CLAUDE_CONFIG_FILE" "tableau" | sed 's/^/  /'
+    echo
+
+    if ask_yn "Do you want to update the Tableau MCP Server configuration?"; then
+      update_tableau_config
+    elif ask_yn "Do you want to remove the Tableau MCP Server?"; then
+      remove_tableau_config
+    else
+      echo "Keeping existing Tableau configuration."
+    fi
+  else
+    if ask_yn "Do you want to install the Tableau MCP Server for Claude Desktop?" "y"; then
+      install_tableau_config
+    else
+      echo "Skipping Tableau MCP Server installation."
+    fi
+  fi
+}
+
+# Install new Tableau configuration
+install_tableau_config() {
+  echo
+  ohai "Installing Tableau MCP Server"
+  echo
+  echo "This will connect Claude Desktop to your Tableau instance for data analysis."
+  echo "You'll need a Personal Access Token (PAT) from Tableau."
+  echo
+  echo "Please follow these steps to create your PAT:"
+  echo "  1. Go to: https://us-west-2b.online.tableau.com/#/site/cloudsecurityalliance/"
+  echo "  2. Login with your CSA credentials"
+  echo "  3. Click on your initials (top right corner)"
+  echo "  4. Select \"My Account Settings\""
+  echo "  5. Scroll down to \"Personal Access Tokens\""
+  echo "  6. Click \"Create New Token\""
+  echo "  7. Give it a name like \"Claude Desktop\""
+  echo "  8. Copy both the token name and the secret value"
+  echo
+
+  if ! ask_yn "Ready to continue?"; then
+    echo "Installation cancelled."
+    return
   fi
 
-  show_tableau_instructions
+  get_tableau_config_and_save
+}
 
-  echo -n "Ready to continue? [Y/n] "
-  read -r ready
-  case "${ready:-Y}" in
-    [Yy]*) ;;
-    [Nn]*) abort "Setup cancelled by user" ;;
-    *) ;;
+# Update existing Tableau configuration
+update_tableau_config() {
+  echo
+  ohai "Updating Tableau MCP Server Configuration"
+  echo
+  echo "You can update your PAT credentials or change server/site settings."
+  echo
+
+  get_tableau_config_and_save
+}
+
+# Remove Tableau configuration
+remove_tableau_config() {
+  echo
+  ohai "Removing Tableau MCP Server"
+
+  local result
+  result=$(json_operation remove_server "$CLAUDE_CONFIG_FILE" "tableau")
+
+  case "$result" in
+    success)
+      success "Tableau MCP Server configuration removed"
+      ;;
+    not_found)
+      warn "Tableau MCP Server was not found in configuration"
+      ;;
+    failed)
+      abort "Failed to remove Tableau MCP Server configuration"
+      ;;
   esac
+}
 
+# Get Tableau configuration from user and save it
+get_tableau_config_and_save() {
   echo
 
   # Get server URL with default
@@ -384,7 +350,7 @@ configure_tableau() {
 
 # Main function
 main() {
-  ohai "Starting Claude Desktop MCP Server Configuration"
+  ohai "Cloud Security Alliance - Claude Desktop MCP Server Setup"
 
   # Preconditions
   [[ "$(uname -s)" == "Darwin" ]] || abort "This script supports macOS only"
@@ -403,29 +369,18 @@ main() {
     missing) init_config_if_needed ;;
   esac
 
-  # Show menu and get selection
-  local selected_server
-  selected_server=$(show_server_menu)
-
-  # Create backup before making changes
+  # Create backup before making any changes
   backup_config
 
-  # Configure selected server
-  case "$selected_server" in
-    tableau)
-      configure_tableau
-      ;;
-    *)
-      abort "Unknown server: $selected_server"
-      ;;
-  esac
+  # Handle each MCP server one at a time
+  handle_tableau
 
-  # Final success message
+  # Final message
   echo
   success "Configuration saved to: ${CLAUDE_CONFIG_FILE##*/}"
   echo
   ohai "Setup Complete!"
-  echo "Restart Claude Desktop to use the new MCP server."
+  echo "Restart Claude Desktop to use any new or updated MCP servers."
 }
 
 main "$@"
