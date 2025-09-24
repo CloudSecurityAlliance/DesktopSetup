@@ -77,7 +77,7 @@ except (FileNotFoundError, json.JSONDecodeError):
 "
       ;;
     get_server_info)
-      local config_file="$1" server_name="$2"
+      local config_file="$1" server_name="$2" show_token="${3:-false}"
       python3 -c "
 import json, sys
 try:
@@ -88,6 +88,14 @@ try:
     print(f\"Server: {env.get('SERVER', 'N/A')}\")
     print(f\"Site: {env.get('SITE_NAME', 'N/A')}\")
     print(f\"PAT Name: {env.get('PAT_NAME', 'N/A')}\")
+
+    pat_value = env.get('PAT_VALUE', '')
+    if '$show_token' == 'true' and pat_value:
+        print(f\"PAT Value: {pat_value}\")
+    elif pat_value:
+        print(f\"PAT Value: {'*' * min(len(pat_value), 12)}\")
+    else:
+        print(f\"PAT Value: N/A\")
 except (FileNotFoundError, json.JSONDecodeError):
     print('Error reading configuration')
 "
@@ -239,16 +247,44 @@ handle_tableau() {
     success "Tableau MCP Server is already configured"
     echo
     echo "Current configuration:"
-    json_operation get_server_info "$CLAUDE_CONFIG_FILE" "tableau" | sed 's/^/  /'
+    json_operation get_server_info "$CLAUDE_CONFIG_FILE" "tableau" false | sed 's/^/  /'
     echo
 
-    if ask_yn "Do you want to update the Tableau MCP Server configuration?"; then
-      update_tableau_config
-    elif ask_yn "Do you want to remove the Tableau MCP Server?"; then
-      remove_tableau_config
-    else
-      echo "Keeping existing Tableau configuration."
-    fi
+    while true; do
+      echo "Options:"
+      echo "  y) Update the Tableau MCP Server configuration"
+      echo "  r) Remove the Tableau MCP Server"
+      echo "  s) Show PAT token value"
+      echo "  n) Keep existing configuration (default)"
+      echo
+      echo -n "Choose an option [y/r/s/N]: "
+      read -r choice
+      choice="${choice:-n}"
+
+      case "$choice" in
+        [Yy]*)
+          update_tableau_config
+          break
+          ;;
+        [Rr]*)
+          remove_tableau_config
+          break
+          ;;
+        [Ss]*)
+          echo
+          echo "Current configuration (with PAT token shown):"
+          json_operation get_server_info "$CLAUDE_CONFIG_FILE" "tableau" true | sed 's/^/  /'
+          echo
+          ;;
+        [Nn]*|"")
+          echo "Keeping existing Tableau configuration."
+          break
+          ;;
+        *)
+          warn "Invalid choice: $choice. Please choose y, r, s, or n."
+          ;;
+      esac
+    done
   else
     if ask_yn "Do you want to install the Tableau MCP Server for Claude Desktop?" "y"; then
       install_tableau_config
