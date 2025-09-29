@@ -4,7 +4,7 @@
 # - Installs/updates Homebrew
 # - Installs/updates pyenv and latest Python 3.12.x
 # - Installs/updates Node.js
-# - Installs/updates AI CLIs (claude-code, gemini-cli, codex) via Homebrew or npm
+# - Installs/updates AI CLIs (claude-code, gemini-cli, codex, mcpb) via Homebrew/npm/pip
 # - Installs/updates 1Password app (Homebrew cask)
 #
 # Usage (recommended):
@@ -250,6 +250,7 @@ preflight_plan() {
   plan_ai "Claude Code" "claude-code" "claude"
   plan_ai "Google Gemini CLI" "gemini-cli" "gemini"
   plan_ai "ChatGPT Codex" "codex" "codex"
+  plan_tool "MCPB CLI" "npm" "@anthropic-ai/mcpb" "mcpb"
 
   # 1Password
   plan_1password
@@ -336,7 +337,7 @@ brew_install_or_upgrade_cask() {
   fi
 }
 
-# npm global install/update helper
+# Package manager helpers
 npm_install_or_update() {
   local pkg="$1"; shift
   local bin_name="${1:-$pkg}"
@@ -347,6 +348,134 @@ npm_install_or_update() {
     ohai "Installing npm package $pkg"
     npm install -g "$pkg" || warn "Failed to install $pkg"
   fi
+}
+
+pip_install_or_update() {
+  local pkg="$1"; shift
+  local bin_name="${1:-$pkg}"
+  # Try pip3 first, then pip
+  local pip_cmd=""
+  if command -v pip3 >/dev/null 2>&1; then
+    pip_cmd="pip3"
+  elif command -v pip >/dev/null 2>&1; then
+    pip_cmd="pip"
+  else
+    warn "Neither pip nor pip3 found; skipping $pkg"
+    return 1
+  fi
+
+  if command -v "$bin_name" >/dev/null 2>&1; then
+    ohai "Updating pip package $pkg"
+    "$pip_cmd" install --upgrade "$pkg" || warn "Failed to update $pkg"
+  else
+    ohai "Installing pip package $pkg"
+    "$pip_cmd" install "$pkg" || warn "Failed to install $pkg"
+  fi
+}
+
+# Print a one-line plan for a tool installation
+plan_tool() {
+  # Args: <label> <pkg_manager> <package_name> <bin>
+  local label="$1" pkg_manager="$2" package_name="$3" bin="$4"
+  local bin_path
+  bin_path="$(find_bin_relaxed "$bin" 2>/dev/null || true)"
+  local current_v latest_v
+  current_v=""
+  latest_v=""
+
+  case "$pkg_manager" in
+    "brew")
+      if command -v brew >/dev/null 2>&1; then
+        if brew list --formula "$package_name" >/dev/null 2>&1; then
+          latest_v="$(brew_formula_stable_version "$package_name" || true)"
+          current_v="$(get_version "$bin" --version || true)"
+          echo "- ${label}: upgrade (Homebrew formula)${current_v:+, current: ${current_v}}${latest_v:+, latest: ${latest_v}}"
+        elif [[ -n "$bin_path" ]]; then
+          current_v="$(get_version "$bin_path" --version || true)"
+          echo "- ${label}: skip (already present at ${bin_path}${current_v:+, current: ${current_v}})"
+        else
+          latest_v="$(brew_formula_stable_version "$package_name" || true)"
+          echo "- ${label}: install (Homebrew formula)${latest_v:+, latest: ${latest_v}}"
+        fi
+      else
+        if [[ -n "$bin_path" ]]; then
+          current_v="$(get_version "$bin_path" --version || true)"
+          echo "- ${label}: skip (already present at ${bin_path}${current_v:+, current: ${current_v}})"
+        else
+          echo "- ${label}: install (after installing Homebrew)"
+        fi
+      fi
+      ;;
+    "cask")
+      if command -v brew >/dev/null 2>&1; then
+        if brew list --cask "$package_name" >/dev/null 2>&1; then
+          latest_v="$(brew_cask_version "$package_name" || true)"
+          echo "- ${label}: upgrade (Homebrew cask)${latest_v:+, latest: ${latest_v}}"
+        else
+          latest_v="$(brew_cask_version "$package_name" || true)"
+          echo "- ${label}: install (Homebrew cask)${latest_v:+, latest: ${latest_v}}"
+        fi
+      else
+        echo "- ${label}: install (after installing Homebrew)"
+      fi
+      ;;
+    "npm")
+      if command -v npm >/dev/null 2>&1; then
+        if [[ -n "$bin_path" ]]; then
+          current_v="$(get_version "$bin_path" --version || true)"
+          echo "- ${label}: update (npm)${current_v:+, current: ${current_v}}"
+        else
+          echo "- ${label}: install (npm)"
+        fi
+      else
+        echo "- ${label}: install (after installing Node.js)"
+      fi
+      ;;
+    "pip")
+      if command -v pip3 >/dev/null 2>&1 || command -v pip >/dev/null 2>&1; then
+        if [[ -n "$bin_path" ]]; then
+          current_v="$(get_version "$bin_path" --version || true)"
+          echo "- ${label}: update (pip)${current_v:+, current: ${current_v}}"
+        else
+          echo "- ${label}: install (pip)"
+        fi
+      else
+        echo "- ${label}: install (after installing Python)"
+      fi
+      ;;
+  esac
+}
+
+install_tool() {
+  # Install or upgrade a tool via its designated package manager.
+  # Args: <display_name> <pkg_manager> <package_name> <bin_name>
+  local name="$1" pkg_manager="$2" package_name="$3" bin_name="$4"
+
+  case "$pkg_manager" in
+    "brew")
+      install_or_upgrade_formula_checked "$package_name" "$bin_name"
+      ;;
+    "cask")
+      brew_install_or_upgrade_cask "$package_name"
+      ;;
+    "npm")
+      if command -v npm >/dev/null 2>&1; then
+        npm_install_or_update "$package_name" "$bin_name"
+      else
+        warn "$name requires npm but npm not found; skipping"
+      fi
+      ;;
+    "pip")
+      if command -v pip3 >/dev/null 2>&1 || command -v pip >/dev/null 2>&1; then
+        pip_install_or_update "$package_name" "$bin_name"
+      else
+        warn "$name requires pip but pip not found; skipping"
+      fi
+      ;;
+    *)
+      abort "Unknown package manager: $pkg_manager"
+      ;;
+  esac
 }
 
 install_or_upgrade_formula_checked() {
@@ -530,24 +659,28 @@ main() {
     warn "pyenv not found after install; skipping Python installation"
   fi
 
-  # AI tools
-  # Defaults can be overridden via env vars CSA_* if your org uses different package names.
-  CLAUDE_FORMULA="${CSA_CLAUDE_FORMULA:-claude-code}"
-  CLAUDE_NPM="${CSA_CLAUDE_NPM:-claude-code}"
+  # AI tools configuration - each tool has its preferred package manager and can be overridden
+  CLAUDE_PKG_MGR="${CSA_CLAUDE_PKG_MGR:-brew}"
+  CLAUDE_PACKAGE="${CSA_CLAUDE_PACKAGE:-claude-code}"
   CLAUDE_BIN="${CSA_CLAUDE_BIN:-claude}"
 
-  GEMINI_FORMULA="${CSA_GEMINI_FORMULA:-gemini-cli}"
-  GEMINI_NPM="${CSA_GEMINI_NPM:-gemini-cli}"
+  GEMINI_PKG_MGR="${CSA_GEMINI_PKG_MGR:-brew}"
+  GEMINI_PACKAGE="${CSA_GEMINI_PACKAGE:-gemini-cli}"
   GEMINI_BIN="${CSA_GEMINI_BIN:-gemini}"
 
-  CODEX_FORMULA="${CSA_CODEX_FORMULA:-codex}"
-  CODEX_NPM="${CSA_CODEX_NPM:-codex}"
+  CODEX_PKG_MGR="${CSA_CODEX_PKG_MGR:-brew}"
+  CODEX_PACKAGE="${CSA_CODEX_PACKAGE:-codex}"
   CODEX_BIN="${CSA_CODEX_BIN:-codex}"
 
-  # If brew formulae do not exist, we gracefully fall back to npm packages
-  install_ai_tool "Claude Code" "$CLAUDE_FORMULA" "$CLAUDE_NPM" "$CLAUDE_BIN"
-  install_ai_tool "Google Gemini CLI" "$GEMINI_FORMULA" "$GEMINI_NPM" "$GEMINI_BIN"
-  install_ai_tool "ChatGPT Codex" "$CODEX_FORMULA" "$CODEX_NPM" "$CODEX_BIN"
+  MCPB_PKG_MGR="${CSA_MCPB_PKG_MGR:-npm}"
+  MCPB_PACKAGE="${CSA_MCPB_PACKAGE:-@anthropic-ai/mcpb}"
+  MCPB_BIN="${CSA_MCPB_BIN:-mcpb}"
+
+  # AI tools - install using each tool's designated package manager
+  install_ai_tool "Claude Code" "claude-code" "claude-code" "claude"
+  install_ai_tool "Google Gemini CLI" "gemini-cli" "gemini-cli" "gemini"
+  install_ai_tool "ChatGPT Codex" "codex" "codex" "codex"
+  install_tool "MCPB CLI" "$MCPB_PKG_MGR" "$MCPB_PACKAGE" "$MCPB_BIN"
 
   # 1Password (app)
   install_or_report_1password
@@ -567,6 +700,7 @@ main() {
   v="$(get_version claude --version || true)"; [[ -n "$v" ]] && echo "- Claude Code: $v"
   v="$(get_version gemini --version || true)"; [[ -n "$v" ]] && echo "- Gemini CLI: $v"
   v="$(get_version codex --version || true)"; [[ -n "$v" ]] && echo "- Codex: $v"
+  v="$(get_version mcpb --version || true)"; [[ -n "$v" ]] && echo "- MCPB CLI: $v"
 
   # 1Password status and version (best-effort)
   if [[ "${ONEPASSWORD_STATUS:-}" == already* ]]; then
