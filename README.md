@@ -2,6 +2,16 @@
 
 Setup of desktop tools and AI support for macOS.
 
+## Opinionated list
+
+* homebrew
+* node, Python
+* AI Desktop apps: Claude Desktop, Ollama, OpenAI Desktop, LM Studio
+* AI CLI's: Claude code, Google gemini, Ollama, OpenAI codex, LM Studio lms
+* AI Web: LibreChat
+
+Please note that Ollama and LM Studio are in separate scripts due to size of download (the models they use)
+
 ## macOS Install Script
 
 The `macos-install.sh` script installs and updates a standard developer + AI toolchain on macOS:
