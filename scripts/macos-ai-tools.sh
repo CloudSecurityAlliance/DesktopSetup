@@ -285,6 +285,13 @@ install_claude() {
   info "Installing/updating Claude Code (native installer)"
   curl -fsSL https://claude.ai/install.sh | bash \
     || abort "Claude Code installation failed."
+
+  # Ensure ~/.local/bin is on PATH for this session and future shells
+  export PATH="$HOME/.local/bin:$PATH"
+  if ! grep -qF 'export PATH="$HOME/.local/bin:$PATH"' "$HOME/.zshrc" 2>/dev/null; then
+    info "Adding ~/.local/bin to PATH in ~/.zshrc"
+    echo 'export PATH="$HOME/.local/bin:$PATH"' >> "$HOME/.zshrc"
+  fi
 }
 
 install_codex() {
