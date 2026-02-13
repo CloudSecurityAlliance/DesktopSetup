@@ -1,53 +1,73 @@
-# DesktopSetup
+# CSA DesktopSetup
 
-Setup of desktop tools and AI support for macOS.
+Automated setup for Cloud Security Alliance development environments. Get from a bare Mac to productive in a few commands.
 
-## Opinionated list
+## Quick Start
 
-* homebrew
-* node, Python
-* AI Desktop apps: Claude Desktop, Ollama, OpenAI Desktop, LM Studio
-* AI CLI's: Claude code, Google gemini, Ollama, OpenAI codex, LM Studio lms
-* AI Web: LibreChat
+### Work tools (everyone)
 
-Please note that Ollama and LM Studio are in separate scripts due to size of download (the models they use)
+1Password, Slack, Zoom, Chrome, Microsoft Office, Git, GitHub CLI. Optional dev profile adds VS Code, AWS CLI, and Wrangler.
 
-## macOS Install Script
-
-The `macos-install.sh` script installs and updates a standard developer + AI toolchain on macOS:
-
-- Homebrew (installs if missing, otherwise updates)
-- pyenv and the latest Python 3.12.x (installs if missing; sets as global if not already on 3.12)
-- Node.js (via Homebrew)
-- AI CLIs: Claude Code (`claude-code` cask), Google Gemini (`gemini-cli`), and ChatGPT Codex (`codex`)
-  - Installed strictly via Homebrew (formula or cask). If a package is not available in Homebrew, the script aborts so it can be fixed rather than silently falling back.
-- 1Password application (via Homebrew cask)
-
-The script is idempotent: re-running it upgrades outdated items and leaves up‑to‑date tools unchanged.
-
-### Run
-
-Run directly with Bash and curl:
-
-```
-/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/CloudSecurityAlliance/DesktopSetup/HEAD/macos-install.sh)"
+```bash
+bash -c "$(curl -fsSL https://raw.githubusercontent.com/CloudSecurityAlliance/DesktopSetup/HEAD/scripts/macos-work-tools.sh)"
 ```
 
-To run without prompts in CI or automation, prefix with `NONINTERACTIVE=1`:
+### AI tools
 
+Claude Code, Codex CLI, Gemini CLI.
+
+```bash
+bash -c "$(curl -fsSL https://raw.githubusercontent.com/CloudSecurityAlliance/DesktopSetup/HEAD/scripts/macos-ai-tools.sh)"
 ```
-NONINTERACTIVE=1 /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/CloudSecurityAlliance/DesktopSetup/HEAD/macos-install.sh)"
+
+Both scripts are interactive — they show you what they plan to do and ask for confirmation. Both install the shared base layer (Xcode CLI Tools, Homebrew, Node.js/npm) if not already present. Run either one first, or both.
+
+## What This Repo Contains
+
+### `scripts/`
+
+macOS setup scripts. Each is self-contained and idempotent (safe to re-run):
+
+- **`macos-work-tools.sh`** — Core work apps + optional developer tools
+- **`macos-ai-tools.sh`** — AI coding assistants (with migration from Homebrew/npm to recommended install methods)
+
+### `catalog/`
+
+Reference catalog of MCP servers and AI agent skills that CSA projects use. Each entry describes what it does, when a project needs it, and how to install it. The actual skill implementations live in separate repositories — this is the index.
+
+- **`catalog/mcp-servers/`** — MCP server documentation and setup instructions
+- **`catalog/skills/`** — AI agent skill references and detection criteria
+
+### `archives/`
+
+Previous versions of scripts preserved for reference.
+
+## Updating
+
+```bash
+# Update AI tools (Codex, Gemini — Claude auto-updates)
+npm update -g
+
+# Update Homebrew-managed tools and apps
+brew upgrade
 ```
 
-On interactive runs, the script prints a summary of actions and prompts for confirmation `[Y/n]` before making changes. In non-interactive mode, it proceeds without prompting.
-The summary is a preflight plan that shows, per tool, whether it will be installed, upgraded (Homebrew‑managed), or skipped if already present (non‑Homebrew).
+## Per-Project Setup
 
-### Notes
+This repo solves the bootstrap problem — getting your machine ready. But each project also needs its own AI tooling configured (the right MCP servers, the right skills). Rather than installing everything globally, we configure tools per-project so your AI assistant has the right context without noise.
 
-- macOS only; the script aborts on non-macOS systems and when run as root (outside containers).
-- If the AI CLIs use different names in your environment, you can override via env vars before running (Homebrew-only):
-  - `CSA_CLAUDE_FORMULA`, `CSA_CLAUDE_BIN` (default formula: `claude-code`, bin: `claude`)
-  - `CSA_GEMINI_FORMULA`, `CSA_GEMINI_BIN` (default formula: `gemini-cli`, bin: `gemini`)
-  - `CSA_CODEX_FORMULA`, `CSA_CODEX_BIN` (default formula: `codex`, bin: `codex`)
-  - Note: There is no npm fallback; ensure the Homebrew formula/cask names are valid or add a tap.
-- When Homebrew is installed for the first time, PATH is set for the current session in the script. Follow Homebrew’s post‑install guidance if you need to persist PATH changes in your shell profile.
+When you open a CSA project, check its README for a **Development Setup** section that lists which MCP servers and skills to install.
+
+## macOS Only (For Now)
+
+We currently support macOS only. Windows support may come later.
+
+## Contributing
+
+Found a problem? Want to add an MCP server or skill to the catalog? Have a suggestion?
+
+[Open an issue](https://github.com/CloudSecurityAlliance/DesktopSetup/issues/new/choose) — we have templates for common requests.
+
+## License
+
+Apache License 2.0 — see [LICENSE](LICENSE).
