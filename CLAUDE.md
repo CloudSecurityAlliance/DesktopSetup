@@ -4,14 +4,12 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Purpose
 
-DesktopSetup is the Cloud Security Alliance's developer environment bootstrap and AI tooling catalog. It solves two problems:
+DesktopSetup is the Cloud Security Alliance's machine bootstrap. Two scripts take a bare Mac to a working environment:
 
-1. **Machine bootstrap** — Two scripts that take a bare Mac to a working environment:
-   - `macos-work-tools.sh` — Core work apps (1Password, Slack, Zoom, Chrome, Office, Git, GitHub CLI) + optional dev profile (VS Code, AWS CLI, Wrangler)
-   - `macos-ai-tools.sh` — AI coding CLIs (Claude Code, Codex, Gemini) with migration from wrong install methods
-2. **Tooling catalog** — A reference index of MCP servers and AI agent skills used across CSA projects, with detection criteria so projects can be analyzed for what they need
+- `macos-work-tools.sh` — Core work apps (1Password, Slack, Zoom, Chrome, Office, Git, GitHub CLI) + optional dev profile (VS Code, AWS CLI, Wrangler)
+- `macos-ai-tools.sh` — AI coding CLIs (Claude Code, Codex, Gemini) with migration from wrong install methods
 
-Actual skill implementations live in separate repositories. This repo is the index and the bootstrap.
+AI skills, MCP server catalogs, and per-project tooling live in separate repositories.
 
 ## Repository Structure
 
@@ -19,9 +17,6 @@ Actual skill implementations live in separate repositories. This repo is the ind
 scripts/
   macos-work-tools.sh   # Work apps + optional dev tools
   macos-ai-tools.sh     # AI coding CLIs
-catalog/
-  mcp-servers/          # MCP server entries (what, when, how to install)
-  skills/               # AI skill references and detection criteria
 archives/               # Previous script versions for reference
 .github/
   ISSUE_TEMPLATE/       # Issue templates for contributions
@@ -41,11 +36,6 @@ archives/               # Previous script versions for reference
 - Installation strategy: Homebrew for system tools and desktop apps, native installer for Claude Code (auto-updates), npm for AI CLIs (Codex, Gemini) and dev tools (Wrangler)
 - `macos-ai-tools.sh` detects and migrates tools installed via the wrong method (e.g., Claude Code via Homebrew → native installer)
 - `macos-work-tools.sh` has profile selection: core (everyone) vs core + dev
-
-### Catalog entries (`catalog/`)
-- Each entry is a markdown file with consistent structure: description, when to use, detection heuristics, installation instructions
-- Detection heuristics describe what files/configs indicate a project needs this tool (e.g., "wrangler.toml exists" → needs Cloudflare MCP)
-- Keep entries factual and actionable — these may be consumed by AI agents analyzing projects
 
 ### Bootstrap commands
 ```bash
