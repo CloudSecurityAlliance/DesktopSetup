@@ -344,6 +344,26 @@ install_dev() {
   install_npm_package "Wrangler" "wrangler" "wrangler"
 }
 
+# ── Post-install setup ─────────────────────────────────────────────
+
+setup_gh_auth() {
+  if ! has_command gh; then return 0; fi
+  if gh auth status >/dev/null 2>&1; then
+    info "GitHub CLI already authenticated"
+    return 0
+  fi
+  if [[ -n "${NONINTERACTIVE-}" ]]; then
+    warn "Skipping gh auth login (non-interactive mode)"
+    return 0
+  fi
+
+  echo ""
+  info "GitHub CLI is installed but not authenticated."
+  if confirm "Run 'gh auth login' now?"; then
+    gh auth login || warn "gh auth login failed; you can run it manually later"
+  fi
+}
+
 # ── Summary ─────────────────────────────────────────────────────────
 
 summary() {
@@ -390,7 +410,9 @@ summary() {
   echo ""
   info "Next steps:"
   echo "  - Sign in to 1Password, Slack, Zoom, Chrome, and Microsoft Office"
-  echo "  - Run 'gh auth login' to authenticate with GitHub"
+  if has_command gh && ! gh auth status >/dev/null 2>&1; then
+    echo "  - Run 'gh auth login' to authenticate with GitHub"
+  fi
   if [[ "$INSTALL_DEV" == true ]]; then
     echo "  - Run 'aws configure' to set up AWS credentials"
   fi
@@ -422,6 +444,7 @@ main() {
     install_dev
   fi
 
+  setup_gh_auth
   summary
 }
 

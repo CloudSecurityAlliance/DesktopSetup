@@ -20,7 +20,15 @@ Claude Code, Codex CLI, Gemini CLI.
 bash -c "$(curl -fsSL https://raw.githubusercontent.com/CloudSecurityAlliance/DesktopSetup/HEAD/scripts/macos-ai-tools.sh)"
 ```
 
-Both scripts are interactive — they show you what they plan to do and ask for confirmation. Both install the shared base layer (Xcode CLI Tools, Homebrew, Node.js/npm) if not already present. Run either one first, or both.
+### Update everything
+
+Homebrew formulas/casks, npm global packages, pip packages. Saves a snapshot of all installed versions before updating so you can roll back if anything breaks.
+
+```bash
+bash -c "$(curl -fsSL https://raw.githubusercontent.com/CloudSecurityAlliance/DesktopSetup/HEAD/scripts/macos-update.sh)"
+```
+
+All three scripts are interactive — they show you what they plan to do and ask for confirmation. The install scripts share a base layer (Xcode CLI Tools, Homebrew, Node.js/npm) and install it if not already present.
 
 ## What This Repo Contains
 
@@ -30,6 +38,7 @@ macOS setup scripts. Each is self-contained and idempotent (safe to re-run):
 
 - **`macos-work-tools.sh`** — Core work apps + optional developer tools
 - **`macos-ai-tools.sh`** — AI coding assistants (with migration from Homebrew/npm to recommended install methods)
+- **`macos-update.sh`** — Update all installed tools (snapshots versions first for rollback)
 
 ### `archives/`
 
@@ -37,13 +46,21 @@ Previous versions of scripts preserved for reference.
 
 ## Updating
 
-```bash
-# Update AI tools (Codex, Gemini — Claude auto-updates)
-npm update -g
+Run the update script to update everything at once (snapshots versions first):
 
-# Update Homebrew-managed tools and apps
-brew upgrade
+```bash
+bash -c "$(curl -fsSL https://raw.githubusercontent.com/CloudSecurityAlliance/DesktopSetup/HEAD/scripts/macos-update.sh)"
 ```
+
+Or update individual package managers manually:
+
+```bash
+brew update && brew upgrade     # Homebrew formulas and casks
+npm update -g                   # npm global packages (Codex, Gemini, Wrangler)
+pip install --upgrade pip       # pip itself (Claude Code auto-updates)
+```
+
+Snapshots are saved to `~/Library/Logs/CSA-DesktopSetup/` with timestamps.
 
 ## macOS Only (For Now)
 
