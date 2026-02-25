@@ -33,11 +33,11 @@ archives/               # Previous script versions for reference
 - Must be interactive by default (show plan, ask for confirmation)
 - Support `NONINTERACTIVE=1` for CI/automation
 - Use `set -euo pipefail`
-- Use colored output helpers: `info()`, `warn()`, `error()`, `success()`
+- Use colored output helpers: `info()`, `warn()`, `error()`, `success()`, `abort()` (abort = error + exit 1)
 - Never run as root (check `$EUID` at startup)
 - Installation strategy: Homebrew for system tools and desktop apps, native installer for Claude Code (auto-updates), npm for AI CLIs (Codex, Gemini) and dev tools (Wrangler)
 - `macos-ai-tools.sh` detects and migrates tools installed via the wrong method (e.g., Claude Code via Homebrew → native installer)
-- `macos-work-tools.sh` has profile selection: core (everyone) vs core + dev. Uses generic helpers (`install_formula`, `install_cask`, `install_npm_package`) — add new tools by calling these
+- `macos-work-tools.sh` has profile selection: core (everyone) vs core + dev. Profile is selected interactively; `NONINTERACTIVE=1` always installs core-only (no env var to force dev profile). Uses generic helpers (`install_formula`, `install_cask`, `install_npm_package`) — add new tools by calling these
 - `macos-ai-tools.sh` also checks for running AI tool processes (`check_running_tools`) and warns before migrating
 - `macos-update.sh` skips Claude Code (auto-updates) but updates Homebrew, npm globals, and pip packages. Respects active virtualenv if set
 
