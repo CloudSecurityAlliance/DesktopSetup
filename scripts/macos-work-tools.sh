@@ -266,8 +266,12 @@ install_node() {
   ensure_brew_in_path
 
   if brew list --formula node >/dev/null 2>&1; then
-    info "Upgrading Node.js"
-    brew upgrade node 2>/dev/null || true
+    if brew outdated node 2>/dev/null | grep -q node; then
+      info "Upgrading Node.js"
+      brew upgrade node || abort "Failed to upgrade Node.js"
+    else
+      info "Node.js already current: $(get_version node --version)"
+    fi
   elif has_command node; then
     info "Node.js already installed (non-Homebrew): $(get_version node --version)"
   else

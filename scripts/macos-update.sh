@@ -125,7 +125,7 @@ snapshot() {
 
     echo "──── pip Packages ────"
     if has_command pip; then
-      echo "Python: $(python --version 2>/dev/null || echo unknown)"
+      echo "Python: $(python3 --version 2>/dev/null || echo unknown)"
       [[ -n "${VIRTUAL_ENV:-}" ]] && echo "venv: $VIRTUAL_ENV"
       echo ""
       pip list 2>/dev/null || echo "(none)"
@@ -139,7 +139,7 @@ snapshot() {
   if has_command pip; then
     {
       echo "# CSA DesktopSetup pip snapshot — $(date)"
-      echo "# Python: $(python --version 2>/dev/null || echo unknown)"
+      echo "# Python: $(python3 --version 2>/dev/null || echo unknown)"
       [[ -n "${VIRTUAL_ENV:-}" ]] && echo "# venv: $VIRTUAL_ENV"
       echo "# Restore with: pip install -r $(basename "$PIP_FREEZE_FILE")"
       echo ""
@@ -267,7 +267,7 @@ update_pip() {
 
   # Extract package names and upgrade them one at a time
   local pkg_names
-  pkg_names=$(echo "$outdated" | python -c "import sys, json; print(' '.join(p['name'] for p in json.load(sys.stdin)))" 2>/dev/null || true)
+  pkg_names=$(echo "$outdated" | python3 -c "import sys, json; print(' '.join(p['name'] for p in json.load(sys.stdin)))" 2>/dev/null || true)
 
   if [[ -z "$pkg_names" ]]; then return 0; fi
 
@@ -298,8 +298,8 @@ summary() {
   if has_command git; then
     echo "  Git ............... $(git --version 2>/dev/null)"
   fi
-  if has_command python; then
-    echo "  Python ............ $(python --version 2>/dev/null)"
+  if has_command python3; then
+    echo "  Python ............ $(python3 --version 2>/dev/null)"
   fi
   if has_command pip; then
     echo "  pip ............... $(pip --version 2>/dev/null | head -n1)"
