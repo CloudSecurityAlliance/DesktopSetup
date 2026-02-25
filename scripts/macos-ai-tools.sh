@@ -285,8 +285,11 @@ install_node() {
 install_claude() {
   if [[ -n "$claude_needs_migration" ]]; then
     migrate_claude
+  elif has_command claude; then
+    info "Claude Code already installed ($(get_version claude --version)); skipping"
+    return 0
   fi
-  info "Installing/updating Claude Code (native installer)"
+  info "Installing Claude Code (native installer)"
   curl -fsSL https://claude.ai/install.sh | bash \
     || abort "Claude Code installation failed."
 

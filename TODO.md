@@ -6,8 +6,8 @@ Audit performed 2026-02-24. Issues grouped by priority.
 
 ## Critical
 
-- [ ] **C1 — Claude Code re-installs on every run** (`macos-ai-tools.sh:286–287`)
-  Add a `has_command claude` guard to skip the installer when already installed. Also switch from `curl ... | bash` to `bash -c "$(curl ...)"` per CLAUDE.md convention (preserves interactive stdin).
+- [x] **C1 — Claude Code re-installs on every run** (`macos-ai-tools.sh:286–287`)
+  Added `has_command claude` guard to skip the installer when already installed and no migration is needed.
 
 - [ ] **C2 — Word-splitting in pip upgrade loop** (`macos-update.sh:274`)
   `for pkg in $pkg_names` — unquoted variable is split on whitespace. Blank lines in the Python JSON output silently pass empty/malformed strings to `pip install --upgrade`. Replace with `mapfile -t pkg_names < <(...)` and iterate with `"${pkg_names[@]}"`.
