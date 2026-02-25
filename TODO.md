@@ -16,8 +16,9 @@ Audit performed 2026-02-24. Issues grouped by priority.
 
 ## High
 
-- [ ] **H1 — `pgrep -x claude` won't detect running Claude Code** (`macos-ai-tools.sh:63`)
-  Claude Code is Node.js-backed; its process name in the macOS table is likely `node`, not `claude`. Change to `pgrep -f "\.local/bin/claude"`.
+- [ ] **H1 — `pgrep -x claude` may not detect running Claude Code** (`macos-ai-tools.sh:63`)
+  Needs verification on macOS: if the native installer puts a real binary at `~/.local/bin/claude`, `-x` works fine. If it runs as a Node.js process, the process name would be `node` and the check misses it. If broken, fix is `pgrep -f "\.local/bin/claude"`.
+  To verify: start a `claude` session, then in another terminal run `ps aux | grep claude` and check the process name in column 11 (the COMMAND column). If it shows `node` rather than `claude`, apply the fix.
 
 - [ ] **H2 — Missing `has_command brew` guard in Git plan display** (`macos-work-tools.sh:166`)
   On a fresh machine, `brew list --formula git` is called before Homebrew is installed, causing the plan to show "upgrade to Homebrew version" instead of "install via Homebrew". Add `has_command brew &&` to the condition.
