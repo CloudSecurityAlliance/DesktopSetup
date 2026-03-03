@@ -36,15 +36,15 @@ All three macOS scripts are interactive — they show you what they plan to do a
 
 Python, Node.js, Claude Code, Codex CLI, Gemini CLI.
 
-First, open PowerShell as Administrator and allow script execution:
+First, open PowerShell as Administrator (press the Windows key, type `powershell`, right-click **Windows PowerShell**, and select **Run as administrator**). Then allow script execution:
 
 ```powershell
 Set-ExecutionPolicy RemoteSigned
 ```
 
-When prompted "Do you want to change the execution policy?", type `Y` and press Enter. You only need to do this once.
+When prompted "Do you want to change the execution policy?", type `Y` and press Enter. You only need to do this once. Close the Administrator window.
 
-Then, in a regular PowerShell window, run:
+Then, open a regular PowerShell window and run:
 
 ```powershell
 irm https://raw.githubusercontent.com/CloudSecurityAlliance/DesktopSetup/HEAD/scripts/windows-ai-tools.ps1 | iex
