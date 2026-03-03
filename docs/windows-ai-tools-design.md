@@ -26,7 +26,7 @@ The macOS AI tools script uses Homebrew solely as a Node.js delivery mechanism �
 
 - **winget** — used only to install Node.js. Ships with Windows 10/11, requires no bootstrap, and is fully automatable with `--accept-package-agreements --accept-source-agreements`.
 - **npm** — used for Codex and Gemini, same as macOS.
-- **Native installers** — used for Claude Code (Anthropic's installer) and Python (new Python install manager).
+- **Native installers** — used for Claude Code (Anthropic's installer).
 
 Chocolatey and Scoop are not used. They require their own bootstrap and add complexity without benefit given the narrow set of tools we're installing.
 
@@ -58,39 +58,18 @@ Chocolatey and Scoop are not used. They require their own bootstrap and add comp
 
 - **Correct method**: `npm install -g @google/gemini-cli`
 - **Detection**: `npm list -g @google/gemini-cli`
-- **Wrong methods to detect**: winget, Chocolatey
+- **Wrong methods to detect**: none — `Google.GeminiCLI` does not exist in winget (verified 2026-03), so npm is the only install vector
 - **Verified on reference machine**: Gemini 0.1.22 via npm — correct
 
 ### Python
 
 This is where Windows diverges most significantly from macOS.
 
-**Why not `winget install Python.Python.3.13`?**
+**Method**: `winget install Python.Python.3.13` — simple, fully automatable, no interactive Store step required. The script detects and skips the Windows Store stub (`WindowsApps\python.exe`) which is not a real Python installation.
 
-It works and is automatable, but uses the traditional installer which:
-- Does not fix the Windows 260-character path limit (a real problem for deep venvs and `node_modules` trees)
-- Does not handle multiple Python versions cleanly
-- Is being explicitly phased out by the Python project in favour of the new install manager
+**Detection**: If `python` is on PATH and its source is NOT in `WindowsApps` (the Store redirect stub), Python is already installed and the script skips installation.
 
-**Why the new Python install manager?**
-
-Python.org's new install manager (Windows Store app ID `9nq7512cxl7t`) is the stated long-term direction:
-- Prompts to fix the 260-character path limit at install time
-- Handles multiple Python version management cleanly
-- Installs to user space (`$env:LOCALAPPDATA\Python\`) — no admin rights needed
-
-**It is interactive by design.** The install manager has a TUI configuration helper that requires human input for system-level decisions (path limit, version selection). This is handled the same way the macOS script handles Xcode CLI Tools — open the Store to the right app, tell the user to follow the prompts, then poll until Python is available:
-
-```powershell
-Start-Process "ms-windows-store://pdp/?ProductId=9nq7512cxl7t"
-Write-Host "Please complete the Python install manager setup, then press Enter to continue..."
-```
-
-**Detection anchor**: The new install manager puts Python at `$env:LOCALAPPDATA\Python\bin\python.exe`. This path is the signal that Python was installed correctly. The Windows Store also registers a stub at `$env:LOCALAPPDATA\Microsoft\WindowsApps\python.exe` — this stub must not be confused with a real Python installation.
-
-**Migration policy — Python is not auto-migrated.** If Python is found but not at the expected path, the script warns and instructs the user to install via the new install manager manually, then re-run the script. The risk of silent auto-migration is too high: existing virtual environments would break, pip packages installed in the old location would be orphaned, and PATH changes require a reboot.
-
-**Verified on reference machine**: Python 3.14.3 via new install manager at `$LOCALAPPDATA\Python\bin\python.exe` — correct.
+**Verified on reference machine**: Python 3.14.3 installed and working — correct.
 
 ## Wrong-Method Detection: More Fragmented Than macOS
 
@@ -114,7 +93,6 @@ Carried over directly from the macOS script:
 3. **Check for running processes** — warn if claude/codex/gemini processes are running before migrating
 4. **Non-interactive mode** — `$env:NONINTERACTIVE = "1"` skips all prompts for CI/automation
 5. **Warn, don't abort on optional steps** — Codex and Gemini failures warn and continue; Node.js failure aborts
-6. **Python never auto-migrated** — too high a risk of breaking existing environments
 
 ## Windows-Specific Considerations
 

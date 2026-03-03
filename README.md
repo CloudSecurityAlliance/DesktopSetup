@@ -1,8 +1,8 @@
 # CSA DesktopSetup
 
-Automated setup for Cloud Security Alliance development environments. Get from a bare Mac to productive in a few commands.
+Automated setup for Cloud Security Alliance development environments. Get from a bare machine to productive in a few commands.
 
-## Quick Start
+## Quick Start — macOS
 
 ### Work tools (everyone)
 
@@ -28,23 +28,42 @@ Homebrew formulas/casks, npm global packages, pip packages. Saves a snapshot of 
 bash -c "$(curl -fsSL https://raw.githubusercontent.com/CloudSecurityAlliance/DesktopSetup/HEAD/scripts/macos-update.sh)"
 ```
 
-All three scripts are interactive — they show you what they plan to do and ask for confirmation. The install scripts share a base layer (Xcode CLI Tools, Homebrew, Node.js/npm) and install it if not already present.
+All three macOS scripts are interactive — they show you what they plan to do and ask for confirmation. The install scripts share a base layer (Xcode CLI Tools, Homebrew, Node.js/npm) and install it if not already present.
+
+## Quick Start — Windows
+
+### AI tools
+
+Python, Node.js, Claude Code, Codex CLI, Gemini CLI. Run in PowerShell:
+
+```powershell
+irm https://raw.githubusercontent.com/CloudSecurityAlliance/DesktopSetup/HEAD/scripts/windows-ai-tools.ps1 | iex
+```
+
+Requires Windows 10/11, winget, and Git for Windows. The script detects tools installed via the wrong method (npm or winget for Claude Code, winget for Codex) and migrates them to the correct install method.
 
 ## What This Repo Contains
 
 ### `scripts/`
 
-macOS setup scripts. Each is self-contained and idempotent (safe to re-run):
+Setup scripts. Each is self-contained and idempotent (safe to re-run):
 
-- **`macos-work-tools.sh`** — Core work apps + optional developer tools
-- **`macos-ai-tools.sh`** — AI coding assistants (with migration from Homebrew/npm to recommended install methods)
-- **`macos-update.sh`** — Update all installed tools (snapshots versions first for rollback)
+- **`macos-work-tools.sh`** — Core work apps + optional developer tools (macOS)
+- **`macos-ai-tools.sh`** — AI coding assistants with migration support (macOS)
+- **`macos-update.sh`** — Update all installed tools with version snapshots (macOS)
+- **`windows-ai-tools.ps1`** — AI coding assistants with migration support (Windows)
+
+### `docs/`
+
+Design documents and implementation notes for the scripts.
 
 ### `archives/`
 
 Previous versions of scripts preserved for reference.
 
 ## Updating
+
+### macOS
 
 Run the update script to update everything at once (snapshots versions first):
 
@@ -62,9 +81,15 @@ pip install --upgrade pip       # pip itself (Claude Code auto-updates)
 
 Snapshots are saved to `~/Library/Logs/CSA-DesktopSetup/` with timestamps.
 
-## macOS Only (For Now)
+### Windows
 
-We currently support macOS only. Windows support may come later.
+Re-run the AI tools script to upgrade — it detects what's already installed and updates in place. npm tools can also be updated manually:
+
+```powershell
+npm update -g @openai/codex @google/gemini-cli
+```
+
+Claude Code updates itself automatically.
 
 ## Contributing
 

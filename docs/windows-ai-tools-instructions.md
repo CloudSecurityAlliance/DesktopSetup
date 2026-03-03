@@ -94,29 +94,28 @@ If any are running, warn that they will stay on the old version and ask whether 
 Set these flags before running preflight. They control what the preflight plan displays and what the install functions do.
 
 ```powershell
-$claudeMigration = ""   # "npm" or "winget" if installed wrong
-$codexMigration  = ""   # "winget" or "choco" if installed wrong
-$geminiMigration = ""   # "winget" or "choco" if installed wrong
+$claudeMigration = @()   # array — can be both "npm" AND "winget"
+$codexMigration  = ""    # "winget" if installed wrong
+# Gemini: npm only, no wrong-method detection needed (not in winget)
 ```
 
 ### Claude Code — correct method is native installer
 ```powershell
 # Wrong: npm
-if (npm list -g @anthropic-ai/claude-code 2>$null) { $claudeMigration = "npm" }
+if (npm list -g @anthropic-ai/claude-code 2>$null | Select-String '@anthropic-ai/claude-code') { $claudeMigration += "npm" }
 # Wrong: winget (Anthropic.ClaudeCode exists in winget as of 2026-03)
-if (winget list --id Anthropic.ClaudeCode 2>$null | Select-String "Anthropic.ClaudeCode") { $claudeMigration = "winget" }
+if (winget list --id Anthropic.ClaudeCode 2>$null | Select-String "Anthropic.ClaudeCode") { $claudeMigration += "winget" }
 ```
+
+Key fix: `$claudeMigration` is an array so we can remove BOTH npm and winget if both exist.
 
 ### Codex — correct method is npm
 ```powershell
-winget list --id OpenAI.Codex 2>$null && $codexMigration = "winget"
-# Also check: choco list --local-only codex
+if (winget list --id OpenAI.Codex 2>$null | Select-String 'OpenAI.Codex') { $codexMigration = "winget" }
 ```
 
 ### Gemini — correct method is npm
-```powershell
-winget list --id Google.GeminiCLI 2>$null && $geminiMigration = "winget"
-```
+No winget migration needed — `Google.GeminiCLI` does not exist in winget (verified 2026-03).
 
 ## Preflight Plan
 
@@ -138,25 +137,13 @@ Then ask: `Proceed with installation? [Y/n]`
 
 ### Install-Python
 
-**Correct install**: `$env:LOCALAPPDATA\Python\bin\python.exe`
-**Wrong install / Store stub**: `$env:LOCALAPPDATA\Microsoft\WindowsApps\python.exe` — this is not a real Python, it opens the Store
+**Method**: `winget install Python.Python.3.13` — simple, fully automatable.
+**Store stub detection**: `(Get-Command python).Source` containing `WindowsApps` is the Store redirect, not a real Python — the script treats this as "not installed".
 
 Detection logic:
-- If `$env:LOCALAPPDATA\Python\bin\python.exe` exists → already correct, report version and return
-- If `$env:LOCALAPPDATA\Microsoft\WindowsApps\python.exe` exists but not the above → stub only, proceed to install
-- If Python is found on PATH but not at the correct path → warn that it was installed via an unsupported method, instruct the user to install the new Python install manager, then **continue** (do not abort — other tools can still be installed)
-
-To install:
-```powershell
-Write-Info "Opening Windows Store — please install the Python install manager and complete setup"
-Write-Info "Accept the long path support prompt when asked"
-Start-Process "ms-windows-store://pdp/?ProductId=9nq7512cxl7t"
-Write-Host "Press Enter once Python installation is complete..."
-Read-Host
-```
-Then verify `$env:LOCALAPPDATA\Python\bin\python.exe` exists. If still missing, warn and continue.
-
-**Python is never auto-migrated.** Only install if not present at the correct path.
+- If `python` is on PATH and NOT the Store stub → already installed, report version and skip
+- If `python3` is on PATH → already installed, report version and skip
+- Otherwise → `winget install Python.Python.3.13`
 
 ### Install-Node
 
@@ -173,14 +160,18 @@ Refresh PATH after install.
 ### Install-Claude
 
 ```powershell
-if ($claudeMigration -eq "npm") {
-    Write-Info "Removing Claude Code from npm (migrating to native installer)"
-    npm uninstall -g @anthropic-ai/claude-code
-} elseif ($claudeMigration -eq "winget") {
-    Write-Info "Removing Claude Code from winget (migrating to native installer)"
-    winget uninstall --id Anthropic.ClaudeCode --accept-source-agreements
+# Remove ALL wrong-method installs (could be both npm and winget)
+foreach ($method in $claudeMigration) {
+    if ($method -eq "npm") {
+        Write-Info "Removing Claude Code from npm (migrating to native installer)"
+        npm uninstall -g @anthropic-ai/claude-code
+    } elseif ($method -eq "winget") {
+        Write-Info "Removing Claude Code from winget (migrating to native installer)"
+        winget uninstall --id Anthropic.ClaudeCode --accept-source-agreements
+    }
 }
-Write-Info "Installing/updating Claude Code (native installer)"
+# Idempotency guard: skip if already correctly installed and no migration needed
+if ($claudeMigration.Count -eq 0 -and (Has-Command claude)) { return }
 irm https://claude.ai/install.ps1 | iex
 ```
 Refresh PATH after install. Config in `~/.claude/` is never touched.
@@ -201,9 +192,7 @@ if (Has-Command codex) {
 ### Install-Gemini
 
 ```powershell
-if ($geminiMigration -eq "winget") {
-    winget uninstall --id Google.GeminiCLI
-}
+# No winget migration needed — Gemini is npm-only
 if (Has-Command gemini) {
     npm update -g @google/gemini-cli
 } else {
