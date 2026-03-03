@@ -294,6 +294,16 @@ function Install-Claude {
         Abort "Claude Code installation failed: $_"
     }
     Refresh-Path
+
+    # Workaround: native installer often fails to add .local\bin to PATH
+    # https://github.com/anthropics/claude-code/issues/21365
+    $localBin = "$env:USERPROFILE\.local\bin"
+    $userPath = [Environment]::GetEnvironmentVariable("PATH", "User")
+    if ($userPath -notlike "*$localBin*") {
+        Write-Info "Adding $localBin to user PATH"
+        [Environment]::SetEnvironmentVariable("PATH", "$userPath;$localBin", "User")
+    }
+    $env:PATH = "$env:PATH;$localBin"
 }
 
 function Install-Codex {
