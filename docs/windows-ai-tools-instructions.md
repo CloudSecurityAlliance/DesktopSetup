@@ -94,7 +94,7 @@ If any are running, warn that they will stay on the old version and ask whether 
 Set these flags before running preflight. They control what the preflight plan displays and what the install functions do.
 
 ```powershell
-$claudeMigration = ""   # "npm" if installed wrong
+$claudeMigration = ""   # "npm" or "winget" if installed wrong
 $codexMigration  = ""   # "winget" or "choco" if installed wrong
 $geminiMigration = ""   # "winget" or "choco" if installed wrong
 ```
@@ -103,8 +103,9 @@ $geminiMigration = ""   # "winget" or "choco" if installed wrong
 ```powershell
 # Wrong: npm
 if (npm list -g @anthropic-ai/claude-code 2>$null) { $claudeMigration = "npm" }
+# Wrong: winget (Anthropic.ClaudeCode exists in winget as of 2026-03)
+if (winget list --id Anthropic.ClaudeCode 2>$null | Select-String "Anthropic.ClaudeCode") { $claudeMigration = "winget" }
 ```
-Also check winget if Anthropic ever adds it: `winget list --id Anthropic.ClaudeCode`
 
 ### Codex — correct method is npm
 ```powershell
@@ -175,6 +176,9 @@ Refresh PATH after install.
 if ($claudeMigration -eq "npm") {
     Write-Info "Removing Claude Code from npm (migrating to native installer)"
     npm uninstall -g @anthropic-ai/claude-code
+} elseif ($claudeMigration -eq "winget") {
+    Write-Info "Removing Claude Code from winget (migrating to native installer)"
+    winget uninstall --id Anthropic.ClaudeCode --accept-source-agreements
 }
 Write-Info "Installing/updating Claude Code (native installer)"
 irm https://claude.ai/install.ps1 | iex

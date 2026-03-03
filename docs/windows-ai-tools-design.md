@@ -42,8 +42,8 @@ Chocolatey and Scoop are not used. They require their own bootstrap and add comp
 
 - **Correct method**: Native installer — `irm https://claude.ai/install.ps1 | iex`
 - **Why not npm**: The npm package (`@anthropic-ai/claude-code`) is the legacy install method. The native installer is a self-contained binary with a more reliable auto-updater and no Node.js dependency.
-- **Detection of wrong method**: `npm list -g @anthropic-ai/claude-code`
-- **Migration**: `npm uninstall -g @anthropic-ai/claude-code`, then run native installer
+- **Detection of wrong method**: `npm list -g @anthropic-ai/claude-code` or `winget list --id Anthropic.ClaudeCode` (confirmed in winget as of 2026-03, version 2.1.63)
+- **Migration**: `npm uninstall -g @anthropic-ai/claude-code` or `winget uninstall --id Anthropic.ClaudeCode`, then run native installer
 - **Config safety**: `~/.claude/` is never touched — config is fully separate from the binary location
 - **Verified on reference machine**: Claude Code 2.1.55 installed via npm at `AppData\Roaming\npm\claude` — needs migration
 
