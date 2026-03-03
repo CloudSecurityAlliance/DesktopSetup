@@ -1,6 +1,6 @@
 # CSA DesktopSetup
 
-Automated setup for Cloud Security Alliance development environments. Get from a bare machine to productive in a few commands.
+Automated setup for Cloud Security Alliance development environments on **macOS** and **Windows**. Get from a bare machine to productive in a few commands.
 
 ## Quick Start — macOS
 
