@@ -364,7 +364,7 @@ setup_gh_auth() {
   echo ""
   info "GitHub CLI is installed but not authenticated."
   if confirm "Run 'gh auth login' now?"; then
-    gh auth login || warn "gh auth login failed; you can run it manually later"
+    gh auth login --git-protocol https || warn "gh auth login failed; you can run it manually later"
   fi
 }
 
