@@ -6,9 +6,11 @@
 #   1. Xcode Command Line Tools
 #   2. Homebrew (macOS package manager)
 #   3. Node.js (via Homebrew, provides npm)
-#   4. Claude Code (native installer, auto-updates)
-#   5. OpenAI Codex CLI (via npm)
-#   6. Google Gemini CLI (via npm)
+#   4. Git (via Homebrew, latest version)
+#   5. GitHub CLI (gh) + authentication
+#   6. Claude Code (native installer, auto-updates)
+#   7. OpenAI Codex CLI (via npm)
+#   8. Google Gemini CLI (via npm)
 #
 # Usage:
 #   bash -c "$(curl -fsSL https://raw.githubusercontent.com/CloudSecurityAlliance/DesktopSetup/HEAD/scripts/macos-ai-tools.sh)"
@@ -166,6 +168,22 @@ preflight() {
     echo "  Node.js ........... install via Homebrew"
   fi
 
+  # Git
+  if has_command git && brew list --formula git >/dev/null 2>&1; then
+    echo "  Git ............... installed ($(get_version git --version))"
+  elif has_command git; then
+    echo "  Git ............... upgrade to Homebrew version"
+  else
+    echo "  Git ............... install via Homebrew"
+  fi
+
+  # GitHub CLI
+  if has_command gh; then
+    echo "  GitHub CLI ........ installed ($(get_version gh --version))"
+  else
+    echo "  GitHub CLI ........ install via Homebrew"
+  fi
+
   # Claude Code
   if [[ -n "$claude_needs_migration" ]]; then
     echo "  Claude Code ....... migrate from $claude_needs_migration → native installer (settings preserved)"
@@ -282,6 +300,48 @@ install_node() {
   fi
 }
 
+install_git() {
+  ensure_brew_in_path
+
+  if brew list --formula git >/dev/null 2>&1; then
+    info "Upgrading Git"
+    brew upgrade git 2>/dev/null || true
+  else
+    info "Installing Git via Homebrew"
+    brew install git || abort "Failed to install Git"
+  fi
+}
+
+install_gh() {
+  ensure_brew_in_path
+
+  if brew list --formula gh >/dev/null 2>&1; then
+    info "Upgrading GitHub CLI"
+    brew upgrade gh 2>/dev/null || true
+  else
+    info "Installing GitHub CLI"
+    brew install gh || abort "Failed to install GitHub CLI"
+  fi
+}
+
+setup_gh_auth() {
+  if ! has_command gh; then return 0; fi
+  if gh auth status >/dev/null 2>&1; then
+    info "GitHub CLI already authenticated"
+    return 0
+  fi
+  if [[ -n "${NONINTERACTIVE-}" ]]; then
+    warn "Skipping gh auth login (non-interactive mode)"
+    return 0
+  fi
+
+  echo ""
+  info "GitHub CLI is installed but not authenticated."
+  if confirm "Run 'gh auth login' now?"; then
+    gh auth login --git-protocol https || warn "gh auth login failed; you can run it manually later"
+  fi
+}
+
 install_claude() {
   if [[ -n "$claude_needs_migration" ]]; then
     migrate_claude
@@ -353,6 +413,12 @@ summary() {
     echo "  Node.js ........... $(get_version node --version)"
     echo "  npm ............... $(get_version npm --version)"
   fi
+  if has_command git; then
+    echo "  Git ............... $(get_version git --version)"
+  fi
+  if has_command gh; then
+    echo "  GitHub CLI ........ $(get_version gh --version)"
+  fi
   if has_command claude; then
     echo "  Claude Code ....... $(get_version claude --version)"
   fi
@@ -365,6 +431,9 @@ summary() {
 
   echo ""
   info "Next steps:"
+  if has_command gh && ! gh auth status >/dev/null 2>&1; then
+    echo "  - Run 'gh auth login' to authenticate with GitHub"
+  fi
   echo "  - Run 'claude' to start Claude Code"
   echo "  - Run 'codex' to start Codex CLI"
   echo "  - Run 'gemini' to start Gemini CLI"
@@ -392,9 +461,12 @@ main() {
   install_xcode_cli_tools
   install_homebrew
   install_node
+  install_git
+  install_gh
   install_claude
   install_codex
   install_gemini
+  setup_gh_auth
   summary
 }
 

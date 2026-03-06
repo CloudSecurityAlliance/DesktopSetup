@@ -7,7 +7,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 DesktopSetup is the Cloud Security Alliance's machine bootstrap. Three scripts manage a Mac environment:
 
 - `macos-work-tools.sh` — Core work apps (1Password, Slack, Zoom, Chrome, Office, Git, GitHub CLI) + optional dev profile (VS Code, AWS CLI, Wrangler)
-- `macos-ai-tools.sh` — AI coding CLIs (Claude Code, Codex, Gemini) with migration from wrong install methods
+- `macos-ai-tools.sh` — Git, GitHub CLI + auth, AI coding CLIs (Claude Code, Codex, Gemini) with migration from wrong install methods
 - `macos-update.sh` — Updates everything: Homebrew formulas/casks, npm globals, pip packages. Snapshots all versions before updating for rollback.
 
 AI skills, MCP server catalogs, and per-project tooling live in separate repositories.

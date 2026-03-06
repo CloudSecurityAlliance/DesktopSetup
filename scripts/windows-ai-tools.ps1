@@ -1,11 +1,13 @@
 # Cloud Security Alliance — Windows AI Tools Setup
 #
 # Installs:
-#   1. Python (via winget)
-#   2. Node.js LTS (via winget)
-#   3. Claude Code (native installer, auto-updates)
-#   4. OpenAI Codex CLI (via npm)
-#   5. Google Gemini CLI (via npm)
+#   1. Git (via winget, includes Git Bash)
+#   2. GitHub CLI (gh, via winget) + authentication
+#   3. Python (via winget)
+#   4. Node.js LTS (via winget)
+#   5. Claude Code (native installer, auto-updates)
+#   6. OpenAI Codex CLI (via npm)
+#   7. Google Gemini CLI (via npm)
 #
 # Usage:
 #   irm https://raw.githubusercontent.com/CloudSecurityAlliance/DesktopSetup/HEAD/scripts/windows-ai-tools.ps1 | iex
@@ -78,10 +80,7 @@ function Test-Preconditions {
         Abort "winget is required but not found. Install App Installer from the Microsoft Store."
     }
 
-    # Git (Claude Code requires Git Bash)
-    if (-not (Has-Command git)) {
-        Abort "Git is required (Claude Code needs Git Bash). Install with: winget install Git.Git"
-    }
+    # Git is installed by this script (Install-Git step)
 }
 
 # ── Non-interactive detection ───────────────────────────────────────
@@ -163,6 +162,22 @@ function Show-Preflight {
     Write-Info "Installation plan:"
     Write-Host ""
 
+    # Git
+    if (Has-Command git) {
+        $gitVer = Get-ToolVersion git '--version'
+        Write-Host "  Git ............... installed ($gitVer)"
+    } else {
+        Write-Host "  Git ............... install via winget"
+    }
+
+    # GitHub CLI
+    if (Has-Command gh) {
+        $ghVer = Get-ToolVersion gh '--version'
+        Write-Host "  GitHub CLI ........ installed ($ghVer)"
+    } else {
+        Write-Host "  GitHub CLI ........ install via winget"
+    }
+
     # Python
     if ((Has-Command python) -and -not (Test-PythonStoreStub)) {
         $pyVer = Get-ToolVersion python '--version'
@@ -238,6 +253,69 @@ function Migrate-Codex {
 }
 
 # ── Install steps ──────────────────────────────────────────────────
+
+function Install-Git {
+    if (Has-Command git) {
+        # Check if managed by winget and try to upgrade
+        $wingetGit = winget list --id Git.Git --accept-source-agreements 2>$null
+        if ($wingetGit -and ($wingetGit | Select-String 'Git.Git')) {
+            Write-Info "Upgrading Git via winget"
+            winget upgrade --id Git.Git --accept-package-agreements --accept-source-agreements
+            # winget upgrade returns non-zero if already up to date — that's fine
+        } else {
+            $gitVer = Get-ToolVersion git '--version'
+            Write-Info "Git already installed (non-winget): $gitVer"
+        }
+    } else {
+        Write-Info "Installing Git via winget"
+        winget install Git.Git --accept-package-agreements --accept-source-agreements
+        if ($LASTEXITCODE -ne 0) { Abort "Failed to install Git." }
+    }
+    Refresh-Path
+}
+
+function Install-GH {
+    if (Has-Command gh) {
+        # Check if managed by winget and try to upgrade
+        $wingetGH = winget list --id GitHub.cli --accept-source-agreements 2>$null
+        if ($wingetGH -and ($wingetGH | Select-String 'GitHub.cli')) {
+            Write-Info "Upgrading GitHub CLI via winget"
+            winget upgrade --id GitHub.cli --accept-package-agreements --accept-source-agreements
+        } else {
+            $ghVer = Get-ToolVersion gh '--version'
+            Write-Info "GitHub CLI already installed (non-winget): $ghVer"
+        }
+    } else {
+        Write-Info "Installing GitHub CLI via winget"
+        winget install GitHub.cli --accept-package-agreements --accept-source-agreements
+        if ($LASTEXITCODE -ne 0) { Abort "Failed to install GitHub CLI." }
+    }
+    Refresh-Path
+}
+
+function Setup-GHAuth {
+    if (-not (Has-Command gh)) { return }
+
+    $authStatus = gh auth status 2>&1
+    if ($LASTEXITCODE -eq 0) {
+        Write-Info "GitHub CLI already authenticated"
+        return
+    }
+
+    if ($env:NONINTERACTIVE -eq '1') {
+        Write-Warn "Skipping gh auth login (non-interactive mode)"
+        return
+    }
+
+    Write-Host ""
+    Write-Info "GitHub CLI is installed but not authenticated."
+    if (Confirm-Step "Run 'gh auth login' now?") {
+        gh auth login --git-protocol https
+        if ($LASTEXITCODE -ne 0) {
+            Write-Warn "gh auth login failed; you can run it manually later"
+        }
+    }
+}
 
 function Install-Python {
     # Check for real Python (not the Store stub)
@@ -357,6 +435,14 @@ function Show-Summary {
     Write-Success "Setup complete! Installed versions:"
     Write-Host ""
 
+    if (Has-Command git) {
+        $gitVer = Get-ToolVersion git '--version'
+        Write-Host "  Git ............... $gitVer"
+    }
+    if (Has-Command gh) {
+        $ghVer = Get-ToolVersion gh '--version'
+        Write-Host "  GitHub CLI ........ $ghVer"
+    }
     if (Has-Command python) {
         $pyVer = Get-ToolVersion python '--version'
         Write-Host "  Python ............ $pyVer"
@@ -382,6 +468,12 @@ function Show-Summary {
 
     Write-Host ""
     Write-Info "Next steps:"
+    if (Has-Command gh) {
+        $authCheck = gh auth status 2>&1
+        if ($LASTEXITCODE -ne 0) {
+            Write-Host "  - Run 'gh auth login --git-protocol https' to authenticate with GitHub"
+        }
+    }
     Write-Host "  - Run 'claude' to start Claude Code"
     Write-Host "  - Run 'codex' to start Codex CLI"
     Write-Host "  - Run 'gemini' to start Gemini CLI"
@@ -408,11 +500,14 @@ function Main {
     }
 
     Write-Host ""
+    Install-Git
+    Install-GH
     Install-Python
     Install-Node
     Install-Claude
     Install-Codex
     Install-Gemini
+    Setup-GHAuth
     Show-Summary
 }
 
