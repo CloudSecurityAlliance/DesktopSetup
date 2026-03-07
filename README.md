@@ -32,11 +32,7 @@ All three macOS scripts are interactive — they show you what they plan to do a
 
 ## Quick Start — Windows
 
-### AI tools
-
-Python, Node.js, Claude Code, Codex CLI, Gemini CLI.
-
-First, open PowerShell as Administrator (press the Windows key, type `powershell`, right-click **Windows PowerShell**, and select **Run as administrator**). Then allow script execution:
+**Prerequisite (one-time):** Open PowerShell as Administrator (press the Windows key, type `powershell`, right-click **Windows PowerShell**, and select **Run as administrator**). Then allow script execution:
 
 ```powershell
 Set-ExecutionPolicy RemoteSigned
@@ -44,13 +40,25 @@ Set-ExecutionPolicy RemoteSigned
 
 When prompted "Do you want to change the execution policy?", type `Y` and press Enter. You only need to do this once. Close the Administrator window.
 
-Then, open a regular PowerShell window and run:
+Then, open a regular PowerShell window and run the scripts below.
+
+### Work tools (everyone)
+
+Git, GitHub CLI, 1Password, Slack, Zoom, Chrome. Optional dev profile adds VS Code, AWS CLI, and Wrangler.
+
+```powershell
+irm https://raw.githubusercontent.com/CloudSecurityAlliance/DesktopSetup/HEAD/scripts/windows-work-tools.ps1 | iex
+```
+
+### AI tools
+
+Git, GitHub CLI, Python, Node.js, Claude Code, Codex CLI, Gemini CLI.
 
 ```powershell
 irm https://raw.githubusercontent.com/CloudSecurityAlliance/DesktopSetup/HEAD/scripts/windows-ai-tools.ps1 | iex
 ```
 
-Requires Windows 10/11, winget, and Git for Windows. The script detects tools installed via the wrong method (npm or winget for Claude Code, winget for Codex) and migrates them to the correct install method.
+Both Windows scripts require Windows 10/11 and winget. They install Git and GitHub CLI automatically. The AI tools script detects tools installed via the wrong method (npm or winget for Claude Code, winget for Codex) and migrates them to the correct install method.
 
 ## What This Repo Contains
 
@@ -61,6 +69,7 @@ Setup scripts. Each is self-contained and idempotent (safe to re-run):
 - **`macos-work-tools.sh`** — Core work apps + optional developer tools (macOS)
 - **`macos-ai-tools.sh`** — AI coding assistants with migration support (macOS)
 - **`macos-update.sh`** — Update all installed tools with version snapshots (macOS)
+- **`windows-work-tools.ps1`** — Core work apps + optional developer tools (Windows)
 - **`windows-ai-tools.ps1`** — AI coding assistants with migration support (Windows)
 
 ### `docs/`
@@ -93,7 +102,7 @@ Snapshots are saved to `~/Library/Logs/CSA-DesktopSetup/` with timestamps.
 
 ### Windows
 
-Re-run the AI tools script to upgrade — it detects what's already installed and updates in place. npm tools can also be updated manually:
+Re-run either script to upgrade — they detect what's already installed and update in place. npm tools can also be updated manually:
 
 ```powershell
 npm update -g @openai/codex @google/gemini-cli
