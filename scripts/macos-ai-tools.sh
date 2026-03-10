@@ -6,11 +6,12 @@
 #   1. Xcode Command Line Tools
 #   2. Homebrew (macOS package manager)
 #   3. Node.js (via Homebrew, provides npm)
-#   4. Git (via Homebrew, latest version)
-#   5. GitHub CLI (gh) + authentication
-#   6. Claude Code (native installer, auto-updates)
-#   7. OpenAI Codex CLI (via npm)
-#   8. Google Gemini CLI (via npm)
+#   4. Python (via Homebrew, provides python3/pip3)
+#   5. Git (via Homebrew, latest version)
+#   6. GitHub CLI (gh) + authentication
+#   7. Claude Code (native installer, auto-updates)
+#   8. OpenAI Codex CLI (via npm)
+#   9. Google Gemini CLI (via npm)
 #
 # Usage:
 #   bash -c "$(curl -fsSL https://raw.githubusercontent.com/CloudSecurityAlliance/DesktopSetup/HEAD/scripts/macos-ai-tools.sh)"
@@ -168,6 +169,13 @@ preflight() {
     echo "  Node.js ........... install via Homebrew"
   fi
 
+  # Python
+  if has_command python3; then
+    echo "  Python ............ installed ($(get_version python3 --version))"
+  else
+    echo "  Python ............ install via Homebrew"
+  fi
+
   # Git
   if has_command git && brew list --formula git >/dev/null 2>&1; then
     echo "  Git ............... installed ($(get_version git --version))"
@@ -300,6 +308,18 @@ install_node() {
   fi
 }
 
+install_python() {
+  ensure_brew_in_path
+
+  if has_command python3; then
+    info "Python already installed: $(get_version python3 --version)"
+    return 0
+  fi
+
+  info "Installing Python"
+  brew install python || abort "Failed to install Python"
+}
+
 install_git() {
   ensure_brew_in_path
 
@@ -413,6 +433,10 @@ summary() {
     echo "  Node.js ........... $(get_version node --version)"
     echo "  npm ............... $(get_version npm --version)"
   fi
+  if has_command python3; then
+    echo "  Python ............ $(get_version python3 --version)"
+    echo "  pip ............... $(get_version pip3 --version)"
+  fi
   if has_command git; then
     echo "  Git ............... $(get_version git --version)"
   fi
@@ -461,6 +485,7 @@ main() {
   install_xcode_cli_tools
   install_homebrew
   install_node
+  install_python
   install_git
   install_gh
   install_claude
