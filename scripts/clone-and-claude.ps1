@@ -57,11 +57,44 @@ $Org = $RepoSlug.Split('/')[0]
 $Repo = $RepoSlug.Split('/')[1]
 $DefaultBase = Join-Path $HOME "GitHub" $Org
 
-# ── Check prerequisites ─────────────────────────────────────────────
-
 Write-Info "Cloud Security Alliance - Clone & Claude"
 Write-Host ""
 Write-Host "  Repository: $RepoSlug"
+Write-Host ""
+
+# ── Check prerequisites ─────────────────────────────────────────────
+
+$Missing = @()
+
+if (-not (Has-Command git))    { $Missing += "git" }
+if (-not (Has-Command gh))     { $Missing += "gh (GitHub CLI)" }
+if (-not (Has-Command claude)) { $Missing += "claude (Claude Code)" }
+
+if ($Missing.Count -gt 0) {
+    Write-Err "Missing required tools: $($Missing -join ', ')"
+    Write-Host ""
+    Write-Host "  Install them with the CSA AI tools setup script:"
+    Write-Host ""
+    Write-Host "    irm https://raw.githubusercontent.com/CloudSecurityAlliance/DesktopSetup/HEAD/scripts/windows-ai-tools.ps1 | iex"
+    Write-Host ""
+    Write-Host "  Then re-run this script."
+    exit 1
+}
+
+# Check gh authentication
+$authCheck = gh auth status 2>&1
+if ($LASTEXITCODE -ne 0) {
+    Write-Err "GitHub CLI is not authenticated."
+    Write-Host ""
+    Write-Host "  Run this to log in:"
+    Write-Host ""
+    Write-Host "    gh auth login --git-protocol https"
+    Write-Host ""
+    Write-Host "  Then re-run this script."
+    exit 1
+}
+
+Write-Info "All prerequisites OK"
 Write-Host ""
 
 # ── Choose location ─────────────────────────────────────────────────
@@ -137,38 +170,6 @@ if ([Environment]::UserInteractive) {
 }
 
 Write-Host ""
-
-$Missing = @()
-
-if (-not (Has-Command git))    { $Missing += "git" }
-if (-not (Has-Command gh))     { $Missing += "gh (GitHub CLI)" }
-if (-not (Has-Command claude)) { $Missing += "claude (Claude Code)" }
-
-if ($Missing.Count -gt 0) {
-    Write-Err "Missing required tools: $($Missing -join ', ')"
-    Write-Host ""
-    Write-Host "  Install them with the CSA AI tools setup script:"
-    Write-Host ""
-    Write-Host "    irm https://raw.githubusercontent.com/CloudSecurityAlliance/DesktopSetup/HEAD/scripts/windows-ai-tools.ps1 | iex"
-    Write-Host ""
-    Write-Host "  Then re-run this script."
-    exit 1
-}
-
-# Check gh authentication
-$authCheck = gh auth status 2>&1
-if ($LASTEXITCODE -ne 0) {
-    Write-Err "GitHub CLI is not authenticated."
-    Write-Host ""
-    Write-Host "  Run this to log in:"
-    Write-Host ""
-    Write-Host "    gh auth login --git-protocol https"
-    Write-Host ""
-    Write-Host "  Then re-run this script."
-    exit 1
-}
-
-Write-Info "All prerequisites OK"
 
 # ── Clone ───────────────────────────────────────────────────────────
 

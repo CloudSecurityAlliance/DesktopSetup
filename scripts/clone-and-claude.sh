@@ -70,11 +70,51 @@ ORG="${REPO_SLUG%%/*}"
 REPO="${REPO_SLUG##*/}"
 DEFAULT_DIR="$HOME/GitHub/$ORG/$REPO"
 
-# ── Check prerequisites ─────────────────────────────────────────────
-
 info "Cloud Security Alliance — Clone & Claude"
 echo ""
 echo "  Repository: $REPO_SLUG"
+echo ""
+
+# ── Check prerequisites ─────────────────────────────────────────────
+
+MISSING=()
+
+if ! has_command git; then
+  MISSING+=("git")
+fi
+
+if ! has_command gh; then
+  MISSING+=("gh (GitHub CLI)")
+fi
+
+if ! has_command claude; then
+  MISSING+=("claude (Claude Code)")
+fi
+
+if [[ ${#MISSING[@]} -gt 0 ]]; then
+  error "Missing required tools: ${MISSING[*]}"
+  echo ""
+  echo "  Install them with the CSA AI tools setup script:"
+  echo ""
+  echo "    bash -c \"\$(curl -fsSL https://raw.githubusercontent.com/CloudSecurityAlliance/DesktopSetup/HEAD/scripts/macos-ai-tools.sh)\""
+  echo ""
+  echo "  Then re-run this script."
+  exit 1
+fi
+
+# Check gh authentication
+if ! gh auth status >/dev/null 2>&1; then
+  error "GitHub CLI is not authenticated."
+  echo ""
+  echo "  Run this to log in:"
+  echo ""
+  echo "    gh auth login --git-protocol https"
+  echo ""
+  echo "  Then re-run this script."
+  exit 1
+fi
+
+info "All prerequisites OK"
 echo ""
 
 # ── Choose location ─────────────────────────────────────────────────
@@ -150,45 +190,6 @@ if [[ -t 0 ]]; then
 fi
 
 echo ""
-
-MISSING=()
-
-if ! has_command git; then
-  MISSING+=("git")
-fi
-
-if ! has_command gh; then
-  MISSING+=("gh (GitHub CLI)")
-fi
-
-if ! has_command claude; then
-  MISSING+=("claude (Claude Code)")
-fi
-
-if [[ ${#MISSING[@]} -gt 0 ]]; then
-  error "Missing required tools: ${MISSING[*]}"
-  echo ""
-  echo "  Install them with the CSA AI tools setup script:"
-  echo ""
-  echo "    bash -c \"\$(curl -fsSL https://raw.githubusercontent.com/CloudSecurityAlliance/DesktopSetup/HEAD/scripts/macos-ai-tools.sh)\""
-  echo ""
-  echo "  Then re-run this script."
-  exit 1
-fi
-
-# Check gh authentication
-if ! gh auth status >/dev/null 2>&1; then
-  error "GitHub CLI is not authenticated."
-  echo ""
-  echo "  Run this to log in:"
-  echo ""
-  echo "    gh auth login --git-protocol https"
-  echo ""
-  echo "  Then re-run this script."
-  exit 1
-fi
-
-info "All prerequisites OK"
 
 # ── Clone ───────────────────────────────────────────────────────────
 
