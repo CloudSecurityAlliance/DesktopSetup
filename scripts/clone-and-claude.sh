@@ -87,14 +87,14 @@ echo "  Default: $DEFAULT_BASE/$REPO"
 echo ""
 if [[ -t 0 ]]; then
   while true; do
-    read -r -p "  Use default location? [Y/n] " reply
+    read -r -p "  Clone to default location, or choose your own? [yes/No] " reply
     reply_lower="$(echo "$reply" | tr '[:upper:]' '[:lower:]')"
     case "$reply_lower" in
-      y|yes|"")
+      y|yes)
         BASE_DIR="$DEFAULT_BASE"
         break
         ;;
-      n|no)
+      n|no|"")
         echo ""
         echo "  Enter the path where you want the repo."
         echo "  Example: ~/Projects or /Users/yourname/work"

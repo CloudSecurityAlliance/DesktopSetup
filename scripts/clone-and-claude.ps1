@@ -73,12 +73,12 @@ Write-Host ""
 
 if ([Environment]::UserInteractive) {
     while ($true) {
-        $reply = Read-Host "  Use default location? [Y/n]"
+        $reply = Read-Host "  Clone to default location, or choose your own? [yes/No]"
         $replyLower = $reply.ToLower()
-        if ($replyLower -eq 'y' -or $replyLower -eq 'yes' -or $reply -eq '') {
+        if ($replyLower -eq 'y' -or $replyLower -eq 'yes') {
             $BaseDir = $DefaultBase
             break
-        } elseif ($replyLower -eq 'n' -or $replyLower -eq 'no') {
+        } elseif ($replyLower -eq 'n' -or $replyLower -eq 'no' -or $reply -eq '') {
             Write-Host ""
             Write-Host "  Enter the path where you want the repo."
             Write-Host "  Example: ~\Projects or C:\Users\yourname\work"
