@@ -79,29 +79,56 @@ echo ""
 
 # ── Choose location ─────────────────────────────────────────────────
 
-echo "  Default location: $DEFAULT_DIR"
+DEFAULT_BASE="$HOME/GitHub/$ORG"
+
+echo "  The repo will be cloned into a folder named '$REPO' inside a base directory."
+echo ""
+echo "  Default: $DEFAULT_BASE/$REPO"
 echo ""
 if [[ -t 0 ]]; then
-  read -r -p "  Use this location? [Y/n] " reply
+  read -r -p "  Use default location? [Y/n] " reply
   case "${reply:-Y}" in
     [Yy]*|"")
-      TARGET_DIR="$DEFAULT_DIR"
+      BASE_DIR="$DEFAULT_BASE"
       ;;
     *)
-      read -r -p "  Enter your preferred path: " custom_path
-      if [[ -z "$custom_path" ]]; then
+      echo ""
+      echo "  Enter the base directory where '$REPO' will be created."
+      echo "  Example: ~/Projects or /Users/yourname/work"
+      echo ""
+      read -r -p "  Base path: " custom_base
+      if [[ -z "$custom_base" ]]; then
         abort "No path entered."
       fi
       # Expand ~ if user typed it
-      TARGET_DIR="${custom_path/#\~/$HOME}"
+      BASE_DIR="${custom_base/#\~/$HOME}"
       ;;
   esac
 else
-  TARGET_DIR="$DEFAULT_DIR"
+  BASE_DIR="$DEFAULT_BASE"
 fi
 
-echo ""
-echo "  Target: $TARGET_DIR"
+TARGET_DIR="$BASE_DIR/$REPO"
+
+# ── Safety check ────────────────────────────────────────────────────
+# The final target must be a new directory. Refuse to clone into an
+# existing non-git directory (e.g., /usr, /tmp, /Applications).
+
+if [[ -d "$TARGET_DIR" && ! -d "$TARGET_DIR/.git" ]]; then
+  abort "Directory already exists and is not a git repo: $TARGET_DIR\n  Refusing to clone into an existing directory. Choose a different location."
+fi
+
+if [[ -t 0 ]]; then
+  echo ""
+  echo "  Will clone to: $TARGET_DIR"
+  echo ""
+  read -r -p "  Proceed? [Y/n] " confirm_reply
+  case "${confirm_reply:-Y}" in
+    [Yy]*|"") ;;
+    *) abort "Aborted." ;;
+  esac
+fi
+
 echo ""
 
 MISSING=()

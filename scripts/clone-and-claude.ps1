@@ -55,7 +55,7 @@ if ($RepoSlug -notmatch '/') {
 
 $Org = $RepoSlug.Split('/')[0]
 $Repo = $RepoSlug.Split('/')[1]
-$DefaultDir = Join-Path $HOME "GitHub" $Org $Repo
+$DefaultBase = Join-Path $HOME "GitHub" $Org
 
 # ── Check prerequisites ─────────────────────────────────────────────
 
@@ -66,30 +66,55 @@ Write-Host ""
 
 # ── Choose location ─────────────────────────────────────────────────
 
-Write-Host "  Default location: $DefaultDir"
+Write-Host "  The repo will be cloned into a folder named '$Repo' inside a base directory."
+Write-Host ""
+Write-Host "  Default: $DefaultBase\$Repo"
 Write-Host ""
 
 if ([Environment]::UserInteractive) {
-    $reply = Read-Host "  Use this location? [Y/n]"
+    $reply = Read-Host "  Use default location? [Y/n]"
     if ($reply -eq '' -or $reply -match '^[Yy]') {
-        $TargetDir = $DefaultDir
+        $BaseDir = $DefaultBase
     } else {
-        $customPath = Read-Host "  Enter your preferred path"
-        if (-not $customPath) {
+        Write-Host ""
+        Write-Host "  Enter the base directory where '$Repo' will be created."
+        Write-Host "  Example: ~\Projects or C:\Users\yourname\work"
+        Write-Host ""
+        $customBase = Read-Host "  Base path"
+        if (-not $customBase) {
             Abort "No path entered."
         }
         # Expand ~ if user typed it
-        if ($customPath.StartsWith('~')) {
-            $customPath = $customPath.Replace('~', $HOME)
+        if ($customBase.StartsWith('~')) {
+            $customBase = $customBase.Replace('~', $HOME)
         }
-        $TargetDir = $customPath
+        $BaseDir = $customBase
     }
 } else {
-    $TargetDir = $DefaultDir
+    $BaseDir = $DefaultBase
 }
 
-Write-Host ""
-Write-Host "  Target: $TargetDir"
+$TargetDir = Join-Path $BaseDir $Repo
+
+# ── Safety check ────────────────────────────────────────────────────
+# The final target must be a new directory. Refuse to clone into an
+# existing non-git directory (e.g., C:\Windows, C:\Program Files).
+
+$GitDir = Join-Path $TargetDir ".git"
+if ((Test-Path $TargetDir) -and -not (Test-Path $GitDir)) {
+    Abort "Directory already exists and is not a git repo: $TargetDir`n  Refusing to clone into an existing directory. Choose a different location."
+}
+
+if ([Environment]::UserInteractive) {
+    Write-Host ""
+    Write-Host "  Will clone to: $TargetDir"
+    Write-Host ""
+    $confirmReply = Read-Host "  Proceed? [Y/n]"
+    if ($confirmReply -ne '' -and $confirmReply -notmatch '^[Yy]') {
+        Abort "Aborted."
+    }
+}
+
 Write-Host ""
 
 $Missing = @()
@@ -126,9 +151,7 @@ Write-Info "All prerequisites OK"
 
 # ── Clone ───────────────────────────────────────────────────────────
 
-$GitDir = Join-Path $TargetDir ".git"
-
-if (Test-Path $GitDir) {
+if (Test-Path (Join-Path $TargetDir ".git")) {
     Write-Success "Already cloned: $TargetDir"
     Write-Host "  Pulling latest changes..."
     try {
