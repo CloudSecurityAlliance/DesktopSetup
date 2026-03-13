@@ -86,24 +86,35 @@ echo ""
 echo "  Default: $DEFAULT_BASE/$REPO"
 echo ""
 if [[ -t 0 ]]; then
-  read -r -p "  Use default location? [Y/n] " reply
-  case "${reply:-Y}" in
-    [Yy]*|"")
-      BASE_DIR="$DEFAULT_BASE"
-      ;;
-    *)
-      echo ""
-      echo "  Enter the base directory where '$REPO' will be created."
-      echo "  Example: ~/Projects or /Users/yourname/work"
-      echo ""
-      read -r -p "  Base path: " custom_base
-      if [[ -z "$custom_base" ]]; then
-        abort "No path entered."
-      fi
-      # Expand ~ if user typed it
-      BASE_DIR="${custom_base/#\~/$HOME}"
-      ;;
-  esac
+  while true; do
+    read -r -p "  Use default location? [y/n] " reply
+    case "${reply}" in
+      [Yy])
+        BASE_DIR="$DEFAULT_BASE"
+        break
+        ;;
+      [Nn])
+        echo ""
+        echo "  Enter the base directory where '$REPO' will be created."
+        echo "  Example: ~/Projects or /Users/yourname/work"
+        echo ""
+        read -r -p "  Base path: " custom_base
+        if [[ -z "$custom_base" ]]; then
+          abort "No path entered."
+        fi
+        # Expand ~ if user typed it
+        BASE_DIR="${custom_base/#\~/$HOME}"
+        break
+        ;;
+      "")
+        BASE_DIR="$DEFAULT_BASE"
+        break
+        ;;
+      *)
+        echo "  Please enter y or n."
+        ;;
+    esac
+  done
 else
   BASE_DIR="$DEFAULT_BASE"
 fi
@@ -122,11 +133,14 @@ if [[ -t 0 ]]; then
   echo ""
   echo "  Will clone to: $TARGET_DIR"
   echo ""
-  read -r -p "  Proceed? [Y/n] " confirm_reply
-  case "${confirm_reply:-Y}" in
-    [Yy]*|"") ;;
-    *) abort "Aborted." ;;
-  esac
+  while true; do
+    read -r -p "  Proceed? [y/n] " confirm_reply
+    case "${confirm_reply}" in
+      [Yy]|"") break ;;
+      [Nn]) abort "Aborted." ;;
+      *) echo "  Please enter y or n." ;;
+    esac
+  done
 fi
 
 echo ""

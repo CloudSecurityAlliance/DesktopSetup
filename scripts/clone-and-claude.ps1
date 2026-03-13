@@ -72,23 +72,29 @@ Write-Host "  Default: $DefaultBase\$Repo"
 Write-Host ""
 
 if ([Environment]::UserInteractive) {
-    $reply = Read-Host "  Use default location? [Y/n]"
-    if ($reply -eq '' -or $reply -match '^[Yy]') {
-        $BaseDir = $DefaultBase
-    } else {
-        Write-Host ""
-        Write-Host "  Enter the base directory where '$Repo' will be created."
-        Write-Host "  Example: ~\Projects or C:\Users\yourname\work"
-        Write-Host ""
-        $customBase = Read-Host "  Base path"
-        if (-not $customBase) {
-            Abort "No path entered."
+    while ($true) {
+        $reply = Read-Host "  Use default location? [y/n]"
+        if ($reply -eq '' -or $reply -match '^[Yy]$') {
+            $BaseDir = $DefaultBase
+            break
+        } elseif ($reply -match '^[Nn]$') {
+            Write-Host ""
+            Write-Host "  Enter the base directory where '$Repo' will be created."
+            Write-Host "  Example: ~\Projects or C:\Users\yourname\work"
+            Write-Host ""
+            $customBase = Read-Host "  Base path"
+            if (-not $customBase) {
+                Abort "No path entered."
+            }
+            # Expand ~ if user typed it
+            if ($customBase.StartsWith('~')) {
+                $customBase = $customBase.Replace('~', $HOME)
+            }
+            $BaseDir = $customBase
+            break
+        } else {
+            Write-Host "  Please enter y or n."
         }
-        # Expand ~ if user typed it
-        if ($customBase.StartsWith('~')) {
-            $customBase = $customBase.Replace('~', $HOME)
-        }
-        $BaseDir = $customBase
     }
 } else {
     $BaseDir = $DefaultBase
@@ -109,9 +115,15 @@ if ([Environment]::UserInteractive) {
     Write-Host ""
     Write-Host "  Will clone to: $TargetDir"
     Write-Host ""
-    $confirmReply = Read-Host "  Proceed? [Y/n]"
-    if ($confirmReply -ne '' -and $confirmReply -notmatch '^[Yy]') {
-        Abort "Aborted."
+    while ($true) {
+        $confirmReply = Read-Host "  Proceed? [y/n]"
+        if ($confirmReply -eq '' -or $confirmReply -match '^[Yy]$') {
+            break
+        } elseif ($confirmReply -match '^[Nn]$') {
+            Abort "Aborted."
+        } else {
+            Write-Host "  Please enter y or n."
+        }
     }
 }
 
