@@ -96,15 +96,23 @@ if [[ -t 0 ]]; then
         ;;
       n|no)
         echo ""
-        echo "  Enter the base directory where '$REPO' will be created."
+        echo "  Enter the path where you want the repo."
         echo "  Example: ~/Projects or /Users/yourname/work"
         echo ""
-        read -r -p "  Base path: " custom_base
-        if [[ -z "$custom_base" ]]; then
+        read -r -p "  Path: " custom_path
+        if [[ -z "$custom_path" ]]; then
           abort "No path entered."
         fi
         # Expand ~ if user typed it
-        BASE_DIR="${custom_base/#\~/$HOME}"
+        custom_path="${custom_path/#\~/$HOME}"
+        # Strip trailing slashes
+        custom_path="${custom_path%/}"
+        # If the path already ends with the repo name, use it as-is
+        if [[ "$(basename "$custom_path")" == "$REPO" ]]; then
+          BASE_DIR="$(dirname "$custom_path")"
+        else
+          BASE_DIR="$custom_path"
+        fi
         break
         ;;
       *)

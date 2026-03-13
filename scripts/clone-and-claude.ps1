@@ -80,18 +80,25 @@ if ([Environment]::UserInteractive) {
             break
         } elseif ($replyLower -eq 'n' -or $replyLower -eq 'no') {
             Write-Host ""
-            Write-Host "  Enter the base directory where '$Repo' will be created."
+            Write-Host "  Enter the path where you want the repo."
             Write-Host "  Example: ~\Projects or C:\Users\yourname\work"
             Write-Host ""
-            $customBase = Read-Host "  Base path"
-            if (-not $customBase) {
+            $customPath = Read-Host "  Path"
+            if (-not $customPath) {
                 Abort "No path entered."
             }
             # Expand ~ if user typed it
-            if ($customBase.StartsWith('~')) {
-                $customBase = $customBase.Replace('~', $HOME)
+            if ($customPath.StartsWith('~')) {
+                $customPath = $customPath.Replace('~', $HOME)
             }
-            $BaseDir = $customBase
+            # Strip trailing slashes
+            $customPath = $customPath.TrimEnd('\', '/')
+            # If the path already ends with the repo name, use it as-is
+            if ((Split-Path $customPath -Leaf) -eq $Repo) {
+                $BaseDir = Split-Path $customPath -Parent
+            } else {
+                $BaseDir = $customPath
+            }
             break
         } else {
             Write-Host "  Please enter yes or no."
