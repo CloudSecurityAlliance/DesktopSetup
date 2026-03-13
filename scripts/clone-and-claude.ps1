@@ -73,10 +73,18 @@ if (-not (Has-Command claude)) { $Missing += "claude (Claude Code)" }
 if ($Missing.Count -gt 0) {
     Write-Err "Missing required tools: $($Missing -join ', ')"
     Write-Host ""
-    Write-Host "  Install them with the CSA AI tools setup script:"
-    Write-Host ""
-    Write-Host "    irm https://raw.githubusercontent.com/CloudSecurityAlliance/DesktopSetup/HEAD/scripts/windows-ai-tools.ps1 | iex"
-    Write-Host ""
+    if (-not (Has-Command git) -or -not (Has-Command gh)) {
+        Write-Host "  First, install work tools (Git, GitHub CLI, and more):"
+        Write-Host ""
+        Write-Host "    irm https://raw.githubusercontent.com/CloudSecurityAlliance/DesktopSetup/HEAD/scripts/windows-work-tools.ps1 | iex"
+        Write-Host ""
+    }
+    if (-not (Has-Command claude)) {
+        Write-Host "  Install AI tools (Claude Code, Codex, Gemini):"
+        Write-Host ""
+        Write-Host "    irm https://raw.githubusercontent.com/CloudSecurityAlliance/DesktopSetup/HEAD/scripts/windows-ai-tools.ps1 | iex"
+        Write-Host ""
+    }
     Write-Host "  Then re-run this script."
     exit 1
 }

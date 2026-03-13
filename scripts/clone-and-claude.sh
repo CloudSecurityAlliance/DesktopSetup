@@ -94,10 +94,18 @@ fi
 if [[ ${#MISSING[@]} -gt 0 ]]; then
   error "Missing required tools: ${MISSING[*]}"
   echo ""
-  echo "  Install them with the CSA AI tools setup script:"
-  echo ""
-  echo "    bash -c \"\$(curl -fsSL https://raw.githubusercontent.com/CloudSecurityAlliance/DesktopSetup/HEAD/scripts/macos-ai-tools.sh)\""
-  echo ""
+  if ! has_command git || ! has_command gh; then
+    echo "  First, install work tools (Git, GitHub CLI, and more):"
+    echo ""
+    echo "    bash -c \"\$(curl -fsSL https://raw.githubusercontent.com/CloudSecurityAlliance/DesktopSetup/HEAD/scripts/macos-work-tools.sh)\""
+    echo ""
+  fi
+  if ! has_command claude; then
+    echo "  Install AI tools (Claude Code, Codex, Gemini):"
+    echo ""
+    echo "    bash -c \"\$(curl -fsSL https://raw.githubusercontent.com/CloudSecurityAlliance/DesktopSetup/HEAD/scripts/macos-ai-tools.sh)\""
+    echo ""
+  fi
   echo "  Then re-run this script."
   exit 1
 fi
