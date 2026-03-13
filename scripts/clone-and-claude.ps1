@@ -1,0 +1,131 @@
+# Cloud Security Alliance — Clone Repo & Launch Claude (Windows)
+#
+# Clones a CSA GitHub repo into ~/GitHub/OrgName/RepoName and prints
+# instructions to launch Claude Code.  Safe to re-run — skips clone
+# if the directory already exists.
+#
+# Prerequisites: git, gh (authenticated), claude
+# Missing tools?  Run the AI tools installer first:
+#   irm https://raw.githubusercontent.com/CloudSecurityAlliance/DesktopSetup/HEAD/scripts/windows-ai-tools.ps1 | iex
+#
+# Usage (set $env:CSA_REPO before piping):
+#   $env:CSA_REPO='ORG/REPO'; irm https://raw.githubusercontent.com/CloudSecurityAlliance/DesktopSetup/HEAD/scripts/clone-and-claude.ps1 | iex
+#
+# Example:
+#   $env:CSA_REPO='CloudSecurityAlliance-Internal/Training-Documentation'; irm https://raw.githubusercontent.com/CloudSecurityAlliance/DesktopSetup/HEAD/scripts/clone-and-claude.ps1 | iex
+
+$ErrorActionPreference = 'Stop'
+
+# ── Output helpers ──────────────────────────────────────────────────
+
+function Write-Info    { param([string]$Message) Write-Host "==> $Message" -ForegroundColor Cyan }
+function Write-Success { param([string]$Message) Write-Host "==> $Message" -ForegroundColor Green }
+function Write-Warn    { param([string]$Message) Write-Host "Warning: $Message" -ForegroundColor Yellow }
+function Write-Err     { param([string]$Message) Write-Host "Error: $Message" -ForegroundColor Red }
+function Abort         { param([string]$Message) Write-Err $Message; exit 1 }
+
+function Has-Command {
+    param([string]$Name)
+    return [bool](Get-Command $Name -ErrorAction SilentlyContinue)
+}
+
+# ── Parse argument ──────────────────────────────────────────────────
+
+$RepoSlug = $env:CSA_REPO
+
+if (-not $RepoSlug) {
+    Write-Host ""
+    Write-Err "No repository specified."
+    Write-Host ""
+    Write-Host "  Usage:"
+    Write-Host "    `$env:CSA_REPO='ORG/REPO'; irm https://raw.githubusercontent.com/CloudSecurityAlliance/DesktopSetup/HEAD/scripts/clone-and-claude.ps1 | iex"
+    Write-Host ""
+    Write-Host "  Example:"
+    Write-Host "    `$env:CSA_REPO='CloudSecurityAlliance-Internal/Training-Documentation'; irm https://raw.githubusercontent.com/CloudSecurityAlliance/DesktopSetup/HEAD/scripts/clone-and-claude.ps1 | iex"
+    Write-Host ""
+    exit 1
+}
+
+# Clean up the env var so it doesn't leak into future runs
+Remove-Item Env:\CSA_REPO -ErrorAction SilentlyContinue
+
+if ($RepoSlug -notmatch '/') {
+    Abort "Repository must be in ORG/REPO format (e.g., CloudSecurityAlliance-Internal/Training-Documentation)"
+}
+
+$Org = $RepoSlug.Split('/')[0]
+$Repo = $RepoSlug.Split('/')[1]
+$TargetDir = Join-Path $HOME "GitHub" $Org $Repo
+
+# ── Check prerequisites ─────────────────────────────────────────────
+
+Write-Info "Cloud Security Alliance - Clone & Claude"
+Write-Host ""
+Write-Host "  Repository: $RepoSlug"
+Write-Host "  Target:     $TargetDir"
+Write-Host ""
+
+$Missing = @()
+
+if (-not (Has-Command git))    { $Missing += "git" }
+if (-not (Has-Command gh))     { $Missing += "gh (GitHub CLI)" }
+if (-not (Has-Command claude)) { $Missing += "claude (Claude Code)" }
+
+if ($Missing.Count -gt 0) {
+    Write-Err "Missing required tools: $($Missing -join ', ')"
+    Write-Host ""
+    Write-Host "  Install them with the CSA AI tools setup script:"
+    Write-Host ""
+    Write-Host "    irm https://raw.githubusercontent.com/CloudSecurityAlliance/DesktopSetup/HEAD/scripts/windows-ai-tools.ps1 | iex"
+    Write-Host ""
+    Write-Host "  Then re-run this script."
+    exit 1
+}
+
+# Check gh authentication
+$authCheck = gh auth status 2>&1
+if ($LASTEXITCODE -ne 0) {
+    Write-Err "GitHub CLI is not authenticated."
+    Write-Host ""
+    Write-Host "  Run this to log in:"
+    Write-Host ""
+    Write-Host "    gh auth login --git-protocol https"
+    Write-Host ""
+    Write-Host "  Then re-run this script."
+    exit 1
+}
+
+Write-Info "All prerequisites OK"
+
+# ── Clone ───────────────────────────────────────────────────────────
+
+$GitDir = Join-Path $TargetDir ".git"
+
+if (Test-Path $GitDir) {
+    Write-Success "Already cloned: $TargetDir"
+    Write-Host "  Pulling latest changes..."
+    try {
+        git -C $TargetDir pull --ff-only 2>$null
+    } catch {
+        Write-Warn "Pull failed (you may have local changes); continuing"
+    }
+} else {
+    Write-Info "Cloning $RepoSlug"
+    $ParentDir = Join-Path $HOME "GitHub" $Org
+    if (-not (Test-Path $ParentDir)) {
+        New-Item -ItemType Directory -Path $ParentDir -Force | Out-Null
+    }
+    gh repo clone $RepoSlug $TargetDir
+    if ($LASTEXITCODE -ne 0) {
+        Abort "Clone failed. Check that you have access to $RepoSlug."
+    }
+    Write-Success "Cloned to $TargetDir"
+}
+
+# ── Done ────────────────────────────────────────────────────────────
+
+Write-Host ""
+Write-Success "Ready! Run these commands to start working:"
+Write-Host ""
+Write-Host "    cd '$TargetDir'; claude"
+Write-Host ""

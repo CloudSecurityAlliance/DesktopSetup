@@ -60,6 +60,24 @@ irm https://raw.githubusercontent.com/CloudSecurityAlliance/DesktopSetup/HEAD/sc
 
 Both Windows scripts require Windows 10/11 and winget. They install Git and GitHub CLI automatically. The AI tools script detects tools installed via the wrong method (npm or winget for Claude Code, winget for Codex) and migrates them to the correct install method.
 
+## Clone a repo & start Claude
+
+Once the AI tools are installed, use these one-liners to clone any CSA repo and get started with Claude Code. Replace `ORG/REPO` with the actual org and repo name.
+
+### macOS
+
+```bash
+bash -c "$(curl -fsSL https://raw.githubusercontent.com/CloudSecurityAlliance/DesktopSetup/HEAD/scripts/clone-and-claude.sh)" -- ORG/REPO
+```
+
+### Windows
+
+```powershell
+$env:CSA_REPO='ORG/REPO'; irm https://raw.githubusercontent.com/CloudSecurityAlliance/DesktopSetup/HEAD/scripts/clone-and-claude.ps1 | iex
+```
+
+The scripts check prerequisites, clone the repo to `~/GitHub/OrgName/RepoName`, and tell you how to launch Claude Code. Safe to re-run — they skip the clone if the repo already exists and pull latest changes instead.
+
 ## What This Repo Contains
 
 ### `scripts/`
@@ -71,6 +89,8 @@ Setup scripts. Each is self-contained and idempotent (safe to re-run):
 - **`macos-update.sh`** — Update all installed tools with version snapshots (macOS)
 - **`windows-work-tools.ps1`** — Core work apps + optional developer tools (Windows)
 - **`windows-ai-tools.ps1`** — AI coding assistants with migration support (Windows)
+- **`clone-and-claude.sh`** — Clone a CSA repo and set up for Claude Code (macOS)
+- **`clone-and-claude.ps1`** — Clone a CSA repo and set up for Claude Code (Windows)
 
 ### `docs/`
 
