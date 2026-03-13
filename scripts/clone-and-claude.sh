@@ -68,14 +68,40 @@ fi
 
 ORG="${REPO_SLUG%%/*}"
 REPO="${REPO_SLUG##*/}"
-TARGET_DIR="$HOME/GitHub/$ORG/$REPO"
+DEFAULT_DIR="$HOME/GitHub/$ORG/$REPO"
 
 # ── Check prerequisites ─────────────────────────────────────────────
 
 info "Cloud Security Alliance — Clone & Claude"
 echo ""
 echo "  Repository: $REPO_SLUG"
-echo "  Target:     $TARGET_DIR"
+echo ""
+
+# ── Choose location ─────────────────────────────────────────────────
+
+echo "  Default location: $DEFAULT_DIR"
+echo ""
+if [[ -t 0 ]]; then
+  read -r -p "  Use this location? [Y/n] " reply
+  case "${reply:-Y}" in
+    [Yy]*|"")
+      TARGET_DIR="$DEFAULT_DIR"
+      ;;
+    *)
+      read -r -p "  Enter your preferred path: " custom_path
+      if [[ -z "$custom_path" ]]; then
+        abort "No path entered."
+      fi
+      # Expand ~ if user typed it
+      TARGET_DIR="${custom_path/#\~/$HOME}"
+      ;;
+  esac
+else
+  TARGET_DIR="$DEFAULT_DIR"
+fi
+
+echo ""
+echo "  Target: $TARGET_DIR"
 echo ""
 
 MISSING=()
@@ -125,7 +151,7 @@ if [[ -d "$TARGET_DIR/.git" ]]; then
   git -C "$TARGET_DIR" pull --ff-only 2>/dev/null || warn "Pull failed (you may have local changes); continuing"
 else
   info "Cloning $REPO_SLUG"
-  mkdir -p "$HOME/GitHub/$ORG"
+  mkdir -p "$(dirname "$TARGET_DIR")"
   gh repo clone "$REPO_SLUG" "$TARGET_DIR" || abort "Clone failed. Check that you have access to $REPO_SLUG."
   success "Cloned to $TARGET_DIR"
 fi

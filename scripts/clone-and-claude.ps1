@@ -55,14 +55,41 @@ if ($RepoSlug -notmatch '/') {
 
 $Org = $RepoSlug.Split('/')[0]
 $Repo = $RepoSlug.Split('/')[1]
-$TargetDir = Join-Path $HOME "GitHub" $Org $Repo
+$DefaultDir = Join-Path $HOME "GitHub" $Org $Repo
 
 # ── Check prerequisites ─────────────────────────────────────────────
 
 Write-Info "Cloud Security Alliance - Clone & Claude"
 Write-Host ""
 Write-Host "  Repository: $RepoSlug"
-Write-Host "  Target:     $TargetDir"
+Write-Host ""
+
+# ── Choose location ─────────────────────────────────────────────────
+
+Write-Host "  Default location: $DefaultDir"
+Write-Host ""
+
+if ([Environment]::UserInteractive) {
+    $reply = Read-Host "  Use this location? [Y/n]"
+    if ($reply -eq '' -or $reply -match '^[Yy]') {
+        $TargetDir = $DefaultDir
+    } else {
+        $customPath = Read-Host "  Enter your preferred path"
+        if (-not $customPath) {
+            Abort "No path entered."
+        }
+        # Expand ~ if user typed it
+        if ($customPath.StartsWith('~')) {
+            $customPath = $customPath.Replace('~', $HOME)
+        }
+        $TargetDir = $customPath
+    }
+} else {
+    $TargetDir = $DefaultDir
+}
+
+Write-Host ""
+Write-Host "  Target: $TargetDir"
 Write-Host ""
 
 $Missing = @()
@@ -111,7 +138,7 @@ if (Test-Path $GitDir) {
     }
 } else {
     Write-Info "Cloning $RepoSlug"
-    $ParentDir = Join-Path $HOME "GitHub" $Org
+    $ParentDir = Split-Path $TargetDir -Parent
     if (-not (Test-Path $ParentDir)) {
         New-Item -ItemType Directory -Path $ParentDir -Force | Out-Null
     }
