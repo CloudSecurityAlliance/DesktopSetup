@@ -87,13 +87,14 @@ echo "  Default: $DEFAULT_BASE/$REPO"
 echo ""
 if [[ -t 0 ]]; then
   while true; do
-    read -r -p "  Use default location? [y/n] " reply
-    case "${reply}" in
-      [Yy])
+    read -r -p "  Use default location? [Y/n] " reply
+    reply_lower="$(echo "$reply" | tr '[:upper:]' '[:lower:]')"
+    case "$reply_lower" in
+      y|yes|"")
         BASE_DIR="$DEFAULT_BASE"
         break
         ;;
-      [Nn])
+      n|no)
         echo ""
         echo "  Enter the base directory where '$REPO' will be created."
         echo "  Example: ~/Projects or /Users/yourname/work"
@@ -106,12 +107,8 @@ if [[ -t 0 ]]; then
         BASE_DIR="${custom_base/#\~/$HOME}"
         break
         ;;
-      "")
-        BASE_DIR="$DEFAULT_BASE"
-        break
-        ;;
       *)
-        echo "  Please enter y or n."
+        echo "  Please enter yes or no."
         ;;
     esac
   done
@@ -134,11 +131,12 @@ if [[ -t 0 ]]; then
   echo "  Will clone to: $TARGET_DIR"
   echo ""
   while true; do
-    read -r -p "  Proceed? [y/n] " confirm_reply
-    case "${confirm_reply}" in
-      [Yy]|"") break ;;
-      [Nn]) abort "Aborted." ;;
-      *) echo "  Please enter y or n." ;;
+    read -r -p "  Proceed? [y/N] " confirm_reply
+    confirm_lower="$(echo "$confirm_reply" | tr '[:upper:]' '[:lower:]')"
+    case "$confirm_lower" in
+      y|yes) break ;;
+      n|no|"") abort "Aborted." ;;
+      *) echo "  Please enter yes or no." ;;
     esac
   done
 fi

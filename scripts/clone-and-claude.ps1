@@ -73,11 +73,12 @@ Write-Host ""
 
 if ([Environment]::UserInteractive) {
     while ($true) {
-        $reply = Read-Host "  Use default location? [y/n]"
-        if ($reply -eq '' -or $reply -match '^[Yy]$') {
+        $reply = Read-Host "  Use default location? [Y/n]"
+        $replyLower = $reply.ToLower()
+        if ($replyLower -eq 'y' -or $replyLower -eq 'yes' -or $reply -eq '') {
             $BaseDir = $DefaultBase
             break
-        } elseif ($reply -match '^[Nn]$') {
+        } elseif ($replyLower -eq 'n' -or $replyLower -eq 'no') {
             Write-Host ""
             Write-Host "  Enter the base directory where '$Repo' will be created."
             Write-Host "  Example: ~\Projects or C:\Users\yourname\work"
@@ -93,7 +94,7 @@ if ([Environment]::UserInteractive) {
             $BaseDir = $customBase
             break
         } else {
-            Write-Host "  Please enter y or n."
+            Write-Host "  Please enter yes or no."
         }
     }
 } else {
@@ -116,13 +117,14 @@ if ([Environment]::UserInteractive) {
     Write-Host "  Will clone to: $TargetDir"
     Write-Host ""
     while ($true) {
-        $confirmReply = Read-Host "  Proceed? [y/n]"
-        if ($confirmReply -eq '' -or $confirmReply -match '^[Yy]$') {
+        $confirmReply = Read-Host "  Proceed? [y/N]"
+        $confirmLower = $confirmReply.ToLower()
+        if ($confirmLower -eq 'y' -or $confirmLower -eq 'yes') {
             break
-        } elseif ($confirmReply -match '^[Nn]$') {
+        } elseif ($confirmLower -eq 'n' -or $confirmLower -eq 'no' -or $confirmReply -eq '') {
             Abort "Aborted."
         } else {
-            Write-Host "  Please enter y or n."
+            Write-Host "  Please enter yes or no."
         }
     }
 }
