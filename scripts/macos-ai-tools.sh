@@ -467,6 +467,21 @@ summary() {
   echo ""
   echo "  Claude Code updates itself automatically."
   echo ""
+
+  # PATH reload banner
+  echo ""
+  printf "${YELLOW}╔══════════════════════════════════════════════════════════════╗${RESET}\n"
+  printf "${YELLOW}║${RESET}${BOLD}  IMPORTANT: Your PATH has been updated.                     ${RESET}${YELLOW}║${RESET}\n"
+  printf "${YELLOW}║${RESET}                                                              ${YELLOW}║${RESET}\n"
+  printf "${YELLOW}║${RESET}  To use the newly installed tools, either:                    ${YELLOW}║${RESET}\n"
+  printf "${YELLOW}║${RESET}                                                              ${YELLOW}║${RESET}\n"
+  printf "${YELLOW}║${RESET}    ${BOLD}1.${RESET} Open a new terminal window or tab                      ${YELLOW}║${RESET}\n"
+  printf "${YELLOW}║${RESET}                                                              ${YELLOW}║${RESET}\n"
+  printf "${YELLOW}║${RESET}    ${BOLD}2.${RESET} Reload your current session:                          ${YELLOW}║${RESET}\n"
+  printf "${YELLOW}║${RESET}       ${GREEN}source ~/.zshrc${RESET}                                        ${YELLOW}║${RESET}\n"
+  printf "${YELLOW}║${RESET}                                                              ${YELLOW}║${RESET}\n"
+  printf "${YELLOW}╚══════════════════════════════════════════════════════════════╝${RESET}\n"
+  echo ""
 }
 
 # ── Main ────────────────────────────────────────────────────────────
