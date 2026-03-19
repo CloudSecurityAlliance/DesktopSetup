@@ -32,13 +32,35 @@ All three macOS scripts are interactive — they show you what they plan to do a
 
 ## Quick Start — Windows
 
-**Prerequisite (one-time):** Open PowerShell as Administrator (press the Windows key, type `powershell`, right-click **Windows PowerShell**, and select **Run as administrator**). Then allow script execution:
+### Prerequisite: enable PowerShell script execution
+
+> **Not your personal machine?** Changing the execution policy is a security setting. If this is a work laptop managed by your IT department, ask them for permission before proceeding. They may already have a policy in place or prefer to make this change for you.
+
+**Step 1 — Check your current policy.** Open PowerShell as Administrator (press the Windows key, type `powershell`, right-click **Windows PowerShell**, and select **Run as administrator**). Then run:
+
+```powershell
+Get-ExecutionPolicy
+```
+
+Note the value it returns (usually `Restricted` on a fresh install). You'll restore this afterwards.
+
+**Step 2 — Temporarily allow script execution:**
 
 ```powershell
 Set-ExecutionPolicy RemoteSigned
 ```
 
-When prompted "Do you want to change the execution policy?", type `Y` and press Enter. You only need to do this once. Close the Administrator window.
+When prompted "Do you want to change the execution policy?", type `Y` and press Enter.
+
+**Step 3 — Run the setup scripts** (see below). Close the Administrator window and open a regular PowerShell window to run them.
+
+**Step 4 — Restore the original policy.** Once you're done running the scripts, open PowerShell as Administrator again and set the policy back to whatever Step 1 reported:
+
+```powershell
+Set-ExecutionPolicy Restricted
+```
+
+Replace `Restricted` with whatever value you noted in Step 1. If you plan to run PowerShell scripts regularly, you can leave it as `RemoteSigned`.
 
 Then, open a regular PowerShell window and run the scripts below.
 
