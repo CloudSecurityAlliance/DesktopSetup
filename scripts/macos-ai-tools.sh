@@ -373,9 +373,12 @@ install_claude() {
   curl -fsSL https://claude.ai/install.sh | bash \
     || abort "Claude Code installation failed."
 
-  # Ensure ~/.local/bin is on PATH for this session and future shells
+  # Ensure ~/.local/bin is on PATH for this session
   export PATH="$HOME/.local/bin:$PATH"
-  if ! grep -qF 'export PATH="$HOME/.local/bin:$PATH"' "$HOME/.zshrc" 2>/dev/null; then
+
+  # Add to .zshrc for future shells if not already configured
+  # Uses a broad pattern to catch any variant: $HOME/.local/bin, ~/.local/bin, etc.
+  if ! grep -q '\.local/bin' "$HOME/.zshrc" 2>/dev/null; then
     info "Adding ~/.local/bin to PATH in ~/.zshrc"
     echo 'export PATH="$HOME/.local/bin:$PATH"' >> "$HOME/.zshrc"
   fi
