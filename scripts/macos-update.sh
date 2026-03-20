@@ -124,26 +124,26 @@ snapshot() {
     echo ""
 
     echo "──── pip Packages ────"
-    if has_command pip; then
+    if has_command python3; then
       echo "Python: $(python3 --version 2>/dev/null || echo unknown)"
       [[ -n "${VIRTUAL_ENV:-}" ]] && echo "venv: $VIRTUAL_ENV"
       echo ""
-      pip list 2>/dev/null || echo "(none)"
+      python3 -m pip list 2>/dev/null || echo "(none)"
     else
-      echo "(pip not available)"
+      echo "(Python not available)"
     fi
     echo ""
   } > "$SNAPSHOT_FILE"
 
   # Save pip freeze separately for easy rollback
-  if has_command pip; then
+  if has_command python3; then
     {
       echo "# CSA DesktopSetup pip snapshot — $(date)"
       echo "# Python: $(python3 --version 2>/dev/null || echo unknown)"
       [[ -n "${VIRTUAL_ENV:-}" ]] && echo "# venv: $VIRTUAL_ENV"
-      echo "# Restore with: pip install -r $(basename "$PIP_FREEZE_FILE")"
+      echo "# Restore with: python3 -m pip install -r $(basename "$PIP_FREEZE_FILE")"
       echo ""
-      pip freeze 2>/dev/null
+      python3 -m pip freeze 2>/dev/null
     } > "$PIP_FREEZE_FILE"
   fi
 
@@ -204,9 +204,9 @@ preflight() {
   echo ""
 
   # pip
-  if has_command pip; then
+  if has_command python3; then
     local outdated_pip venv_note=""
-    outdated_pip=$(pip list --outdated --format=columns 2>/dev/null || true)
+    outdated_pip=$(python3 -m pip list --outdated --format=columns 2>/dev/null || true)
     [[ -n "${VIRTUAL_ENV:-}" ]] && venv_note=" (venv: $(basename "$VIRTUAL_ENV"))"
 
     if [[ -n "$outdated_pip" ]]; then
@@ -216,7 +216,7 @@ preflight() {
       echo "  pip packages${venv_note}: all up to date"
     fi
   else
-    echo "  pip: not available (skipping)"
+    echo "  Python: not available (skipping pip)"
   fi
   echo ""
 
@@ -248,17 +248,17 @@ update_npm() {
 }
 
 update_pip() {
-  if ! has_command pip; then return 0; fi
+  if ! has_command python3; then return 0; fi
 
   local venv_note=""
   [[ -n "${VIRTUAL_ENV:-}" ]] && venv_note=" (venv: $(basename "$VIRTUAL_ENV"))"
 
   info "Updating pip itself${venv_note}"
-  pip install --upgrade pip || warn "pip upgrade failed; continuing"
+  python3 -m pip install --upgrade pip || warn "pip upgrade failed; continuing"
 
   info "Updating pip packages${venv_note}"
   local outdated
-  outdated=$(pip list --outdated --format=json 2>/dev/null || echo "[]")
+  outdated=$(python3 -m pip list --outdated --format=json 2>/dev/null || echo "[]")
 
   if [[ "$outdated" == "[]" ]] || [[ -z "$outdated" ]]; then
     echo "  All pip packages are up to date"
@@ -273,7 +273,7 @@ update_pip() {
 
   for pkg in $pkg_names; do
     info "  Upgrading $pkg"
-    pip install --upgrade "$pkg" 2>/dev/null || warn "Failed to upgrade $pkg; continuing"
+    python3 -m pip install --upgrade "$pkg" 2>/dev/null || warn "Failed to upgrade $pkg; continuing"
   done
 }
 
@@ -301,8 +301,8 @@ summary() {
   if has_command python3; then
     echo "  Python ............ $(python3 --version 2>/dev/null)"
   fi
-  if has_command pip; then
-    echo "  pip ............... $(pip --version 2>/dev/null | head -n1)"
+  if has_command python3; then
+    echo "  pip ............... $(python3 -m pip --version 2>/dev/null | head -n1)"
   fi
   if has_command claude; then
     echo "  Claude Code ....... $(claude --version 2>/dev/null | head -n1) (auto-updates)"
@@ -322,22 +322,9 @@ summary() {
   echo "  Rollback examples:"
   echo "    brew install <formula>@<version>"
   echo "    npm install -g <package>@<version>"
-  [[ -f "$PIP_FREEZE_FILE" ]] && echo "    pip install -r $PIP_FREEZE_FILE"
+  [[ -f "$PIP_FREEZE_FILE" ]] && echo "    python3 -m pip install -r $PIP_FREEZE_FILE"
   echo ""
 
-  # PATH reload banner
-  echo ""
-  printf "${YELLOW}╔══════════════════════════════════════════════════════════════╗${RESET}\n"
-  printf "${YELLOW}║${RESET}${BOLD}  IMPORTANT: Your PATH may have been updated.                ${RESET}${YELLOW}║${RESET}\n"
-  printf "${YELLOW}║${RESET}                                                              ${YELLOW}║${RESET}\n"
-  printf "${YELLOW}║${RESET}  To ensure updated tools are available, either:               ${YELLOW}║${RESET}\n"
-  printf "${YELLOW}║${RESET}                                                              ${YELLOW}║${RESET}\n"
-  printf "${YELLOW}║${RESET}    ${BOLD}1.${RESET} Open a new terminal window or tab                      ${YELLOW}║${RESET}\n"
-  printf "${YELLOW}║${RESET}                                                              ${YELLOW}║${RESET}\n"
-  printf "${YELLOW}║${RESET}    ${BOLD}2.${RESET} Reload your current session:                          ${YELLOW}║${RESET}\n"
-  printf "${YELLOW}║${RESET}       ${GREEN}source ~/.zshrc${RESET}                                        ${YELLOW}║${RESET}\n"
-  printf "${YELLOW}║${RESET}                                                              ${YELLOW}║${RESET}\n"
-  printf "${YELLOW}╚══════════════════════════════════════════════════════════════╝${RESET}\n"
   echo ""
 }
 
