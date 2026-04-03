@@ -14,7 +14,7 @@ bash -c "$(curl -fsSL https://raw.githubusercontent.com/CloudSecurityAlliance/De
 
 ### AI tools
 
-Claude Code, Codex CLI, Gemini CLI.
+Claude Desktop, ChatGPT Desktop, Claude Code, Codex CLI, Gemini CLI.
 
 ```bash
 bash -c "$(curl -fsSL https://raw.githubusercontent.com/CloudSecurityAlliance/DesktopSetup/HEAD/scripts/macos-ai-tools.sh)"
@@ -74,7 +74,7 @@ irm https://raw.githubusercontent.com/CloudSecurityAlliance/DesktopSetup/HEAD/sc
 
 ### AI tools
 
-Git, GitHub CLI, Python, Node.js, Claude Code, Codex CLI, Gemini CLI.
+Git, GitHub CLI, Python, Node.js, Claude Desktop, ChatGPT Desktop, Claude Code, Codex CLI, Gemini CLI.
 
 ```powershell
 irm https://raw.githubusercontent.com/CloudSecurityAlliance/DesktopSetup/HEAD/scripts/windows-ai-tools.ps1 | iex
@@ -107,10 +107,10 @@ The scripts check prerequisites, clone the repo to `~/GitHub/OrgName/RepoName`, 
 Setup scripts. Each is self-contained and idempotent (safe to re-run):
 
 - **`macos-work-tools.sh`** — Core work apps + optional developer tools (macOS)
-- **`macos-ai-tools.sh`** — AI coding assistants with migration support (macOS)
+- **`macos-ai-tools.sh`** — AI desktop apps and coding assistants with migration support (macOS)
 - **`macos-update.sh`** — Update all installed tools with version snapshots (macOS)
 - **`windows-work-tools.ps1`** — Core work apps + optional developer tools (Windows)
-- **`windows-ai-tools.ps1`** — AI coding assistants with migration support (Windows)
+- **`windows-ai-tools.ps1`** — AI desktop apps and coding assistants with migration support (Windows)
 - **`clone-and-claude.sh`** — Clone a CSA repo and set up for Claude Code (macOS)
 - **`clone-and-claude.ps1`** — Clone a CSA repo and set up for Claude Code (Windows)
 

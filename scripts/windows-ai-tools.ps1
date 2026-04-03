@@ -5,9 +5,11 @@
 #   2. GitHub CLI (gh, via winget) + authentication
 #   3. Python (via winget)
 #   4. Node.js LTS (via winget)
-#   5. Claude Code (native installer, auto-updates)
-#   6. OpenAI Codex CLI (via npm)
-#   7. Google Gemini CLI (via npm)
+#   5. Claude Desktop (via winget, auto-updates)
+#   6. ChatGPT Desktop (via winget, auto-updates)
+#   7. Claude Code (native installer, auto-updates)
+#   8. OpenAI Codex CLI (via npm)
+#   9. Google Gemini CLI (via npm)
 #
 # Usage:
 #   irm https://raw.githubusercontent.com/CloudSecurityAlliance/DesktopSetup/HEAD/scripts/windows-ai-tools.ps1 | iex
@@ -197,6 +199,22 @@ function Show-Preflight {
         Write-Host "  Node.js ........... install via winget"
     }
 
+    # Claude Desktop
+    $claudeDesktop = winget list --id Anthropic.Claude --accept-source-agreements 2>$null
+    if ($claudeDesktop -and ($claudeDesktop | Select-String 'Anthropic.Claude')) {
+        Write-Host "  Claude Desktop .... installed (winget)"
+    } else {
+        Write-Host "  Claude Desktop .... install via winget"
+    }
+
+    # ChatGPT Desktop
+    $chatgptDesktop = winget list --id OpenAI.ChatGPT --accept-source-agreements 2>$null
+    if ($chatgptDesktop -and ($chatgptDesktop | Select-String 'OpenAI.ChatGPT')) {
+        Write-Host "  ChatGPT Desktop ... installed (winget)"
+    } else {
+        Write-Host "  ChatGPT Desktop ... install via winget"
+    }
+
     # Claude Code
     if ($script:claudeMigration.Count -gt 0) {
         $methods = $script:claudeMigration -join ' + '
@@ -356,6 +374,32 @@ function Install-Node {
     Refresh-Path
 }
 
+function Install-ClaudeDesktop {
+    $wingetCheck = winget list --id Anthropic.Claude --accept-source-agreements 2>$null
+    if ($wingetCheck -and ($wingetCheck | Select-String 'Anthropic.Claude')) {
+        Write-Info "Claude Desktop already installed; skipping"
+        return
+    }
+
+    Write-Info "Installing Claude Desktop via winget"
+    winget install --id Anthropic.Claude --accept-package-agreements --accept-source-agreements
+    if ($LASTEXITCODE -ne 0) { Write-Warn "Failed to install Claude Desktop" }
+    Refresh-Path
+}
+
+function Install-ChatGPT {
+    $wingetCheck = winget list --id OpenAI.ChatGPT --accept-source-agreements 2>$null
+    if ($wingetCheck -and ($wingetCheck | Select-String 'OpenAI.ChatGPT')) {
+        Write-Info "ChatGPT Desktop already installed; skipping"
+        return
+    }
+
+    Write-Info "Installing ChatGPT Desktop via winget"
+    winget install --id OpenAI.ChatGPT --accept-package-agreements --accept-source-agreements
+    if ($LASTEXITCODE -ne 0) { Write-Warn "Failed to install ChatGPT Desktop" }
+    Refresh-Path
+}
+
 function Install-Claude {
     if ($script:claudeMigration.Count -gt 0) {
         Migrate-Claude
@@ -453,6 +497,14 @@ function Show-Summary {
         Write-Host "  Node.js ........... $nodeVer"
         Write-Host "  npm ............... $npmVer"
     }
+    $claudeDesktop = winget list --id Anthropic.Claude --accept-source-agreements 2>$null
+    if ($claudeDesktop -and ($claudeDesktop | Select-String 'Anthropic.Claude')) {
+        Write-Host "  Claude Desktop .... installed"
+    }
+    $chatgptDesktop = winget list --id OpenAI.ChatGPT --accept-source-agreements 2>$null
+    if ($chatgptDesktop -and ($chatgptDesktop | Select-String 'OpenAI.ChatGPT')) {
+        Write-Host "  ChatGPT Desktop ... installed"
+    }
     if (Has-Command claude) {
         $claudeVer = Get-ToolVersion claude '--version'
         Write-Host "  Claude Code ....... $claudeVer"
@@ -504,6 +556,8 @@ function Main {
     Install-GH
     Install-Python
     Install-Node
+    Install-ClaudeDesktop
+    Install-ChatGPT
     Install-Claude
     Install-Codex
     Install-Gemini

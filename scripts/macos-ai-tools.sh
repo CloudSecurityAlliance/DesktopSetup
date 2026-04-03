@@ -9,9 +9,11 @@
 #   4. Python (via Homebrew, provides python3/pip3)
 #   5. Git (via Homebrew, latest version)
 #   6. GitHub CLI (gh) + authentication
-#   7. Claude Code (native installer, auto-updates)
-#   8. OpenAI Codex CLI (via npm)
-#   9. Google Gemini CLI (via npm)
+#   7. Claude Desktop (via Homebrew cask, auto-updates)
+#   8. ChatGPT Desktop (via Homebrew cask, auto-updates)
+#   9. Claude Code (native installer, auto-updates)
+#  10. OpenAI Codex CLI (via npm)
+#  11. Google Gemini CLI (via npm)
 #
 # Usage:
 #   bash -c "$(curl -fsSL https://raw.githubusercontent.com/CloudSecurityAlliance/DesktopSetup/HEAD/scripts/macos-ai-tools.sh)"
@@ -192,6 +194,20 @@ preflight() {
     echo "  GitHub CLI ........ install via Homebrew"
   fi
 
+  # Claude Desktop
+  if brew list --cask claude >/dev/null 2>&1; then
+    echo "  Claude Desktop .... installed (Homebrew cask)"
+  else
+    echo "  Claude Desktop .... install via Homebrew cask"
+  fi
+
+  # ChatGPT Desktop
+  if brew list --cask chatgpt >/dev/null 2>&1; then
+    echo "  ChatGPT Desktop ... installed (Homebrew cask)"
+  else
+    echo "  ChatGPT Desktop ... install via Homebrew cask"
+  fi
+
   # Claude Code
   if [[ -n "$claude_needs_migration" ]]; then
     echo "  Claude Code ....... migrate from $claude_needs_migration → native installer (settings preserved)"
@@ -362,6 +378,30 @@ setup_gh_auth() {
   fi
 }
 
+install_claude_desktop() {
+  ensure_brew_in_path
+
+  if brew list --cask claude >/dev/null 2>&1; then
+    info "Claude Desktop already installed; skipping"
+    return 0
+  fi
+
+  info "Installing Claude Desktop"
+  brew install --cask claude || warn "Failed to install Claude Desktop"
+}
+
+install_chatgpt() {
+  ensure_brew_in_path
+
+  if brew list --cask chatgpt >/dev/null 2>&1; then
+    info "ChatGPT Desktop already installed; skipping"
+    return 0
+  fi
+
+  info "Installing ChatGPT Desktop"
+  brew install --cask chatgpt || warn "Failed to install ChatGPT Desktop"
+}
+
 install_claude() {
   if [[ -n "$claude_needs_migration" ]]; then
     migrate_claude
@@ -446,6 +486,12 @@ summary() {
   if has_command gh; then
     echo "  GitHub CLI ........ $(get_version gh --version)"
   fi
+  if brew list --cask claude >/dev/null 2>&1; then
+    echo "  Claude Desktop .... installed"
+  fi
+  if brew list --cask chatgpt >/dev/null 2>&1; then
+    echo "  ChatGPT Desktop ... installed"
+  fi
   if has_command claude; then
     echo "  Claude Code ....... $(get_version claude --version)"
   fi
@@ -506,6 +552,8 @@ main() {
   install_python
   install_git
   install_gh
+  install_claude_desktop
+  install_chatgpt
   install_claude
   install_codex
   install_gemini
