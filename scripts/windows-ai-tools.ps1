@@ -554,6 +554,7 @@ function Show-Summary {
             Write-Host "  - Run 'gh auth login --git-protocol https' to authenticate with GitHub"
         }
     }
+    Write-Host "  - Enable 1Password CLI integration: 1Password app > Settings > Developer > 'Integrate with 1Password CLI'"
     Write-Host "  - Run 'claude' to start Claude Code"
     Write-Host "  - Run 'codex' to start Codex CLI"
     Write-Host "  - Run 'gemini' to start Gemini CLI"
