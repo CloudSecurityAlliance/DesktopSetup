@@ -532,7 +532,7 @@ summary() {
   if has_command gh && ! gh auth status >/dev/null 2>&1; then
     echo "  - Run 'gh auth login' to authenticate with GitHub"
   fi
-  echo "  - Enable 1Password CLI integration: 1Password app → Settings → Developer → \"Integrate with 1Password CLI\""
+  echo "  - Enable 1Password CLI integration: 1Password app → Settings → Developer → \"Integrate with 1Password CLI\", then restart 1Password"
   echo "  - Run 'claude' to start Claude Code"
   echo "  - Run 'codex' to start Codex CLI"
   echo "  - Run 'gemini' to start Gemini CLI"
