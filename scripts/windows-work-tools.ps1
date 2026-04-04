@@ -19,6 +19,8 @@
 
 $ErrorActionPreference = 'Stop'
 
+$ScriptVersion = "2026.0932215"
+
 # ── Output helpers ──────────────────────────────────────────────────
 
 function Write-Info    { param([string]$Message) Write-Host "==> $Message" -ForegroundColor Cyan }
@@ -418,7 +420,7 @@ function Show-Summary {
 # ── Main ────────────────────────────────────────────────────────────
 
 function Main {
-    Write-Info "Cloud Security Alliance - Windows Work Tools Setup"
+    Write-Info "Cloud Security Alliance - Windows Work Tools Setup v$ScriptVersion"
 
     Detect-NonInteractive
     Test-Preconditions

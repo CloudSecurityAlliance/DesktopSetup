@@ -21,6 +21,8 @@
 
 set -euo pipefail
 
+SCRIPT_VERSION="2026.0932215"
+
 # ── Output helpers ──────────────────────────────────────────────────
 
 if [[ -t 1 ]]; then
@@ -559,7 +561,7 @@ summary() {
 # ── Main ────────────────────────────────────────────────────────────
 
 main() {
-  info "Cloud Security Alliance — macOS AI Tools Setup"
+  info "Cloud Security Alliance — macOS AI Tools Setup v${SCRIPT_VERSION}"
 
   check_running_tools
   preflight

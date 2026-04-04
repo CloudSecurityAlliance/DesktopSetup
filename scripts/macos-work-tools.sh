@@ -24,6 +24,8 @@
 
 set -euo pipefail
 
+SCRIPT_VERSION="2026.0932215"
+
 # ── Output helpers ──────────────────────────────────────────────────
 
 if [[ -t 1 ]]; then
@@ -444,7 +446,7 @@ summary() {
 # ── Main ────────────────────────────────────────────────────────────
 
 main() {
-  info "Cloud Security Alliance — macOS Work Tools Setup"
+  info "Cloud Security Alliance — macOS Work Tools Setup v${SCRIPT_VERSION}"
 
   select_profile
   preflight
