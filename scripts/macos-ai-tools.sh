@@ -9,11 +9,12 @@
 #   4. Python (via Homebrew, provides python3/pip3)
 #   5. Git (via Homebrew, latest version)
 #   6. GitHub CLI (gh) + authentication
-#   7. Claude Desktop (via Homebrew cask, auto-updates)
-#   8. ChatGPT Desktop (via Homebrew cask, auto-updates)
-#   9. Claude Code (native installer, auto-updates)
-#  10. OpenAI Codex CLI (via npm)
-#  11. Google Gemini CLI (via npm)
+#   7. 1Password CLI (via Homebrew)
+#   8. Claude Desktop (via Homebrew cask, auto-updates)
+#   9. ChatGPT Desktop (via Homebrew cask, auto-updates)
+#  10. Claude Code (native installer, auto-updates)
+#  11. OpenAI Codex CLI (via npm)
+#  12. Google Gemini CLI (via npm)
 #
 # Usage:
 #   bash -c "$(curl -fsSL https://raw.githubusercontent.com/CloudSecurityAlliance/DesktopSetup/HEAD/scripts/macos-ai-tools.sh)"
@@ -192,6 +193,13 @@ preflight() {
     echo "  GitHub CLI ........ installed ($(get_version gh --version))"
   else
     echo "  GitHub CLI ........ install via Homebrew"
+  fi
+
+  # 1Password CLI
+  if has_command op; then
+    echo "  1Password CLI ..... installed ($(get_version op --version))"
+  else
+    echo "  1Password CLI ..... install via Homebrew"
   fi
 
   # Claude Desktop
@@ -378,6 +386,18 @@ setup_gh_auth() {
   fi
 }
 
+install_1password_cli() {
+  ensure_brew_in_path
+
+  if brew list --formula 1password-cli >/dev/null 2>&1; then
+    info "Upgrading 1Password CLI"
+    brew upgrade 1password-cli 2>/dev/null || true
+  else
+    info "Installing 1Password CLI"
+    brew install 1password-cli || warn "Failed to install 1Password CLI"
+  fi
+}
+
 install_claude_desktop() {
   ensure_brew_in_path
 
@@ -486,6 +506,9 @@ summary() {
   if has_command gh; then
     echo "  GitHub CLI ........ $(get_version gh --version)"
   fi
+  if has_command op; then
+    echo "  1Password CLI ..... $(get_version op --version)"
+  fi
   if brew list --cask claude >/dev/null 2>&1; then
     echo "  Claude Desktop .... installed"
   fi
@@ -552,6 +575,7 @@ main() {
   install_python
   install_git
   install_gh
+  install_1password_cli
   install_claude_desktop
   install_chatgpt
   install_claude
