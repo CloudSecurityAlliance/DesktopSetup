@@ -424,6 +424,74 @@ install_chatgpt() {
   brew install --cask chatgpt || warn "Failed to install ChatGPT Desktop"
 }
 
+setup_git_identity() {
+  local current_name current_email
+  current_name="$(git config --global user.name 2>/dev/null || true)"
+  current_email="$(git config --global user.email 2>/dev/null || true)"
+
+  if [[ -n "$current_name" && -n "$current_email" ]]; then
+    info "Git identity already configured: $current_name <$current_email>"
+    return 0
+  fi
+
+  # Need gh authenticated to pull profile info
+  if ! has_command gh || ! gh auth status >/dev/null 2>&1; then
+    if [[ -z "$current_name" || -z "$current_email" ]]; then
+      warn "Git identity not configured. Run these after authenticating with GitHub:"
+      [[ -z "$current_name" ]]  && echo "  git config --global user.name \"Your Name\""
+      [[ -z "$current_email" ]] && echo "  git config --global user.email \"you@example.com\""
+    fi
+    return 0
+  fi
+
+  # Fetch name and email from GitHub profile
+  local gh_name gh_email
+  gh_name="$(gh api user --jq '.name // empty' 2>/dev/null || true)"
+  gh_email="$(gh api user --jq '.email // empty' 2>/dev/null || true)"
+
+  # If email is private/null, try the emails endpoint
+  if [[ -z "$gh_email" ]]; then
+    gh_email="$(gh api user/emails --jq '[.[] | select(.primary==true)][0].email // empty' 2>/dev/null || true)"
+  fi
+
+  # Use GitHub values only for fields not already set
+  local set_name="${current_name:-$gh_name}"
+  local set_email="${current_email:-$gh_email}"
+
+  if [[ -z "$set_name" && -z "$set_email" ]]; then
+    warn "Could not determine Git identity from GitHub profile."
+    warn "Run: git config --global user.name \"Your Name\""
+    warn "Run: git config --global user.email \"you@example.com\""
+    return 0
+  fi
+
+  if [[ -n "${NONINTERACTIVE-}" ]]; then
+    # In non-interactive mode, set what we can silently
+    [[ -z "$current_name" && -n "$set_name" ]]   && git config --global user.name "$set_name"
+    [[ -z "$current_email" && -n "$set_email" ]] && git config --global user.email "$set_email"
+    info "Git identity configured from GitHub profile"
+    return 0
+  fi
+
+  echo ""
+  info "Git identity (user.name / user.email) is used in every commit."
+  if [[ -z "$current_name" && -n "$set_name" ]]; then
+    echo "  Name:  $set_name (from GitHub)"
+  fi
+  if [[ -z "$current_email" && -n "$set_email" ]]; then
+    echo "  Email: $set_email (from GitHub)"
+  fi
+
+  if confirm "Set Git identity from your GitHub profile?"; then
+    [[ -z "$current_name" && -n "$set_name" ]]   && git config --global user.name "$set_name"   && success "Set user.name to: $set_name"
+    [[ -z "$current_email" && -n "$set_email" ]] && git config --global user.email "$set_email" && success "Set user.email to: $set_email"
+  else
+    warn "Skipped. Set manually with:"
+    [[ -z "$current_name" ]]  && echo "  git config --global user.name \"Your Name\""
+    [[ -z "$current_email" ]] && echo "  git config --global user.email \"you@example.com\""
+  fi
+}
+
 install_claude() {
   if [[ -n "$claude_needs_migration" ]]; then
     migrate_claude
@@ -532,6 +600,10 @@ summary() {
   if has_command gh && ! gh auth status >/dev/null 2>&1; then
     echo "  - Run 'gh auth login' to authenticate with GitHub"
   fi
+  if [[ -z "$(git config --global user.name 2>/dev/null)" ]] || [[ -z "$(git config --global user.email 2>/dev/null)" ]]; then
+    echo "  - Configure Git identity: git config --global user.name \"Your Name\""
+    echo "    and: git config --global user.email \"you@example.com\""
+  fi
   echo "  - Enable 1Password CLI integration: 1Password app → Settings → Developer → \"Integrate with 1Password CLI\", then restart 1Password"
   echo "  - Run 'claude' to start Claude Code"
   echo "  - Run 'codex' to start Codex CLI"
@@ -585,6 +657,7 @@ main() {
   install_codex
   install_gemini
   setup_gh_auth
+  setup_git_identity
   summary
 }
 
