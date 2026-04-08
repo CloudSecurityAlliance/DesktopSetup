@@ -28,7 +28,7 @@ Homebrew formulas/casks, npm global packages, pip packages. Saves a snapshot of 
 bash -c "$(curl -fsSL https://raw.githubusercontent.com/CloudSecurityAlliance/DesktopSetup/HEAD/scripts/macos-update.sh)"
 ```
 
-All three macOS scripts are interactive — they show you what they plan to do and ask for confirmation. The install scripts share a base layer (Xcode CLI Tools, Homebrew, Node.js/npm) and install it if not already present.
+All three macOS scripts are interactive — they show you what they plan to do and ask for confirmation. The install scripts share a base layer (Xcode CLI Tools, Homebrew, Node.js/npm) and install it if not already present. Both install scripts also walk you through GitHub login (`gh auth login`) and automatically configure your Git identity (`user.name` / `user.email`) from your GitHub profile.
 
 ## Quick Start — Windows
 
