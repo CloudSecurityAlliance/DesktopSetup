@@ -30,7 +30,7 @@ bash -c "$(curl -fsSL https://raw.githubusercontent.com/CloudSecurityAlliance/De
 
 ### MCP servers (AI tool integrations)
 
-Connect your AI coding CLIs to Airtable, GitHub, and Gmail. Discovers any tokens already in your config files or environment, validates them, and writes to Claude Code, Codex, and Gemini in one pass.
+Connect your AI coding CLIs to Airtable, GitHub, and Gmail. Scans your existing config files and environment for tokens, validates each one against the service's API, deduplicates them into a labeled catalog (A, B, C…), and writes the right token to each tool. Also detects and removes old npm/stdio-based MCP entries that no longer work.
 
 ```bash
 bash -c "$(curl -fsSL https://raw.githubusercontent.com/CloudSecurityAlliance/DesktopSetup/HEAD/scripts/macos-mcp-setup.sh)"
@@ -117,7 +117,7 @@ Setup scripts. Each is self-contained and idempotent (safe to re-run):
 - **`macos-work-tools.sh`** — Core work apps + optional developer tools (macOS)
 - **`macos-ai-tools.sh`** — AI desktop apps and coding assistants with migration support (macOS)
 - **`macos-update.sh`** — Update all installed tools with version snapshots (macOS)
-- **`macos-mcp-setup.sh`** — Configure MCP servers (Airtable, GitHub, Gmail) for Claude Code, Codex, and Gemini (macOS)
+- **`macos-mcp-setup.sh`** — Discover, validate, and write MCP server tokens (Airtable, GitHub, Gmail) for Claude Code, Codex, and Gemini; cleans up legacy npm/stdio entries (macOS)
 - **`windows-work-tools.ps1`** — Core work apps + optional developer tools (Windows)
 - **`windows-ai-tools.ps1`** — AI desktop apps and coding assistants with migration support (Windows)
 - **`clone-and-claude.sh`** — Clone a CSA repo and set up for Claude Code (macOS)
@@ -146,7 +146,8 @@ Or update individual package managers manually:
 ```bash
 brew update && brew upgrade     # Homebrew formulas and casks
 npm update -g                   # npm global packages (Codex, Gemini, Wrangler)
-pip install --upgrade pip       # pip itself (Claude Code auto-updates)
+pip install --upgrade pip       # pip itself
+claude update                   # Claude Code
 ```
 
 Snapshots are saved to `~/Library/Logs/CSA-DesktopSetup/` with timestamps.
