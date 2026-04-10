@@ -6,7 +6,7 @@
 #   1. Homebrew formulas and casks (Git, Node.js, apps, etc.)
 #   2. Global npm packages (Codex, Gemini, Wrangler)
 #   3. pip + all pip packages (in active venv or system Python)
-#   4. Claude Code — skipped (auto-updates via native installer)
+#   4. Claude Code — updated via `claude update`
 #
 # Before updating, saves a snapshot of all installed versions to:
 #   ~/Library/Logs/CSA-DesktopSetup/pre-update-<timestamp>.txt
@@ -17,7 +17,7 @@
 
 set -euo pipefail
 
-SCRIPT_VERSION="2026.0932215"
+SCRIPT_VERSION="2026.04090000"
 
 # ── Output helpers ──────────────────────────────────────────────────
 
@@ -223,7 +223,11 @@ preflight() {
   echo ""
 
   # Claude Code
-  echo "  Claude Code: skipped (auto-updates)"
+  if has_command claude; then
+    echo "  Claude Code: will run \`claude update\`"
+  else
+    echo "  Claude Code: not installed (skipping)"
+  fi
   echo ""
 }
 
@@ -279,6 +283,13 @@ update_pip() {
   done
 }
 
+update_claude_code() {
+  if ! has_command claude; then return 0; fi
+
+  info "Updating Claude Code"
+  claude update || warn "claude update failed; continuing"
+}
+
 # ── Summary ─────────────────────────────────────────────────────────
 
 summary() {
@@ -307,7 +318,7 @@ summary() {
     echo "  pip ............... $(python3 -m pip --version 2>/dev/null | head -n1)"
   fi
   if has_command claude; then
-    echo "  Claude Code ....... $(claude --version 2>/dev/null | head -n1) (auto-updates)"
+    echo "  Claude Code ....... $(claude --version 2>/dev/null | head -n1)"
   fi
   if has_command codex; then
     echo "  Codex CLI ......... $(codex --version 2>/dev/null | head -n1)"
@@ -347,6 +358,7 @@ main() {
   update_brew
   update_npm
   update_pip
+  update_claude_code
   summary
 }
 

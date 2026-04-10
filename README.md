@@ -22,13 +22,21 @@ bash -c "$(curl -fsSL https://raw.githubusercontent.com/CloudSecurityAlliance/De
 
 ### Update everything
 
-Homebrew formulas/casks, npm global packages, pip packages. Saves a snapshot of all installed versions before updating so you can roll back if anything breaks.
+Homebrew formulas/casks, npm global packages, pip packages, and Claude Code. Saves a snapshot of all installed versions before updating so you can roll back if anything breaks.
 
 ```bash
 bash -c "$(curl -fsSL https://raw.githubusercontent.com/CloudSecurityAlliance/DesktopSetup/HEAD/scripts/macos-update.sh)"
 ```
 
-All three macOS scripts are interactive — they show you what they plan to do and ask for confirmation. The install scripts share a base layer (Xcode CLI Tools, Homebrew, Node.js/npm) and install it if not already present. Both install scripts also walk you through GitHub login (`gh auth login`) and automatically configure your Git identity (`user.name` / `user.email`) from your GitHub profile.
+### MCP servers (AI tool integrations)
+
+Connect your AI coding CLIs to Airtable, GitHub, and Gmail. Discovers any tokens already in your config files or environment, validates them, and writes to Claude Code, Codex, and Gemini in one pass.
+
+```bash
+bash -c "$(curl -fsSL https://raw.githubusercontent.com/CloudSecurityAlliance/DesktopSetup/HEAD/scripts/macos-mcp-setup.sh)"
+```
+
+All four macOS scripts are interactive — they show you what they plan to do and ask for confirmation. The install scripts share a base layer (Xcode CLI Tools, Homebrew, Node.js/npm) and install it if not already present. Both install scripts also walk you through GitHub login (`gh auth login`) and automatically configure your Git identity (`user.name` / `user.email`) from your GitHub profile.
 
 ## Quick Start — Windows
 
@@ -109,6 +117,7 @@ Setup scripts. Each is self-contained and idempotent (safe to re-run):
 - **`macos-work-tools.sh`** — Core work apps + optional developer tools (macOS)
 - **`macos-ai-tools.sh`** — AI desktop apps and coding assistants with migration support (macOS)
 - **`macos-update.sh`** — Update all installed tools with version snapshots (macOS)
+- **`macos-mcp-setup.sh`** — Configure MCP servers (Airtable, GitHub, Gmail) for Claude Code, Codex, and Gemini (macOS)
 - **`windows-work-tools.ps1`** — Core work apps + optional developer tools (Windows)
 - **`windows-ai-tools.ps1`** — AI desktop apps and coding assistants with migration support (Windows)
 - **`clone-and-claude.sh`** — Clone a CSA repo and set up for Claude Code (macOS)

@@ -10,6 +10,7 @@ DesktopSetup is the Cloud Security Alliance's machine bootstrap. Scripts manage 
 - `macos-work-tools.sh` — Core work apps (1Password, Slack, Zoom, Chrome, Office, Git, GitHub CLI) + optional dev profile (VS Code, AWS CLI, Wrangler). Post-install: `gh auth login` + Git identity from GitHub profile
 - `macos-ai-tools.sh` — AI desktop apps (Claude Desktop, ChatGPT) + Git, GitHub CLI + auth + Git identity from GitHub profile, AI coding CLIs (Claude Code, Codex, Gemini) with migration from wrong install methods
 - `macos-update.sh` — Updates everything: Homebrew formulas/casks, npm globals, pip packages. Snapshots all versions before updating for rollback.
+- `macos-mcp-setup.sh` — Configures MCP servers (Airtable, GitHub, Gmail) for Claude Code, Codex, and Gemini. Discovers tokens from existing config files and environment, validates them against each service's API, and writes to each tool's config.
 
 **Windows (PowerShell):**
 - `windows-work-tools.ps1` — Same tool set as macOS work tools, using winget instead of Homebrew
@@ -27,6 +28,7 @@ scripts/
   macos-work-tools.sh       # Work apps + optional dev tools (macOS)
   macos-ai-tools.sh         # AI desktop apps + coding CLIs (macOS)
   macos-update.sh           # Update everything + snapshot for rollback (macOS)
+  macos-mcp-setup.sh        # Configure MCP servers for AI CLIs (macOS)
   windows-work-tools.ps1    # Work apps + optional dev tools (Windows)
   windows-ai-tools.ps1      # AI desktop apps + coding CLIs (Windows)
   clone-and-claude.sh       # Clone repo & launch Claude (macOS)
@@ -42,18 +44,19 @@ docs/                       # Design documents (e.g., Windows AI tools design/pr
 
 ### macOS Scripts (Bash)
 - Target macOS only (checks `uname -s` at startup)
-- The two install scripts share a base layer: Xcode CLI Tools → Homebrew → Node.js/npm
+- `macos-work-tools.sh` base layer: Xcode CLI Tools → Homebrew → Node.js/npm
+- `macos-ai-tools.sh` base layer: Xcode CLI Tools → Homebrew → Node.js/npm → Python
 - Must be idempotent — safe to run multiple times
 - Must be interactive by default (show plan, ask for confirmation)
 - Support `NONINTERACTIVE=1` for CI/automation
 - Use `set -euo pipefail`
 - Use colored output helpers: `info()`, `warn()`, `error()`, `success()`, `abort()` (abort = error + exit 1)
-- Never run as root (check `$EUID` at startup)
+- Never run as root (check `$EUID` at startup) — exception: root is allowed inside containers (`.dockerenv` / `/run/.containerenv`) for CI use
 - Installation strategy: Homebrew for system tools and desktop apps, native installer for Claude Code (auto-updates), npm for AI CLIs (Codex, Gemini) and dev tools (Wrangler)
 - `macos-ai-tools.sh` detects and migrates tools installed via the wrong method (e.g., Claude Code via Homebrew → native installer)
 - `macos-work-tools.sh` has profile selection: core (everyone) vs core + dev. Profile is selected interactively; `NONINTERACTIVE=1` always installs core-only (no env var to force dev profile). Uses generic helpers (`install_formula`, `install_cask`, `install_npm_package`) — add new tools by calling these
 - `macos-ai-tools.sh` also checks for running AI tool processes (`check_running_tools`) and warns before migrating
-- `macos-update.sh` skips Claude Code (auto-updates) but updates Homebrew, npm globals, and pip packages. Respects active virtualenv if set
+- `macos-update.sh` runs `claude update` in addition to Homebrew, npm globals, and pip packages. Respects active virtualenv if set
 
 ### Windows Scripts (PowerShell)
 - Target Windows 10/11, require winget
@@ -62,6 +65,10 @@ docs/                       # Design documents (e.g., Windows AI tools design/pr
 - Same utility function pattern: `Has-Command` instead of `has_command`
 - Installation strategy: winget for system tools and desktop apps, npm for AI CLIs
 - Both scripts support migration from wrong install methods (same concept as macOS)
+- `windows-work-tools.ps1` does **not** include Microsoft Office (unlike the macOS equivalent); installs Git, GitHub CLI, 1Password, Slack, Zoom, Chrome only
+
+### Script versioning
+All scripts declare `SCRIPT_VERSION="YYYY.MMDDHHSS"` near the top. Update this value when making changes — use the current date/time in that format.
 
 ### Shared boilerplate
 All scripts (both platforms) duplicate their output helpers, precondition checks, and utility functions. macOS uses `has_command`, `confirm`, `ensure_brew_in_path`; Windows uses `Has-Command`. The two macOS install scripts additionally share `install_xcode_cli_tools`, `install_homebrew`, `install_node`, `setup_gh_auth`, and `setup_git_identity`. **When changing shared logic, update all files that use it.**
@@ -76,12 +83,14 @@ No test suite. Use these to check scripts:
 bash -n scripts/macos-work-tools.sh
 bash -n scripts/macos-ai-tools.sh
 bash -n scripts/macos-update.sh
+bash -n scripts/macos-mcp-setup.sh
 bash -n scripts/clone-and-claude.sh
 
 # macOS — static analysis (install: brew install shellcheck)
 shellcheck scripts/macos-work-tools.sh
 shellcheck scripts/macos-ai-tools.sh
 shellcheck scripts/macos-update.sh
+shellcheck scripts/macos-mcp-setup.sh
 shellcheck scripts/clone-and-claude.sh
 ```
 
@@ -97,6 +106,9 @@ bash -c "$(curl -fsSL https://raw.githubusercontent.com/CloudSecurityAlliance/De
 
 # macOS — Update everything
 bash -c "$(curl -fsSL https://raw.githubusercontent.com/CloudSecurityAlliance/DesktopSetup/HEAD/scripts/macos-update.sh)"
+
+# macOS — Configure MCP servers
+bash -c "$(curl -fsSL https://raw.githubusercontent.com/CloudSecurityAlliance/DesktopSetup/HEAD/scripts/macos-mcp-setup.sh)"
 
 # macOS — Clone repo & start Claude
 bash -c "$(curl -fsSL https://raw.githubusercontent.com/CloudSecurityAlliance/DesktopSetup/HEAD/scripts/clone-and-claude.sh)" -- ORG/REPO
