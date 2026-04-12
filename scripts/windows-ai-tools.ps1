@@ -17,7 +17,7 @@
 
 $ErrorActionPreference = 'Stop'
 
-$ScriptVersion = "2026.0932215"
+$ScriptVersion = "2026.04111300"
 
 # ── Output helpers ──────────────────────────────────────────────────
 
@@ -127,13 +127,20 @@ function Check-RunningTools {
 
 $script:claudeMigration = @()  # collect ALL wrong methods (could be both npm and winget)
 $script:codexMigration  = ""   # "winget" if installed wrong
+$script:envUpdated      = $false  # set to $true if CLAUDE_CODE_NO_FLICKER was written
 
 function Detect-Migrations {
     # Claude: should be native installer, not npm or winget
+    # Check both the original scoped package name and the bare "claude" package.
     if (Has-Command npm) {
         $npmList = npm list -g @anthropic-ai/claude-code 2>$null
         if ($npmList -and ($npmList | Select-String '@anthropic-ai/claude-code')) {
             $script:claudeMigration += "npm"
+        } else {
+            $npmListBare = npm list -g claude 2>$null
+            if ($npmListBare -and ($npmListBare | Select-String 'claude@')) {
+                $script:claudeMigration += "npm"
+            }
         }
     }
     $wingetCheck = winget list --id Anthropic.ClaudeCode --accept-source-agreements 2>$null
@@ -255,6 +262,14 @@ function Show-Preflight {
         Write-Host "  Gemini CLI ........ install via npm"
     }
 
+    # Claude Code flicker fix
+    $flickerVar = [Environment]::GetEnvironmentVariable("CLAUDE_CODE_NO_FLICKER", "User")
+    if ($flickerVar -eq "1") {
+        Write-Host "  CLAUDE_CODE_NO_FLICKER  already set"
+    } else {
+        Write-Host "  CLAUDE_CODE_NO_FLICKER  set (enables flicker-free terminal renderer)"
+    }
+
     Write-Host ""
 }
 
@@ -266,7 +281,8 @@ function Migrate-Claude {
     foreach ($method in $script:claudeMigration) {
         if ($method -eq "npm") {
             Write-Info "Removing Claude Code from npm (migrating to native installer)"
-            try { npm uninstall -g @anthropic-ai/claude-code } catch { Write-Warn "npm uninstall claude-code failed; continuing" }
+            try { npm uninstall -g @anthropic-ai/claude-code 2>$null } catch {}
+            try { npm uninstall -g claude 2>$null } catch {}
         } elseif ($method -eq "winget") {
             Write-Info "Removing Claude Code from winget (migrating to native installer)"
             try { winget uninstall --id Anthropic.ClaudeCode --accept-source-agreements } catch { Write-Warn "winget uninstall claude-code failed; continuing" }
@@ -496,6 +512,24 @@ function Install-Gemini {
     }
 }
 
+# ── Environment setup ──────────────────────────────────────────────
+
+function Setup-ClaudeEnv {
+    # Enable the flicker-free renderer — eliminates the terminal redraw flicker
+    # that makes Claude Code unpleasant to use for long sessions.
+    $env:CLAUDE_CODE_NO_FLICKER = "1"
+
+    $current = [Environment]::GetEnvironmentVariable("CLAUDE_CODE_NO_FLICKER", "User")
+    if ($current -eq "1") {
+        Write-Info "Claude Code environment already configured"
+        return
+    }
+
+    [Environment]::SetEnvironmentVariable("CLAUDE_CODE_NO_FLICKER", "1", "User")
+    Write-Success "Set CLAUDE_CODE_NO_FLICKER=1 (flicker-free terminal renderer)"
+    $script:envUpdated = $true
+}
+
 # ── Summary ─────────────────────────────────────────────────────────
 
 function Show-Summary {
@@ -564,6 +598,16 @@ function Show-Summary {
     Write-Host ""
     Write-Host "  Claude Code updates itself automatically."
     Write-Host ""
+    Write-Info "Learn Claude Code in your terminal:"
+    Write-Host "  /powerup  -- interactive lessons with animated demos, one feature at a time"
+    Write-Host "  /init     -- in a project directory, first ask Claude to read all the files,"
+    Write-Host "               then type /init -- creates a CLAUDE.md tailored to your codebase"
+    Write-Host ""
+
+    if ($script:envUpdated) {
+        Write-Warn "Open a new terminal window for CLAUDE_CODE_NO_FLICKER to take effect in future sessions."
+        Write-Host ""
+    }
 }
 
 # ── Main ────────────────────────────────────────────────────────────
@@ -591,6 +635,7 @@ function Main {
     Install-Claude
     Install-Codex
     Install-Gemini
+    Setup-ClaudeEnv
     Setup-GHAuth
     Show-Summary
 }

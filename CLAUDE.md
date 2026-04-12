@@ -48,9 +48,9 @@ docs/                       # Design documents (e.g., Windows AI tools design/pr
 - `macos-ai-tools.sh` base layer: Xcode CLI Tools → Homebrew → Node.js/npm → Python
 - Must be idempotent — safe to run multiple times
 - Must be interactive by default (show plan, ask for confirmation)
-- Support `NONINTERACTIVE=1` for CI/automation
+- Support `NONINTERACTIVE=1` for CI/automation — also auto-detected when `$CI` is set or stdin is not a TTY
 - Use `set -euo pipefail`
-- Use colored output helpers: `info()`, `warn()`, `error()`, `success()`, `abort()` (abort = error + exit 1)
+- Use colored output helpers: `info()`, `warn()`, `error()`, `success()`, `abort()` (abort = error + exit 1); colors are stripped automatically when stdout is not a TTY (`[[ -t 1 ]]` guard)
 - Never run as root (check `$EUID` at startup) — exception: root is allowed inside containers (`.dockerenv` / `/run/.containerenv`) for CI use
 - Installation strategy: Homebrew for system tools and desktop apps, native installer for Claude Code (auto-updates), npm for AI CLIs (Codex, Gemini) and dev tools (Wrangler)
 - `macos-ai-tools.sh` detects and migrates tools installed via the wrong method (e.g., Claude Code via Homebrew → native installer)
@@ -65,7 +65,17 @@ docs/                       # Design documents (e.g., Windows AI tools design/pr
 - Same utility function pattern: `Has-Command` instead of `has_command`
 - Installation strategy: winget for system tools and desktop apps, npm for AI CLIs
 - Both scripts support migration from wrong install methods (same concept as macOS)
-- `windows-work-tools.ps1` does **not** include Microsoft Office (unlike the macOS equivalent); installs Git, GitHub CLI, 1Password, Slack, Zoom, Chrome only
+- `windows-work-tools.ps1` does **not** include Microsoft Office (unlike the macOS equivalent); core set is Git, GitHub CLI, 1Password, Slack, Zoom, Chrome — same core + dev profile selection as the macOS equivalent (dev adds VS Code, AWS CLI, Wrangler)
+
+### macos-mcp-setup.sh token pipeline
+Unique to this script — token handling follows a strict pipeline:
+1. **Discover**: reads tokens from existing CLI configs (`~/.claude.json`, `~/.codex/config.toml`, `~/.gemini/settings.json`) and environment variables, using embedded Python 3 snippets
+2. **Deduplicate**: parallel arrays (`FOUND_TOKEN_NAMES`, `FOUND_TOKEN_VALUES`) track seen values; duplicates by value are suppressed
+3. **Catalog**: surviving tokens are labeled A, B, C… and displayed with `mask_token()` (shows first 8 + `...` + last 4 chars)
+4. **Validate**: each token is tested against the service's live API before being written
+5. **Write**: validated tokens are written to each CLI's config file
+
+Requires Python 3 (the script calls `abort` if `python3` is not found). Gmail is handled as a special case — no token can be auto-discovered, so the script prints manual OAuth/GCP setup instructions instead.
 
 ### Script versioning
 All scripts declare `SCRIPT_VERSION="YYYY.MMDDHHSS"` near the top. Update this value when making changes — use the current date/time in that format.

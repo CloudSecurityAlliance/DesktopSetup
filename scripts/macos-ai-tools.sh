@@ -21,7 +21,7 @@
 
 set -euo pipefail
 
-SCRIPT_VERSION="2026.0932215"
+SCRIPT_VERSION="2026.04111300"
 
 # ── Output helpers ──────────────────────────────────────────────────
 
@@ -120,14 +120,17 @@ ensure_brew_in_path() {
 claude_needs_migration=""   # "brew" or "npm" if installed wrong
 codex_needs_migration=""    # "brew" if installed via homebrew
 gemini_needs_migration=""   # "brew" if installed via homebrew
+path_updated=0              # set to 1 if ~/.local/bin was added to shell config
 
 detect_migrations() {
   ensure_brew_in_path
 
   # Claude: should be native installer, not brew or npm
+  # Check both the original scoped package name and the bare "claude" package.
   if has_command brew && brew list --cask claude-code >/dev/null 2>&1; then
     claude_needs_migration="brew"
-  elif npm list -g @anthropic-ai/claude-code >/dev/null 2>&1; then
+  elif npm list -g @anthropic-ai/claude-code >/dev/null 2>&1 \
+    || npm list -g claude >/dev/null 2>&1; then
     claude_needs_migration="npm"
   fi
 
@@ -245,6 +248,14 @@ preflight() {
     echo "  Gemini CLI ........ install via npm"
   fi
 
+  # Claude Code flicker fix
+  if grep -q 'CLAUDE_CODE_NO_FLICKER' "$HOME/.zprofile" 2>/dev/null \
+    && grep -q 'CLAUDE_CODE_NO_FLICKER' "$HOME/.zshrc" 2>/dev/null; then
+    echo "  CLAUDE_CODE_NO_FLICKER  already set"
+  else
+    echo "  CLAUDE_CODE_NO_FLICKER  set (enables flicker-free terminal renderer)"
+  fi
+
   echo ""
 }
 
@@ -258,7 +269,8 @@ migrate_claude() {
     brew uninstall --cask claude-code || warn "brew uninstall claude-code failed; continuing"
   elif [[ "$claude_needs_migration" == "npm" ]]; then
     info "Removing Claude Code from npm (migrating to native installer)"
-    npm uninstall -g @anthropic-ai/claude-code || warn "npm uninstall claude-code failed; continuing"
+    npm uninstall -g @anthropic-ai/claude-code 2>/dev/null || true
+    npm uninstall -g claude 2>/dev/null || true
   fi
 }
 
@@ -506,11 +518,19 @@ install_claude() {
   # Ensure ~/.local/bin is on PATH for this session
   export PATH="$HOME/.local/bin:$PATH"
 
-  # Add to .zshrc for future shells if not already configured
-  # Uses a broad pattern to catch any variant: $HOME/.local/bin, ~/.local/bin, etc.
+  # Write to both shell config files so all session types pick up the PATH:
+  #   .zprofile — login shells (what macOS Terminal.app opens by default)
+  #   .zshrc    — interactive non-login shells
+  # Uses a broad pattern to catch any existing variant.
+  if ! grep -q '\.local/bin' "$HOME/.zprofile" 2>/dev/null; then
+    info "Adding ~/.local/bin to PATH in ~/.zprofile"
+    echo 'export PATH="$HOME/.local/bin:$PATH"' >> "$HOME/.zprofile"
+    path_updated=1
+  fi
   if ! grep -q '\.local/bin' "$HOME/.zshrc" 2>/dev/null; then
     info "Adding ~/.local/bin to PATH in ~/.zshrc"
     echo 'export PATH="$HOME/.local/bin:$PATH"' >> "$HOME/.zshrc"
+    path_updated=1
   fi
 }
 
@@ -549,6 +569,31 @@ install_gemini() {
   else
     info "Installing Gemini CLI"
     npm install -g @google/gemini-cli || warn "Failed to install Gemini CLI"
+  fi
+}
+
+# ── Environment setup ───────────────────────────────────────────────
+
+setup_claude_env() {
+  # Enable the flicker-free renderer — eliminates the terminal redraw flicker
+  # that makes Claude Code unpleasant to use for long sessions.
+  export CLAUDE_CODE_NO_FLICKER=1
+
+  local wrote=0
+  if ! grep -q 'CLAUDE_CODE_NO_FLICKER' "$HOME/.zprofile" 2>/dev/null; then
+    echo 'export CLAUDE_CODE_NO_FLICKER=1' >> "$HOME/.zprofile"
+    wrote=1
+  fi
+  if ! grep -q 'CLAUDE_CODE_NO_FLICKER' "$HOME/.zshrc" 2>/dev/null; then
+    echo 'export CLAUDE_CODE_NO_FLICKER=1' >> "$HOME/.zshrc"
+    wrote=1
+  fi
+
+  if [[ "$wrote" == "1" ]]; then
+    success "Set CLAUDE_CODE_NO_FLICKER=1 (flicker-free terminal renderer)"
+    path_updated=1
+  else
+    info "Claude Code environment already configured"
   fi
 }
 
@@ -614,21 +659,28 @@ summary() {
   echo ""
   echo "  Claude Code updates itself automatically."
   echo ""
+  info "Learn Claude Code in your terminal:"
+  echo "  /powerup  — interactive lessons with animated demos, one feature at a time"
+  echo "  /init     — in a project directory, first ask Claude to read all the files,"
+  echo "              then type /init — creates a CLAUDE.md tailored to your codebase"
+  echo ""
 
-  # PATH reload banner
-  echo ""
-  printf "${YELLOW}╔══════════════════════════════════════════════════════════════╗${RESET}\n"
-  printf "${YELLOW}║${RESET}${BOLD}  IMPORTANT: Your PATH has been updated.                     ${RESET}${YELLOW}║${RESET}\n"
-  printf "${YELLOW}║${RESET}                                                              ${YELLOW}║${RESET}\n"
-  printf "${YELLOW}║${RESET}  To use the newly installed tools, either:                    ${YELLOW}║${RESET}\n"
-  printf "${YELLOW}║${RESET}                                                              ${YELLOW}║${RESET}\n"
-  printf "${YELLOW}║${RESET}    ${BOLD}1.${RESET} Open a new terminal window or tab                      ${YELLOW}║${RESET}\n"
-  printf "${YELLOW}║${RESET}                                                              ${YELLOW}║${RESET}\n"
-  printf "${YELLOW}║${RESET}    ${BOLD}2.${RESET} Reload your current session:                          ${YELLOW}║${RESET}\n"
-  printf "${YELLOW}║${RESET}       ${GREEN}source ~/.zshrc${RESET}                                        ${YELLOW}║${RESET}\n"
-  printf "${YELLOW}║${RESET}                                                              ${YELLOW}║${RESET}\n"
-  printf "${YELLOW}╚══════════════════════════════════════════════════════════════╝${RESET}\n"
-  echo ""
+  # PATH reload banner — only shown when ~/.local/bin was actually added to shell config
+  if [[ "${path_updated}" == "1" ]]; then
+    echo ""
+    printf "${YELLOW}╔══════════════════════════════════════════════════════════════╗${RESET}\n"
+    printf "${YELLOW}║${RESET}${BOLD}  IMPORTANT: Your shell configuration has been updated.      ${RESET}${YELLOW}║${RESET}\n"
+    printf "${YELLOW}║${RESET}                                                              ${YELLOW}║${RESET}\n"
+    printf "${YELLOW}║${RESET}  To use the newly installed tools, either:                    ${YELLOW}║${RESET}\n"
+    printf "${YELLOW}║${RESET}                                                              ${YELLOW}║${RESET}\n"
+    printf "${YELLOW}║${RESET}    ${BOLD}1.${RESET} Open a new terminal window or tab                      ${YELLOW}║${RESET}\n"
+    printf "${YELLOW}║${RESET}                                                              ${YELLOW}║${RESET}\n"
+    printf "${YELLOW}║${RESET}    ${BOLD}2.${RESET} Reload your current session:                          ${YELLOW}║${RESET}\n"
+    printf "${YELLOW}║${RESET}       ${GREEN}source ~/.zprofile${RESET}                                     ${YELLOW}║${RESET}\n"
+    printf "${YELLOW}║${RESET}                                                              ${YELLOW}║${RESET}\n"
+    printf "${YELLOW}╚══════════════════════════════════════════════════════════════╝${RESET}\n"
+    echo ""
+  fi
 }
 
 # ── Main ────────────────────────────────────────────────────────────
@@ -656,6 +708,7 @@ main() {
   install_claude
   install_codex
   install_gemini
+  setup_claude_env
   setup_gh_auth
   setup_git_identity
   summary
