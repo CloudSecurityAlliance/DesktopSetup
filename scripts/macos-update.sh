@@ -20,10 +20,16 @@ set -euo pipefail
 SCRIPT_VERSION="2026.04171300"
 
 # ── CSA plugin marketplaces ─────────────────────────────────────────
-# Keep this list in sync with scripts/macos-ai-tools.sh and
-# scripts/windows-ai-tools.ps1. Each update run will add any entries
-# from this list that aren't yet registered (and that the user's gh
-# account can access), then refresh all registered marketplaces.
+# Each update run will add any entries from this list that aren't yet
+# registered (and that the user's gh account can access), then refresh
+# all registered marketplaces.
+#
+# KEEP IN SYNC: This array is duplicated in
+#   scripts/macos-ai-tools.sh      (installer, macOS)
+#   scripts/windows-ai-tools.ps1   (installer, Windows)
+# All three files hard-code the same list. When adding or removing a
+# marketplace, update every file and bump each file's SCRIPT_VERSION /
+# $ScriptVersion — otherwise the installer and updater will drift.
 CSA_MARKETPLACES=(
   "CloudSecurityAlliance-Internal/CINO-Plugins"
   "CloudSecurityAlliance-Internal/CSA-Plugins"
