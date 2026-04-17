@@ -17,7 +17,20 @@
 
 set -euo pipefail
 
-SCRIPT_VERSION="2026.04090000"
+SCRIPT_VERSION="2026.04171300"
+
+# ── CSA plugin marketplaces ─────────────────────────────────────────
+# Keep this list in sync with scripts/macos-ai-tools.sh and
+# scripts/windows-ai-tools.ps1. Each update run will add any entries
+# from this list that aren't yet registered (and that the user's gh
+# account can access), then refresh all registered marketplaces.
+CSA_MARKETPLACES=(
+  "CloudSecurityAlliance-Internal/CINO-Plugins"
+  "CloudSecurityAlliance-Internal/CSA-Plugins"
+  "CloudSecurityAlliance-Internal/Research-Plugins"
+  "CloudSecurityAlliance-Internal/Training-Plugins"
+  "CloudSecurityAlliance/csa-plugins-official"
+)
 
 # ── Output helpers ──────────────────────────────────────────────────
 
@@ -229,6 +242,12 @@ preflight() {
     echo "  Claude Code: not installed (skipping)"
   fi
   echo ""
+
+  # Plugin marketplaces
+  if has_command claude; then
+    echo "  Plugin marketplaces: refresh registered, add accessible CSA repos"
+    echo ""
+  fi
 }
 
 # ── Update steps ────────────────────────────────────────────────────
@@ -288,6 +307,49 @@ update_claude_code() {
 
   info "Updating Claude Code"
   claude update || warn "claude update failed; continuing"
+}
+
+# ── Plugin marketplaces ─────────────────────────────────────────────
+# Add any CSA marketplaces the user can access but hasn't registered yet,
+# then refresh all registered marketplaces from their sources. Missing gh
+# or gh-auth skips the add step silently — a user who isn't in CSA-Internal
+# doesn't need to see chatter about repos they can't see.
+
+sync_plugin_marketplaces() {
+  has_command claude || return 0
+
+  # If gh is available + authenticated, add any missing accessible ones
+  # silently. Otherwise skip straight to the refresh pass.
+  if has_command gh && gh auth status >/dev/null 2>&1; then
+    local already_added
+    already_added="$(claude plugin marketplace list 2>/dev/null \
+      | sed -n 's/.*GitHub (\([^)]*\)).*/\1/p')"
+
+    local added=() failed=()
+    local repo
+    for repo in "${CSA_MARKETPLACES[@]}"; do
+      grep -qxF "$repo" <<< "$already_added" && continue
+      gh api "repos/$repo" >/dev/null 2>&1 || continue
+
+      if claude plugin marketplace add "$repo" >/dev/null 2>&1; then
+        added+=("$repo")
+      else
+        failed+=("$repo")
+      fi
+    done
+
+    if [[ ${#added[@]} -gt 0 ]]; then
+      success "Registered new plugin marketplaces:"
+      printf '  + %s\n' "${added[@]}"
+    fi
+    if [[ ${#failed[@]} -gt 0 ]]; then
+      warn "Failed to register ${#failed[@]} marketplace(s):"
+      printf '  ! %s\n' "${failed[@]}"
+    fi
+  fi
+
+  info "Refreshing plugin marketplaces"
+  claude plugin marketplace update || warn "marketplace update failed; continuing"
 }
 
 # ── Summary ─────────────────────────────────────────────────────────
@@ -359,6 +421,7 @@ main() {
   update_npm
   update_pip
   update_claude_code
+  sync_plugin_marketplaces
   summary
 }
 
