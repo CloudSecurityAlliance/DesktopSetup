@@ -17,7 +17,21 @@
 
 $ErrorActionPreference = 'Stop'
 
-$ScriptVersion = "2026.04111300"
+$ScriptVersion = "2026.04171300"
+
+# ── CSA plugin marketplaces ─────────────────────────────────────────
+# Plugin marketplaces to register with Claude Code. Each entry is an
+# ORG/REPO on GitHub. At install time, each is probed via `gh` for
+# accessibility; inaccessible ones (private org repos the user isn't a
+# member of) are silently skipped. To add a new marketplace, append to
+# this list and bump $ScriptVersion.
+$CSA_MARKETPLACES = @(
+    "CloudSecurityAlliance-Internal/CINO-Plugins"
+    "CloudSecurityAlliance-Internal/CSA-Plugins"
+    "CloudSecurityAlliance-Internal/Research-Plugins"
+    "CloudSecurityAlliance-Internal/Training-Plugins"
+    "CloudSecurityAlliance/csa-plugins-official"
+)
 
 # ── Output helpers ──────────────────────────────────────────────────
 
@@ -270,6 +284,9 @@ function Show-Preflight {
         Write-Host "  CLAUDE_CODE_NO_FLICKER  set (enables flicker-free terminal renderer)"
     }
 
+    # Plugin marketplaces
+    Write-Host "  Plugin marketplaces  probe $($CSA_MARKETPLACES.Count) CSA repos, add any your GitHub account can access"
+
     Write-Host ""
 }
 
@@ -359,6 +376,77 @@ function Setup-GHAuth {
         if ($LASTEXITCODE -ne 0) {
             Write-Warn "gh auth login failed; you can run it manually later"
         }
+    }
+}
+
+function Setup-GitIdentity {
+    $currentName  = git config --global user.name 2>$null
+    $currentEmail = git config --global user.email 2>$null
+
+    if ($currentName -and $currentEmail) {
+        Write-Info "Git identity already configured: $currentName <$currentEmail>"
+        return
+    }
+
+    # Need gh authenticated to pull profile info
+    $ghAuthed = $false
+    if (Has-Command gh) {
+        gh auth status 2>&1 | Out-Null
+        if ($LASTEXITCODE -eq 0) { $ghAuthed = $true }
+    }
+
+    if (-not $ghAuthed) {
+        Write-Warn "Git identity not configured. Run these after authenticating with GitHub:"
+        if (-not $currentName)  { Write-Host "  git config --global user.name `"Your Name`"" }
+        if (-not $currentEmail) { Write-Host "  git config --global user.email `"you@example.com`"" }
+        return
+    }
+
+    # Fetch name and email from GitHub profile
+    $ghName  = gh api user --jq '.name // empty' 2>$null
+    $ghEmail = gh api user --jq '.email // empty' 2>$null
+
+    # If email is private/null, try the emails endpoint
+    if (-not $ghEmail) {
+        $ghEmail = gh api user/emails --jq '[.[] | select(.primary==true)][0].email // empty' 2>$null
+    }
+
+    # Use GitHub values only for fields not already set
+    $setName  = if ($currentName)  { $currentName }  else { $ghName }
+    $setEmail = if ($currentEmail) { $currentEmail } else { $ghEmail }
+
+    if (-not $setName -and -not $setEmail) {
+        Write-Warn "Could not determine Git identity from GitHub profile."
+        Write-Warn "Run: git config --global user.name `"Your Name`""
+        Write-Warn "Run: git config --global user.email `"you@example.com`""
+        return
+    }
+
+    if ($env:NONINTERACTIVE -eq '1') {
+        if (-not $currentName  -and $setName)  { git config --global user.name  $setName }
+        if (-not $currentEmail -and $setEmail) { git config --global user.email $setEmail }
+        Write-Info "Git identity configured from GitHub profile"
+        return
+    }
+
+    Write-Host ""
+    Write-Info "Git identity (user.name / user.email) is used in every commit."
+    if (-not $currentName  -and $setName)  { Write-Host "  Name:  $setName (from GitHub)" }
+    if (-not $currentEmail -and $setEmail) { Write-Host "  Email: $setEmail (from GitHub)" }
+
+    if (Confirm-Step "Set Git identity from your GitHub profile?") {
+        if (-not $currentName -and $setName) {
+            git config --global user.name $setName
+            Write-Success "Set user.name to: $setName"
+        }
+        if (-not $currentEmail -and $setEmail) {
+            git config --global user.email $setEmail
+            Write-Success "Set user.email to: $setEmail"
+        }
+    } else {
+        Write-Warn "Skipped. Set manually with:"
+        if (-not $currentName)  { Write-Host "  git config --global user.name `"Your Name`"" }
+        if (-not $currentEmail) { Write-Host "  git config --global user.email `"you@example.com`"" }
     }
 }
 
@@ -530,6 +618,56 @@ function Setup-ClaudeEnv {
     $script:envUpdated = $true
 }
 
+# ── Plugin marketplaces ─────────────────────────────────────────────
+# Register CSA plugin marketplaces with Claude Code, but only the ones
+# the authenticated GitHub account can actually see. Missing preconditions
+# (no claude, no gh, not authenticated) and inaccessible repos are silent --
+# a user who isn't in CSA-Internal just gets the public marketplace and
+# doesn't see any chatter about the internal ones.
+
+function Setup-PluginMarketplaces {
+    if (-not (Has-Command claude)) { return }
+    if (-not (Has-Command gh))     { return }
+    gh auth status 2>&1 | Out-Null
+    if ($LASTEXITCODE -ne 0)       { return }
+
+    # Snapshot already-registered marketplaces (single call).
+    # list format: "    Source: GitHub (ORG/REPO)"
+    $listing = claude plugin marketplace list 2>$null
+    $alreadyAdded = @()
+    foreach ($line in $listing) {
+        if ($line -match 'GitHub \(([^)]+)\)') {
+            $alreadyAdded += $matches[1]
+        }
+    }
+
+    $added = @()
+    $failed = @()
+
+    foreach ($repo in $CSA_MARKETPLACES) {
+        # Already registered, or not accessible to this account -- silently skip.
+        if ($alreadyAdded -contains $repo) { continue }
+        gh api "repos/$repo" 2>&1 | Out-Null
+        if ($LASTEXITCODE -ne 0) { continue }
+
+        claude plugin marketplace add $repo 2>&1 | Out-Null
+        if ($LASTEXITCODE -eq 0) {
+            $added += $repo
+        } else {
+            $failed += $repo
+        }
+    }
+
+    if ($added.Count -gt 0) {
+        Write-Success "Registered Claude Code plugin marketplaces:"
+        $added | ForEach-Object { Write-Host "  + $_" }
+    }
+    if ($failed.Count -gt 0) {
+        Write-Warn "Failed to register $($failed.Count) marketplace(s):"
+        $failed | ForEach-Object { Write-Host "  ! $_" }
+    }
+}
+
 # ── Summary ─────────────────────────────────────────────────────────
 
 function Show-Summary {
@@ -588,6 +726,12 @@ function Show-Summary {
             Write-Host "  - Run 'gh auth login --git-protocol https' to authenticate with GitHub"
         }
     }
+    $summaryGitName  = git config --global user.name 2>$null
+    $summaryGitEmail = git config --global user.email 2>$null
+    if (-not $summaryGitName -or -not $summaryGitEmail) {
+        Write-Host "  - Configure Git identity: git config --global user.name `"Your Name`""
+        Write-Host "    and: git config --global user.email `"you@example.com`""
+    }
     Write-Host "  - Enable 1Password CLI integration: 1Password app > Settings > Developer > 'Integrate with 1Password CLI', then restart 1Password"
     Write-Host "  - Run 'claude' to start Claude Code"
     Write-Host "  - Run 'codex' to start Codex CLI"
@@ -595,6 +739,10 @@ function Show-Summary {
     Write-Host ""
     Write-Host "  To update npm-installed tools later:"
     Write-Host "    npm update -g @openai/codex @google/gemini-cli"
+    Write-Host ""
+    Write-Host "  To refresh plugin marketplaces:"
+    Write-Host "    claude plugin marketplace update"
+    Write-Host "  (auto-update per marketplace is opt-in -- toggle from /plugin in Claude Code)"
     Write-Host ""
     Write-Host "  Claude Code updates itself automatically."
     Write-Host ""
@@ -637,6 +785,8 @@ function Main {
     Install-Gemini
     Setup-ClaudeEnv
     Setup-GHAuth
+    Setup-GitIdentity
+    Setup-PluginMarketplaces
     Show-Summary
 }
 

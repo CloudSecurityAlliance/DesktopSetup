@@ -21,7 +21,21 @@
 
 set -euo pipefail
 
-SCRIPT_VERSION="2026.04111300"
+SCRIPT_VERSION="2026.04171300"
+
+# ── CSA plugin marketplaces ─────────────────────────────────────────
+# Plugin marketplaces to register with Claude Code. Each entry is an
+# ORG/REPO on GitHub. At install time, each is probed via `gh` for
+# accessibility; inaccessible ones (private org repos the user isn't a
+# member of) are silently skipped. To add a new marketplace, append to
+# this list and bump SCRIPT_VERSION.
+CSA_MARKETPLACES=(
+  "CloudSecurityAlliance-Internal/CINO-Plugins"
+  "CloudSecurityAlliance-Internal/CSA-Plugins"
+  "CloudSecurityAlliance-Internal/Research-Plugins"
+  "CloudSecurityAlliance-Internal/Training-Plugins"
+  "CloudSecurityAlliance/csa-plugins-official"
+)
 
 # ── Output helpers ──────────────────────────────────────────────────
 
@@ -255,6 +269,9 @@ preflight() {
   else
     echo "  CLAUDE_CODE_NO_FLICKER  set (enables flicker-free terminal renderer)"
   fi
+
+  # Plugin marketplaces
+  echo "  Plugin marketplaces  probe ${#CSA_MARKETPLACES[@]} CSA repos, add any your GitHub account can access"
 
   echo ""
 }
@@ -597,6 +614,48 @@ setup_claude_env() {
   fi
 }
 
+# ── Plugin marketplaces ─────────────────────────────────────────────
+# Register CSA plugin marketplaces with Claude Code, but only the ones
+# the authenticated GitHub account can actually see. Missing preconditions
+# (no claude, no gh, not authenticated) and inaccessible repos are silent —
+# a user who isn't in CSA-Internal just gets the public marketplace and
+# doesn't see any chatter about the internal ones.
+
+setup_plugin_marketplaces() {
+  has_command claude || return 0
+  has_command gh || return 0
+  gh auth status >/dev/null 2>&1 || return 0
+
+  # Snapshot already-registered marketplaces (single call).
+  # list format: "    Source: GitHub (ORG/REPO)"
+  local already_added
+  already_added="$(claude plugin marketplace list 2>/dev/null \
+    | sed -n 's/.*GitHub (\([^)]*\)).*/\1/p')"
+
+  local added=() failed=()
+  local repo
+  for repo in "${CSA_MARKETPLACES[@]}"; do
+    # Already registered, or not accessible to this account — silently skip.
+    grep -qxF "$repo" <<< "$already_added" && continue
+    gh api "repos/$repo" >/dev/null 2>&1 || continue
+
+    if claude plugin marketplace add "$repo" >/dev/null 2>&1; then
+      added+=("$repo")
+    else
+      failed+=("$repo")
+    fi
+  done
+
+  if [[ ${#added[@]} -gt 0 ]]; then
+    success "Registered Claude Code plugin marketplaces:"
+    printf '  + %s\n' "${added[@]}"
+  fi
+  if [[ ${#failed[@]} -gt 0 ]]; then
+    warn "Failed to register ${#failed[@]} marketplace(s):"
+    printf '  ! %s\n' "${failed[@]}"
+  fi
+}
+
 # ── Summary ─────────────────────────────────────────────────────────
 
 summary() {
@@ -657,6 +716,10 @@ summary() {
   echo "  To update npm-installed tools later:"
   echo "    npm update -g @openai/codex @google/gemini-cli"
   echo ""
+  echo "  To refresh plugin marketplaces:"
+  echo "    claude plugin marketplace update"
+  echo "  (auto-update per marketplace is opt-in — toggle from /plugin in Claude Code)"
+  echo ""
   echo "  Claude Code updates itself automatically."
   echo ""
   info "Learn Claude Code in your terminal:"
@@ -711,6 +774,7 @@ main() {
   setup_claude_env
   setup_gh_auth
   setup_git_identity
+  setup_plugin_marketplaces
   summary
 }
 
