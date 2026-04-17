@@ -27,8 +27,14 @@ SCRIPT_VERSION="2026.04171300"
 # Plugin marketplaces to register with Claude Code. Each entry is an
 # ORG/REPO on GitHub. At install time, each is probed via `gh` for
 # accessibility; inaccessible ones (private org repos the user isn't a
-# member of) are silently skipped. To add a new marketplace, append to
-# this list and bump SCRIPT_VERSION.
+# member of) are silently skipped.
+#
+# KEEP IN SYNC: This array is duplicated in
+#   scripts/windows-ai-tools.ps1   (installer, Windows)
+#   scripts/macos-update.sh        (updater, macOS)
+# All three files hard-code the same list. When adding or removing a
+# marketplace, update every file and bump each file's SCRIPT_VERSION /
+# $ScriptVersion — otherwise the installer and updater will drift.
 CSA_MARKETPLACES=(
   "CloudSecurityAlliance-Internal/CINO-Plugins"
   "CloudSecurityAlliance-Internal/CSA-Plugins"
