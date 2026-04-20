@@ -19,7 +19,7 @@
 
 $ErrorActionPreference = 'Stop'
 
-$ScriptVersion = "2026.0932215"
+$ScriptVersion = "2026.04201930"
 
 # ── Output helpers ──────────────────────────────────────────────────
 
@@ -143,6 +143,17 @@ function Show-Preflight {
         Write-Host "  Git ............... install via winget"
     }
 
+    # Long path support status
+    $lpReg = Get-ItemPropertyValue -Path 'HKLM:\SYSTEM\CurrentControlSet\Control\FileSystem' `
+                                   -Name 'LongPathsEnabled' -ErrorAction SilentlyContinue
+    $lpGit = $null
+    if (Has-Command git) { $lpGit = git config --global --get core.longpaths 2>$null }
+    if ($lpReg -eq 1 -and $lpGit -eq 'true') {
+        Write-Host "  Long paths ........ enabled (git + registry)"
+    } else {
+        Write-Host "  Long paths ........ enable (git config + UAC prompt for registry)"
+    }
+
     if (Has-Command gh) {
         $ghVer = Get-ToolVersion gh '--version'
         Write-Host "  GitHub CLI ........ installed ($ghVer)"
@@ -262,6 +273,67 @@ function Install-Git {
         if ($LASTEXITCODE -ne 0) { Abort "Failed to install Git." }
     }
     Refresh-Path
+}
+
+function Set-LongPathSupport {
+    # Two-part: user-scope Git config (no admin), then the HKLM registry flag
+    # (requires admin — elevated via a single Start-Process -Verb RunAs so the
+    # rest of the script stays in the user context where winget/npm/gh expect
+    # to run). If elevation is denied or blocked by policy, we warn and print
+    # the manual command rather than aborting.
+
+    # 1. Git core.longpaths (user scope)
+    if (Has-Command git) {
+        $currentGit = git config --global --get core.longpaths 2>$null
+        if ($currentGit -eq 'true') {
+            Write-Info "Git core.longpaths already enabled"
+        } else {
+            Write-Info "Enabling Git long-path support (core.longpaths=true)"
+            git config --global core.longpaths true
+        }
+    }
+
+    # 2. Windows LongPathsEnabled (machine scope)
+    $regPath = 'HKLM:\SYSTEM\CurrentControlSet\Control\FileSystem'
+    $regName = 'LongPathsEnabled'
+    $manualCmd = 'Set-ItemProperty -Path "HKLM:\SYSTEM\CurrentControlSet\Control\FileSystem" -Name LongPathsEnabled -Value 1 -Type DWord'
+
+    $current = Get-ItemPropertyValue -Path $regPath -Name $regName -ErrorAction SilentlyContinue
+    if ($current -eq 1) {
+        Write-Info "Windows LongPathsEnabled already set"
+        return
+    }
+
+    if ($env:NONINTERACTIVE -eq '1') {
+        Write-Warn "Windows LongPathsEnabled is not set (skipping UAC prompt in non-interactive mode)"
+        Write-Host "   To enable later, run in an elevated PowerShell:"
+        Write-Host "     $manualCmd"
+        return
+    }
+
+    Write-Info "Enabling Windows LongPathsEnabled (UAC prompt will appear)"
+    $elevatedCmd = $manualCmd
+    try {
+        Start-Process powershell -Verb RunAs `
+            -ArgumentList '-NoProfile', '-Command', $elevatedCmd `
+            -Wait -ErrorAction Stop | Out-Null
+    } catch {
+        Write-Warn "Could not elevate to set LongPathsEnabled ($($_.Exception.Message))"
+        Write-Host "   To enable later, run in an elevated PowerShell:"
+        Write-Host "     $manualCmd"
+        return
+    }
+
+    # Verify the change landed (elevated child runs in its own process, so we
+    # re-read the registry from the non-admin parent to confirm).
+    $after = Get-ItemPropertyValue -Path $regPath -Name $regName -ErrorAction SilentlyContinue
+    if ($after -eq 1) {
+        Write-Success "Windows LongPathsEnabled set to 1"
+    } else {
+        Write-Warn "LongPathsEnabled was not applied"
+        Write-Host "   To enable later, run in an elevated PowerShell:"
+        Write-Host "     $manualCmd"
+    }
 }
 
 function Install-GH {
@@ -433,6 +505,7 @@ function Main {
 
     Write-Host ""
     Install-Git
+    Set-LongPathSupport
     Install-GH
     Install-Node
     Install-Core
