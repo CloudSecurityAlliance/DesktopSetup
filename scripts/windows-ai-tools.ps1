@@ -5,19 +5,20 @@
 #   2. GitHub CLI (gh, via winget) + authentication
 #   3. Python (via winget)
 #   4. Node.js LTS (via winget)
-#   5. 1Password CLI (via winget)
-#   6. Claude Desktop (via winget, auto-updates)
-#   7. ChatGPT Desktop (via winget, auto-updates)
-#   8. Claude Code (native installer, auto-updates)
-#   9. OpenAI Codex CLI (via npm)
-#  10. Google Gemini CLI (via npm)
+#   5. 1Password (via winget, GUI app — needed for biometric CLI unlock)
+#   6. 1Password CLI (via winget)
+#   7. Claude Desktop (via winget, auto-updates)
+#   8. ChatGPT Desktop (via winget, auto-updates)
+#   9. Claude Code (native installer, auto-updates)
+#  10. OpenAI Codex CLI (via npm)
+#  11. Google Gemini CLI (via npm)
 #
 # Usage:
 #   irm https://raw.githubusercontent.com/CloudSecurityAlliance/DesktopSetup/HEAD/scripts/windows-ai-tools.ps1 | iex
 
 $ErrorActionPreference = 'Stop'
 
-$ScriptVersion = "2026.04171300"
+$ScriptVersion = "2026.04201900"
 
 # ── CSA plugin marketplaces ─────────────────────────────────────────
 # Plugin marketplaces to register with Claude Code. Each entry is an
@@ -228,6 +229,15 @@ function Show-Preflight {
         Write-Host "  Node.js ........... installed ($nodeVer)"
     } else {
         Write-Host "  Node.js ........... install via winget"
+    }
+
+    # 1Password (GUI app — needed for biometric CLI unlock)
+    # --exact: avoid matching AgileBits.1Password.CLI
+    $onePwGui = winget list --exact --id AgileBits.1Password --accept-source-agreements 2>$null
+    if ($onePwGui -and ($onePwGui | Select-String 'AgileBits.1Password')) {
+        Write-Host "  1Password ......... installed (winget)"
+    } else {
+        Write-Host "  1Password ......... install via winget"
     }
 
     # 1Password CLI
@@ -496,6 +506,20 @@ function Install-Node {
     Refresh-Path
 }
 
+function Install-1Password {
+    # --exact: avoid matching AgileBits.1Password.CLI
+    $wingetCheck = winget list --exact --id AgileBits.1Password --accept-source-agreements 2>$null
+    if ($wingetCheck -and ($wingetCheck | Select-String 'AgileBits.1Password')) {
+        Write-Info "1Password already installed; skipping"
+        return
+    }
+
+    Write-Info "Installing 1Password via winget"
+    winget install --exact --id AgileBits.1Password --accept-package-agreements --accept-source-agreements
+    if ($LASTEXITCODE -ne 0) { Write-Warn "Failed to install 1Password" }
+    Refresh-Path
+}
+
 function Install-1PasswordCLI {
     $wingetCheck = winget list --id AgileBits.1Password.CLI --accept-source-agreements 2>$null
     if ($wingetCheck -and ($wingetCheck | Select-String 'AgileBits.1Password.CLI')) {
@@ -700,6 +724,10 @@ function Show-Summary {
         Write-Host "  Node.js ........... $nodeVer"
         Write-Host "  npm ............... $npmVer"
     }
+    $onePwGuiInstalled = winget list --exact --id AgileBits.1Password --accept-source-agreements 2>$null
+    if ($onePwGuiInstalled -and ($onePwGuiInstalled | Select-String 'AgileBits.1Password')) {
+        Write-Host "  1Password ......... installed"
+    }
     if (Has-Command op) {
         $opVer = Get-ToolVersion op '--version'
         Write-Host "  1Password CLI ..... $opVer"
@@ -784,6 +812,7 @@ function Main {
     Install-GH
     Install-Python
     Install-Node
+    Install-1Password
     Install-1PasswordCLI
     Install-ClaudeDesktop
     Install-ChatGPT

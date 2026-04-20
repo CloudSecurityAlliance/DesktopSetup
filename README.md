@@ -4,7 +4,7 @@ Automated setup for Cloud Security Alliance development environments on **macOS*
 
 ## Quick Start — AI tools
 
-Installs Claude Desktop, ChatGPT Desktop, Claude Code, Codex CLI, and Gemini CLI. The install scripts walk you through GitHub login (`gh auth login`) and configure your Git identity from your GitHub profile. They also detect tools installed via the wrong method (e.g., Claude Code via Homebrew or npm) and migrate them to the correct installer.
+Installs Claude Desktop, ChatGPT Desktop, Claude Code, Codex CLI, Gemini CLI, plus 1Password (GUI + CLI) for secret management in AI workflows. The install scripts walk you through GitHub login (`gh auth login`) and configure your Git identity from your GitHub profile. They also detect tools installed via the wrong method (e.g., Claude Code via Homebrew or npm) and migrate them to the correct installer.
 
 ### macOS
 

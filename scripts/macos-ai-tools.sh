@@ -9,19 +9,20 @@
 #   4. Python (via Homebrew, provides python3/pip3)
 #   5. Git (via Homebrew, latest version)
 #   6. GitHub CLI (gh) + authentication
-#   7. 1Password CLI (via Homebrew)
-#   8. Claude Desktop (via Homebrew cask, auto-updates)
-#   9. ChatGPT Desktop (via Homebrew cask, auto-updates)
-#  10. Claude Code (native installer, auto-updates)
-#  11. OpenAI Codex CLI (via npm)
-#  12. Google Gemini CLI (via npm)
+#   7. 1Password (via Homebrew cask, GUI app — needed for biometric CLI unlock)
+#   8. 1Password CLI (via Homebrew)
+#   9. Claude Desktop (via Homebrew cask, auto-updates)
+#  10. ChatGPT Desktop (via Homebrew cask, auto-updates)
+#  11. Claude Code (native installer, auto-updates)
+#  12. OpenAI Codex CLI (via npm)
+#  13. Google Gemini CLI (via npm)
 #
 # Usage:
 #   bash -c "$(curl -fsSL https://raw.githubusercontent.com/CloudSecurityAlliance/DesktopSetup/HEAD/scripts/macos-ai-tools.sh)"
 
 set -euo pipefail
 
-SCRIPT_VERSION="2026.04171300"
+SCRIPT_VERSION="2026.04201900"
 
 # ── CSA plugin marketplaces ─────────────────────────────────────────
 # Plugin marketplaces to register with Claude Code. Each entry is an
@@ -219,6 +220,15 @@ preflight() {
     echo "  GitHub CLI ........ installed ($(get_version gh --version))"
   else
     echo "  GitHub CLI ........ install via Homebrew"
+  fi
+
+  # 1Password (GUI app — needed for biometric CLI unlock)
+  if brew list --cask 1password >/dev/null 2>&1; then
+    echo "  1Password ......... installed (Homebrew cask)"
+  elif [[ -d "/Applications/1Password.app" ]]; then
+    echo "  1Password ......... installed (non-Homebrew)"
+  else
+    echo "  1Password ......... install via Homebrew cask"
   fi
 
   # 1Password CLI
@@ -422,6 +432,23 @@ setup_gh_auth() {
   if confirm "Run 'gh auth login' now?"; then
     gh auth login --git-protocol https || warn "gh auth login failed; you can run it manually later"
   fi
+}
+
+install_1password() {
+  ensure_brew_in_path
+
+  if brew list --cask 1password >/dev/null 2>&1; then
+    info "1Password already installed; skipping"
+    return 0
+  fi
+
+  if [[ -d "/Applications/1Password.app" ]]; then
+    info "1Password already installed (non-Homebrew); skipping"
+    return 0
+  fi
+
+  info "Installing 1Password"
+  brew install --cask 1password || warn "Failed to install 1Password"
 }
 
 install_1password_cli() {
@@ -687,6 +714,9 @@ summary() {
   if has_command gh; then
     echo "  GitHub CLI ........ $(get_version gh --version)"
   fi
+  if brew list --cask 1password >/dev/null 2>&1 || [[ -d "/Applications/1Password.app" ]]; then
+    echo "  1Password ......... installed"
+  fi
   if has_command op; then
     echo "  1Password CLI ..... $(get_version op --version)"
   fi
@@ -772,6 +802,7 @@ main() {
   install_python
   install_git
   install_gh
+  install_1password
   install_1password_cli
   install_claude_desktop
   install_chatgpt
