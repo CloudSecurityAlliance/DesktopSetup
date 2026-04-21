@@ -22,7 +22,7 @@
 
 set -euo pipefail
 
-SCRIPT_VERSION="2026.04202000"
+SCRIPT_VERSION="2026.04211600"
 
 # ── CSA plugin marketplaces ─────────────────────────────────────────
 # Plugin marketplaces to register with Claude Code. Each entry is an
@@ -803,6 +803,8 @@ main() {
   install_python
   install_git
   install_gh
+  setup_gh_auth
+  setup_git_identity
   install_1password
   install_1password_cli
   install_claude_desktop
@@ -811,8 +813,6 @@ main() {
   install_codex
   install_gemini
   setup_claude_env
-  setup_gh_auth
-  setup_git_identity
   setup_plugin_marketplaces
   summary
 }
