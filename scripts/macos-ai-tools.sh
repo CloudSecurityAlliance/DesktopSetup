@@ -22,7 +22,7 @@
 
 set -euo pipefail
 
-SCRIPT_VERSION="2026.04211600"
+SCRIPT_VERSION="2026.04211800"
 
 # ── CSA plugin marketplaces ─────────────────────────────────────────
 # Plugin marketplaces to register with Claude Code. Each entry is an
@@ -430,7 +430,10 @@ setup_gh_auth() {
   echo ""
   info "GitHub CLI is installed but not authenticated."
   if confirm "Run 'gh auth login' now?"; then
-    gh auth login --git-protocol https || warn "gh auth login failed; you can run it manually later"
+    # --scopes user:email: lets setup_git_identity read the user's primary
+    # email via `gh api user/emails` when it's not public on the user
+    # profile. Without it that endpoint returns HTTP 404.
+    gh auth login --git-protocol https --scopes user:email || warn "gh auth login failed; you can run it manually later"
   fi
 }
 

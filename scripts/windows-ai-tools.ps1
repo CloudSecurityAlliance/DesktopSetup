@@ -18,7 +18,7 @@
 
 $ErrorActionPreference = 'Stop'
 
-$ScriptVersion = "2026.04211700"
+$ScriptVersion = "2026.04211800"
 
 # ── CSA plugin marketplaces ─────────────────────────────────────────
 # Plugin marketplaces to register with Claude Code. Each entry is an
@@ -490,7 +490,10 @@ function Setup-GHAuth {
     Write-Host ""
     Write-Info "GitHub CLI is installed but not authenticated."
     if (Confirm-Step "Run 'gh auth login' now?") {
-        gh auth login --git-protocol https
+        # --scopes user:email: lets Setup-GitIdentity read the user's
+        # primary email via `gh api user/emails` when it's not public on
+        # the user profile. Without it that endpoint returns HTTP 404.
+        gh auth login --git-protocol https --scopes user:email
         if ($LASTEXITCODE -ne 0) {
             Write-Warn "gh auth login failed; you can run it manually later"
         }
