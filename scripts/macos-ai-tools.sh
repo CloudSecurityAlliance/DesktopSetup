@@ -22,7 +22,7 @@
 
 set -euo pipefail
 
-SCRIPT_VERSION="2026.04211900"
+SCRIPT_VERSION="2026.04212115"
 
 # ── CSA plugin marketplaces ─────────────────────────────────────────
 # Plugin marketplaces to register with Claude Code. Each entry is an
@@ -687,17 +687,21 @@ setup_plugin_marketplaces() {
   already_added="$(claude plugin marketplace list 2>/dev/null \
     | sed -n 's/.*GitHub (\([^)]*\)).*/\1/p')"
 
-  local added=() failed=()
-  local repo
+  local added=() failed=() failed_errs=()
+  local repo add_err
   for repo in "${CSA_MARKETPLACES[@]}"; do
     # Already registered, or not accessible to this account — silently skip.
     grep -qxF "$repo" <<< "$already_added" && continue
     gh api "repos/$repo" >/dev/null 2>&1 || continue
 
-    if claude plugin marketplace add "$repo" >/dev/null 2>&1; then
+    # Capture stderr (into add_err) so a real failure shows its reason;
+    # discard stdout. `2>&1 >/dev/null` inside $(...) redirects stderr to
+    # the captured stdout stream, then sends original stdout to /dev/null.
+    if add_err="$(claude plugin marketplace add "$repo" 2>&1 >/dev/null)"; then
       added+=("$repo")
     else
       failed+=("$repo")
+      failed_errs+=("${add_err:-<no stderr output>}")
     fi
   done
 
@@ -707,7 +711,10 @@ setup_plugin_marketplaces() {
   fi
   if [[ ${#failed[@]} -gt 0 ]]; then
     warn "Failed to register ${#failed[@]} marketplace(s):"
-    printf '  ! %s\n' "${failed[@]}"
+    local i
+    for i in "${!failed[@]}"; do
+      printf '  ! %s\n      %s\n' "${failed[$i]}" "${failed_errs[$i]}"
+    done
   fi
 }
 
