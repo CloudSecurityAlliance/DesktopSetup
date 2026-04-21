@@ -18,7 +18,7 @@
 
 $ErrorActionPreference = 'Stop'
 
-$ScriptVersion = "2026.04211800"
+$ScriptVersion = "2026.04211900"
 
 # ── CSA plugin marketplaces ─────────────────────────────────────────
 # Plugin marketplaces to register with Claude Code. Each entry is an
@@ -547,7 +547,13 @@ function Setup-GitIdentity {
     if ($env:NONINTERACTIVE -eq '1') {
         if (-not $currentName  -and $setName)  { git config --global user.name  $setName }
         if (-not $currentEmail -and $setEmail) { git config --global user.email $setEmail }
-        Write-Info "Git identity configured from GitHub profile"
+        if ($setName -and $setEmail) {
+            Write-Info "Git identity configured from GitHub profile"
+        } else {
+            Write-Warn "Git identity partially configured from GitHub profile. Still missing:"
+            if (-not $setName)  { Write-Host "  user.name  (run: git config --global user.name `"Your Name`")" }
+            if (-not $setEmail) { Write-Host "  user.email (run: git config --global user.email `"you@example.com`")" }
+        }
         return
     }
 
@@ -564,6 +570,18 @@ function Setup-GitIdentity {
         if (-not $currentEmail -and $setEmail) {
             git config --global user.email $setEmail
             Write-Success "Set user.email to: $setEmail"
+        }
+
+        # Catch partial success: GitHub didn't expose everything we needed
+        # (common cause: existing gh token lacks the user:email scope, so
+        # the email fallback returns 404 and we have no email to set).
+        if (-not $setName -or -not $setEmail) {
+            Write-Warn "GitHub didn't expose everything. Set manually:"
+            if (-not $setName)  { Write-Host "  git config --global user.name `"Your Name`"" }
+            if (-not $setEmail) {
+                Write-Host "  git config --global user.email `"you@example.com`""
+                Write-Host "  (or run 'gh auth refresh --scopes user:email' and re-run this script to pull it from GitHub)"
+            }
         }
     } else {
         Write-Warn "Skipped. Set manually with:"

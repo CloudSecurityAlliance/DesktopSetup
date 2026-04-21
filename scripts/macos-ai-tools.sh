@@ -22,7 +22,7 @@
 
 set -euo pipefail
 
-SCRIPT_VERSION="2026.04211800"
+SCRIPT_VERSION="2026.04211900"
 
 # ── CSA plugin marketplaces ─────────────────────────────────────────
 # Plugin marketplaces to register with Claude Code. Each entry is an
@@ -535,7 +535,13 @@ setup_git_identity() {
     # In non-interactive mode, set what we can silently
     [[ -z "$current_name" && -n "$set_name" ]]   && git config --global user.name "$set_name"
     [[ -z "$current_email" && -n "$set_email" ]] && git config --global user.email "$set_email"
-    info "Git identity configured from GitHub profile"
+    if [[ -n "$set_name" && -n "$set_email" ]]; then
+      info "Git identity configured from GitHub profile"
+    else
+      warn "Git identity partially configured from GitHub profile. Still missing:"
+      [[ -z "$set_name" ]]  && echo "  user.name  (run: git config --global user.name \"Your Name\")"
+      [[ -z "$set_email" ]] && echo "  user.email (run: git config --global user.email \"you@example.com\")"
+    fi
     return 0
   fi
 
@@ -551,6 +557,18 @@ setup_git_identity() {
   if confirm "Set Git identity from your GitHub profile?"; then
     [[ -z "$current_name" && -n "$set_name" ]]   && git config --global user.name "$set_name"   && success "Set user.name to: $set_name"
     [[ -z "$current_email" && -n "$set_email" ]] && git config --global user.email "$set_email" && success "Set user.email to: $set_email"
+
+    # Catch partial success: GitHub didn't expose everything we needed
+    # (common cause: existing gh token lacks the user:email scope, so the
+    # email fallback returns 404 and we have no email to set).
+    if [[ -z "$set_name" || -z "$set_email" ]]; then
+      warn "GitHub didn't expose everything. Set manually:"
+      [[ -z "$set_name" ]] && echo "  git config --global user.name \"Your Name\""
+      if [[ -z "$set_email" ]]; then
+        echo "  git config --global user.email \"you@example.com\""
+        echo "  (or run 'gh auth refresh --scopes user:email' and re-run this script to pull it from GitHub)"
+      fi
+    fi
   else
     warn "Skipped. Set manually with:"
     [[ -z "$current_name" ]]  && echo "  git config --global user.name \"Your Name\""
