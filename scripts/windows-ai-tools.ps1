@@ -18,7 +18,7 @@
 
 $ErrorActionPreference = 'Stop'
 
-$ScriptVersion = "2026.04211500"
+$ScriptVersion = "2026.04211700"
 
 # ── CSA plugin marketplaces ─────────────────────────────────────────
 # Plugin marketplaces to register with Claude Code. Each entry is an
@@ -93,6 +93,22 @@ function Invoke-NativeQuiet {
         return $LASTEXITCODE
     } catch {
         return 1
+    }
+}
+
+# Run a native command, swallow stderr, return stdout on success or $null
+# on failure. Same NativeCommandError shield as Invoke-NativeQuiet, but
+# preserves stdout so callers can capture values (e.g. `gh api user --jq`).
+# Note: `2>$null` alone does NOT prevent NativeCommandError promotion in
+# Windows PowerShell 5.1 — the try/catch is required.
+function Invoke-NativeOutput {
+    param([scriptblock]$Call)
+    try {
+        $result = & $Call 2>$null
+        if ($LASTEXITCODE -ne 0) { return $null }
+        return $result
+    } catch {
+        return $null
     }
 }
 
@@ -504,12 +520,14 @@ function Setup-GitIdentity {
     }
 
     # Fetch name and email from GitHub profile
-    $ghName  = gh api user --jq '.name // empty' 2>$null
-    $ghEmail = gh api user --jq '.email // empty' 2>$null
+    $ghName  = Invoke-NativeOutput { gh api user --jq '.name // empty' }
+    $ghEmail = Invoke-NativeOutput { gh api user --jq '.email // empty' }
 
-    # If email is private/null, try the emails endpoint
+    # If email is private/null, try the emails endpoint. Requires user:email
+    # scope on the gh token -- returns 404 otherwise, which is fine; we just
+    # fall through without an email and the user can set it manually.
     if (-not $ghEmail) {
-        $ghEmail = gh api user/emails --jq '[.[] | select(.primary==true)][0].email // empty' 2>$null
+        $ghEmail = Invoke-NativeOutput { gh api user/emails --jq '[.[] | select(.primary==true)][0].email // empty' }
     }
 
     # Use GitHub values only for fields not already set
