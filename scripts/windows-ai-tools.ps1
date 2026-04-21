@@ -18,7 +18,7 @@
 
 $ErrorActionPreference = 'Stop'
 
-$ScriptVersion = "2026.04202000"
+$ScriptVersion = "2026.04211500"
 
 # ── CSA plugin marketplaces ─────────────────────────────────────────
 # Plugin marketplaces to register with Claude Code. Each entry is an
@@ -78,6 +78,22 @@ function Refresh-Path {
     $machinePath = [System.Environment]::GetEnvironmentVariable("PATH", "Machine")
     $userPath = [System.Environment]::GetEnvironmentVariable("PATH", "User")
     $env:PATH = "$machinePath;$userPath"
+}
+
+# Run a native command, swallow stdout+stderr, return its exit code.
+# Why: under $ErrorActionPreference='Stop', a native command that exits
+# non-zero AND writes to stderr (e.g. `gh auth status` when logged out)
+# is promoted to a terminating NativeCommandError before $LASTEXITCODE
+# can be checked. This wrapper absorbs the promotion so callers can
+# branch on the exit code as intended.
+function Invoke-NativeQuiet {
+    param([scriptblock]$Call)
+    try {
+        & $Call 2>&1 | Out-Null
+        return $LASTEXITCODE
+    } catch {
+        return 1
+    }
 }
 
 # ── Preconditions ───────────────────────────────────────────────────
@@ -445,8 +461,7 @@ function Install-GH {
 function Setup-GHAuth {
     if (-not (Has-Command gh)) { return }
 
-    $authStatus = gh auth status 2>&1
-    if ($LASTEXITCODE -eq 0) {
+    if ((Invoke-NativeQuiet { gh auth status }) -eq 0) {
         Write-Info "GitHub CLI already authenticated"
         return
     }
@@ -478,8 +493,7 @@ function Setup-GitIdentity {
     # Need gh authenticated to pull profile info
     $ghAuthed = $false
     if (Has-Command gh) {
-        gh auth status 2>&1 | Out-Null
-        if ($LASTEXITCODE -eq 0) { $ghAuthed = $true }
+        if ((Invoke-NativeQuiet { gh auth status }) -eq 0) { $ghAuthed = $true }
     }
 
     if (-not $ghAuthed) {
@@ -730,20 +744,6 @@ function Setup-PluginMarketplaces {
     if (-not (Has-Command claude)) { return }
     if (-not (Has-Command gh))     { return }
 
-    # Native-command calls below use Invoke-NativeQuiet so that PowerShell's
-    # NativeCommandError promotion (triggered by stderr writes under
-    # $ErrorActionPreference='Stop') doesn't defeat the silent-skip contract.
-    # Returns the exit code; swallows both stderr and any terminating exception.
-    function Invoke-NativeQuiet {
-        param([scriptblock]$Call)
-        try {
-            & $Call 2>&1 | Out-Null
-            return $LASTEXITCODE
-        } catch {
-            return 1
-        }
-    }
-
     if ((Invoke-NativeQuiet { gh auth status }) -ne 0) { return }
 
     # Snapshot already-registered marketplaces (single call).
@@ -838,8 +838,7 @@ function Show-Summary {
     Write-Host ""
     Write-Info "Next steps:"
     if (Has-Command gh) {
-        $authCheck = gh auth status 2>&1
-        if ($LASTEXITCODE -ne 0) {
+        if ((Invoke-NativeQuiet { gh auth status }) -ne 0) {
             Write-Host "  - Run 'gh auth login --git-protocol https' to authenticate with GitHub"
         }
     }
@@ -893,6 +892,8 @@ function Main {
     Install-Git
     Set-LongPathSupport
     Install-GH
+    Setup-GHAuth
+    Setup-GitIdentity
     Install-Python
     Install-Node
     Install-1Password
@@ -903,8 +904,6 @@ function Main {
     Install-Codex
     Install-Gemini
     Setup-ClaudeEnv
-    Setup-GHAuth
-    Setup-GitIdentity
     Setup-PluginMarketplaces
     Show-Summary
 }
