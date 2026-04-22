@@ -45,6 +45,32 @@ CSA_MARKETPLACES=(
   "CloudSecurityAlliance/csa-plugins-official"
 )
 
+# Marketplace name → GitHub repo. Maps every marketplace referenced by
+# scripts/csa-plugins.txt and scripts/csa-plugins-internal.txt. Used by
+# install_plugins() to register missing marketplaces and (for CSA
+# marketplaces) gh-probe access.
+#
+# Keys prefixed with `csa-` or matching `accounting-plugins` are
+# treated as CSA-internal: gh-probed before register, silent-skip on
+# access denial. All other keys are public: register unconditionally.
+#
+# KEEP IN SYNC: duplicated as PLUGIN_MARKETPLACE_REPOS in
+#   scripts/macos-update.sh
+# and as $PluginMarketplaceRepos in
+#   scripts/windows-ai-tools.ps1
+declare -A PLUGIN_MARKETPLACE_REPOS=(
+  # Public
+  [claude-plugins-official]="anthropics/claude-plugins-official"
+  [anthropic-agent-skills]="anthropics/skills"
+  # CSA-internal
+  [accounting-plugins]="CloudSecurityAlliance-Internal/Accounting-Plugins"
+  [csa-cino-plugins]="CloudSecurityAlliance-Internal/CINO-Plugins"
+  [csa-plugins]="CloudSecurityAlliance-Internal/CSA-Plugins"
+  [csa-research-plugins]="CloudSecurityAlliance-Internal/Research-Plugins"
+  [csa-training-plugins]="CloudSecurityAlliance-Internal/Training-Plugins"
+  [csa-plugins-official]="CloudSecurityAlliance/csa-plugins-official"
+)
+
 # ── Output helpers ──────────────────────────────────────────────────
 
 if [[ -t 1 ]]; then
