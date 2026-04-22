@@ -716,6 +716,135 @@ setup_plugin_marketplaces() {
   fi
 }
 
+# ── Plugin install ──────────────────────────────────────────────────
+# Fetch the public and internal plugin list files from HEAD, register
+# any missing marketplaces (CSA marketplaces are gh-probed first),
+# then install plugins that aren't yet installed. Silent-by-default:
+# already-installed entries and inaccessible CSA marketplaces produce
+# no output. Only actual installs and install errors print.
+
+PLUGIN_LIST_URL_PUBLIC="https://raw.githubusercontent.com/CloudSecurityAlliance/DesktopSetup/HEAD/scripts/csa-plugins.txt"
+PLUGIN_LIST_URL_INTERNAL="https://raw.githubusercontent.com/CloudSecurityAlliance/DesktopSetup/HEAD/scripts/csa-plugins-internal.txt"
+
+# Return "csa" if the marketplace should be gh-probed, "public" otherwise.
+plugin_marketplace_kind() {
+  case "$1" in
+    claude-plugins-official|anthropic-agent-skills) echo public ;;
+    *) echo csa ;;
+  esac
+}
+
+# Read a plugin list (via stdin), strip blanks/comments, emit one
+# <plugin>@<marketplace> entry per line.
+plugin_list_entries() {
+  grep -v -E '^\s*(#|$)'
+}
+
+install_plugins() {
+  has_command claude || return 0
+  has_command curl || return 0
+
+  local public_list internal_list
+  public_list="$(curl -fsSL -H 'Cache-Control: no-cache' "$PLUGIN_LIST_URL_PUBLIC" 2>/dev/null || true)"
+  internal_list="$(curl -fsSL -H 'Cache-Control: no-cache' "$PLUGIN_LIST_URL_INTERNAL" 2>/dev/null || true)"
+
+  if [[ -z "$public_list" && -z "$internal_list" ]]; then
+    return 0
+  fi
+
+  # Snapshot already-registered marketplaces and already-installed plugins.
+  local registered_repos installed_plugins
+  registered_repos="$(claude plugin marketplace list 2>/dev/null \
+    | sed -n 's/.*GitHub (\([^)]*\)).*/\1/p')"
+  installed_plugins="$(claude plugin list 2>/dev/null \
+    | sed -n 's/^\s*❯\s*\(.*\)$/\1/p')"
+
+  local gh_authed=0
+  if has_command gh && gh auth status >/dev/null 2>&1; then gh_authed=1; fi
+
+  local added=() installed=() failed=() failed_errs=()
+  local add_err inst_err
+
+  # Track which marketplaces we've processed so we don't re-probe.
+  declare -A seen_markets=()
+  declare -A market_usable=()   # [name]=1 if we should install from it
+
+  # Pass 1: ensure each referenced marketplace is registered.
+  local line name market repo kind
+  while IFS= read -r line; do
+    [[ -z "$line" ]] && continue
+    name="${line%@*}"
+    market="${line#*@}"
+
+    if [[ -n "${seen_markets[$market]:-}" ]]; then continue; fi
+    seen_markets[$market]=1
+
+    repo="${PLUGIN_MARKETPLACE_REPOS[$market]:-}"
+    if [[ -z "$repo" ]]; then
+      # Unknown marketplace — not in our map. Skip silently; this
+      # shouldn't happen if list files are kept in sync with the map.
+      continue
+    fi
+
+    kind="$(plugin_marketplace_kind "$market")"
+
+    # Already registered — mark as usable, move on.
+    if grep -qxF "$repo" <<< "$registered_repos"; then
+      market_usable[$market]=1
+      continue
+    fi
+
+    # For CSA marketplaces: require gh + authed + accessible.
+    if [[ "$kind" == csa ]]; then
+      [[ $gh_authed -eq 1 ]] || continue
+      gh api "repos/$repo" >/dev/null 2>&1 || continue
+    fi
+
+    # Register the marketplace.
+    if add_err="$(claude plugin marketplace add "$repo" 2>&1 >/dev/null)"; then
+      added+=("$repo")
+      market_usable[$market]=1
+    else
+      failed+=("marketplace $repo")
+      failed_errs+=("${add_err:-<no stderr output>}")
+    fi
+  done < <(printf '%s\n%s\n' "$public_list" "$internal_list" | plugin_list_entries)
+
+  # Pass 2: install each plugin whose marketplace is usable and that
+  # isn't already installed.
+  while IFS= read -r line; do
+    [[ -z "$line" ]] && continue
+    name="${line%@*}"
+    market="${line#*@}"
+
+    [[ -n "${market_usable[$market]:-}" ]] || continue
+    grep -qxF "${name}@${market}" <<< "$installed_plugins" && continue
+
+    if inst_err="$(claude plugin install "${name}@${market}" 2>&1 >/dev/null)"; then
+      installed+=("${name}@${market}")
+    else
+      failed+=("plugin ${name}@${market}")
+      failed_errs+=("${inst_err:-<no stderr output>}")
+    fi
+  done < <(printf '%s\n%s\n' "$public_list" "$internal_list" | plugin_list_entries)
+
+  if [[ ${#added[@]} -gt 0 ]]; then
+    success "Registered plugin marketplaces:"
+    printf '  + %s\n' "${added[@]}"
+  fi
+  if [[ ${#installed[@]} -gt 0 ]]; then
+    success "Installed plugins:"
+    printf '  + %s\n' "${installed[@]}"
+  fi
+  if [[ ${#failed[@]} -gt 0 ]]; then
+    warn "Failed on ${#failed[@]} item(s):"
+    local i
+    for i in "${!failed[@]}"; do
+      printf '  ! %s\n      %s\n' "${failed[$i]}" "${failed_errs[$i]}"
+    done
+  fi
+}
+
 # ── Summary ─────────────────────────────────────────────────────────
 
 summary() {
