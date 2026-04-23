@@ -22,7 +22,7 @@
 
 set -euo pipefail
 
-SCRIPT_VERSION="2026.04210000"
+SCRIPT_VERSION="2026.04231530"
 
 # ── CSA plugin marketplaces ─────────────────────────────────────────
 # Plugin marketplaces to register with Claude Code. Each entry is an
@@ -315,6 +315,7 @@ preflight() {
 
   # Plugin marketplaces
   echo "  Plugin marketplaces  probe ${#CSA_MARKETPLACES[@]} CSA repos, add any your GitHub account can access"
+  echo "  Plugins              install defaults from csa-plugins.txt (+ csa-plugins-internal.txt if accessible)"
 
   echo ""
 }
@@ -975,6 +976,7 @@ main() {
   setup_gh_auth
   setup_git_identity
   setup_plugin_marketplaces
+  install_plugins
   summary
 }
 
