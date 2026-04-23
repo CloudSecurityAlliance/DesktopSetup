@@ -18,7 +18,7 @@
 
 $ErrorActionPreference = 'Stop'
 
-$ScriptVersion = "2026.04202000"
+$ScriptVersion = "2026.04231540"
 
 # ── CSA plugin marketplaces ─────────────────────────────────────────
 # Plugin marketplaces to register with Claude Code. Each entry is an
@@ -40,6 +40,23 @@ $CSA_MARKETPLACES = @(
     "CloudSecurityAlliance-Internal/Training-Plugins"
     "CloudSecurityAlliance/csa-plugins-official"
 )
+
+# Marketplace name -> GitHub repo. See the matching block in
+# scripts/macos-ai-tools.sh for the full rationale.
+#
+# KEEP IN SYNC: duplicated as PLUGIN_MARKETPLACE_REPOS in
+#   scripts/macos-ai-tools.sh
+#   scripts/macos-update.sh
+$PluginMarketplaceRepos = @{
+    'claude-plugins-official'  = 'anthropics/claude-plugins-official'
+    'anthropic-agent-skills'   = 'anthropics/skills'
+    'accounting-plugins'       = 'CloudSecurityAlliance-Internal/Accounting-Plugins'
+    'csa-cino-plugins'         = 'CloudSecurityAlliance-Internal/CINO-Plugins'
+    'csa-plugins'              = 'CloudSecurityAlliance-Internal/CSA-Plugins'
+    'csa-research-plugins'     = 'CloudSecurityAlliance-Internal/Research-Plugins'
+    'csa-training-plugins'     = 'CloudSecurityAlliance-Internal/Training-Plugins'
+    'csa-plugins-official'     = 'CloudSecurityAlliance/csa-plugins-official'
+}
 
 # ── Output helpers ──────────────────────────────────────────────────
 
@@ -314,6 +331,7 @@ function Show-Preflight {
 
     # Plugin marketplaces
     Write-Host "  Plugin marketplaces  probe $($CSA_MARKETPLACES.Count) CSA repos, add any your GitHub account can access"
+    Write-Host "  Plugins              install defaults from csa-plugins.txt (+ csa-plugins-internal.txt if accessible)"
 
     Write-Host ""
 }
@@ -744,6 +762,24 @@ function Setup-PluginMarketplaces {
         }
     }
 
+    # Run a native command, shield against NativeCommandError, and return both
+    # the merged stdout+stderr output (as a trimmed string) and the exit code.
+    # Used when a caller needs to surface the command's error text on failure
+    # (e.g. `claude plugin marketplace add` schema-validation errors).
+    #
+    # NOTE: this helper is also defined on the fix/marketplace-add-stderr
+    # branch (PR #11). If both branches land, the rebase merge conflict
+    # resolution is "take either copy — they're identical".
+    function Invoke-NativeCapture {
+        param([scriptblock]$Call)
+        try {
+            $output = (& $Call 2>&1 | Out-String).Trim()
+            return [pscustomobject]@{ ExitCode = $LASTEXITCODE; Output = $output }
+        } catch {
+            return [pscustomobject]@{ ExitCode = 1; Output = $_.Exception.Message }
+        }
+    }
+
     if ((Invoke-NativeQuiet { gh auth status }) -ne 0) { return }
 
     # Snapshot already-registered marketplaces (single call).
@@ -778,6 +814,150 @@ function Setup-PluginMarketplaces {
     if ($failed.Count -gt 0) {
         Write-Warn "Failed to register $($failed.Count) marketplace(s):"
         $failed | ForEach-Object { Write-Host "  ! $_" }
+    }
+}
+
+# ── Plugin install ──────────────────────────────────────────────────
+# Fetch the public and internal plugin list files from HEAD, register
+# any missing marketplaces (CSA ones are gh-probed first), then
+# install plugins that aren't yet installed. Silent on skip, loud on
+# actual install or error. Mirrors install_plugins() in the bash
+# scripts.
+
+$PluginListUrlPublic   = 'https://raw.githubusercontent.com/CloudSecurityAlliance/DesktopSetup/HEAD/scripts/csa-plugins.txt'
+$PluginListUrlInternal = 'https://raw.githubusercontent.com/CloudSecurityAlliance/DesktopSetup/HEAD/scripts/csa-plugins-internal.txt'
+
+function Get-PluginMarketplaceKind {
+    param([string]$Name)
+    if ($Name -eq 'claude-plugins-official' -or $Name -eq 'anthropic-agent-skills') {
+        return 'public'
+    }
+    return 'csa'
+}
+
+function Get-PluginListEntries {
+    param([string]$Text)
+    if (-not $Text) { return @() }
+    return $Text -split "`r?`n" | Where-Object {
+        $_ -and ($_ -notmatch '^\s*(#|$)')
+    }
+}
+
+function Install-Plugins {
+    if (-not (Has-Command claude)) { return }
+
+    try {
+        $publicList = Invoke-RestMethod -Uri $PluginListUrlPublic -Headers @{ 'Cache-Control' = 'no-cache' } -ErrorAction Stop
+    } catch { $publicList = '' }
+    try {
+        $internalList = Invoke-RestMethod -Uri $PluginListUrlInternal -Headers @{ 'Cache-Control' = 'no-cache' } -ErrorAction Stop
+    } catch { $internalList = '' }
+
+    if (-not $publicList -and -not $internalList) { return }
+
+    # Already-registered marketplaces and already-installed plugins.
+    $registeredRepos = @()
+    $listing = claude plugin marketplace list 2>$null
+    foreach ($line in $listing) {
+        if ($line -match 'GitHub \(([^)]+)\)') { $registeredRepos += $matches[1] }
+    }
+    $installedPlugins = @()
+    $pluginListing = claude plugin list 2>$null
+    foreach ($line in $pluginListing) {
+        if ($line -match '^\s*❯\s*(.*)$') { $installedPlugins += $matches[1].Trim() }
+    }
+
+    $ghAuthed = (Has-Command gh) -and ((Invoke-NativeQuiet { gh auth status }) -eq 0)
+
+    $added = @()
+    $installed = @()
+    $failed = @()
+
+    $allEntries = @()
+    $allEntries += Get-PluginListEntries $publicList
+    $allEntries += Get-PluginListEntries $internalList
+
+    $seenMarkets   = @{}
+    $marketUsable  = @{}
+    $seenPlugins   = @{}   # dedup guard across list files
+
+    # Pass 1: ensure each referenced marketplace is registered.
+    foreach ($entry in $allEntries) {
+        $parts = $entry -split '@', 2
+        if ($parts.Count -ne 2) { continue }
+        $market = $parts[1]
+
+        if ($seenMarkets.ContainsKey($market)) { continue }
+        $seenMarkets[$market] = $true
+
+        $repo = $PluginMarketplaceRepos[$market]
+        if (-not $repo) {
+            # Unknown marketplace in list file — developer mistake.
+            Write-Warn "Plugin list references unknown marketplace '$market' -- update `$PluginMarketplaceRepos"
+            continue
+        }
+
+        if ($registeredRepos -contains $repo) {
+            $marketUsable[$market] = $true
+            continue
+        }
+
+        if ((Get-PluginMarketplaceKind $market) -eq 'csa') {
+            if (-not $ghAuthed) { continue }
+            if ((Invoke-NativeQuiet { gh api "repos/$repo" }) -ne 0) { continue }
+        }
+
+        $result = Invoke-NativeCapture { claude plugin marketplace add $repo }
+        if ($result.ExitCode -eq 0) {
+            $added += $repo
+            $marketUsable[$market] = $true
+        } else {
+            $failed += [pscustomobject]@{
+                What   = "marketplace $repo"
+                Output = if ($result.Output) { $result.Output } else { '<no stderr output>' }
+            }
+        }
+    }
+
+    # Pass 2: install plugins.
+    foreach ($entry in $allEntries) {
+        $parts = $entry -split '@', 2
+        if ($parts.Count -ne 2) { continue }
+        $name = $parts[0]
+        $market = $parts[1]
+
+        $key = "$name@$market"
+        if ($seenPlugins.ContainsKey($key)) { continue }
+        $seenPlugins[$key] = $true
+
+        if (-not $marketUsable.ContainsKey($market)) { continue }
+        if ($installedPlugins -contains $key) { continue }
+
+        $result = Invoke-NativeCapture { claude plugin install $key }
+        if ($result.ExitCode -eq 0) {
+            $installed += $key
+        } else {
+            $failed += [pscustomobject]@{
+                What   = "plugin $key"
+                Output = if ($result.Output) { $result.Output } else { '<no stderr output>' }
+            }
+        }
+    }
+
+    if ($added.Count -gt 0) {
+        Write-Success "Registered plugin marketplaces:"
+        $added | ForEach-Object { Write-Host "  + $_" }
+    }
+    if ($installed.Count -gt 0) {
+        Write-Success "Installed plugins:"
+        $installed | ForEach-Object { Write-Host "  + $_" }
+    }
+    if ($failed.Count -gt 0) {
+        Write-Warn "Failed on $($failed.Count) item(s):"
+        foreach ($f in $failed) {
+            Write-Host "  ! $($f.What)"
+            Write-Host "      $($f.Output)"
+        }
     }
 }
 
@@ -906,6 +1086,7 @@ function Main {
     Setup-GHAuth
     Setup-GitIdentity
     Setup-PluginMarketplaces
+    Install-Plugins
     Show-Summary
 }
 
