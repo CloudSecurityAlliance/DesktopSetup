@@ -97,6 +97,38 @@ function Refresh-Path {
     $env:PATH = "$machinePath;$userPath"
 }
 
+# Native-command calls below use Invoke-NativeQuiet so that PowerShell's
+# NativeCommandError promotion (triggered by stderr writes under
+# $ErrorActionPreference='Stop') doesn't defeat the silent-skip contract.
+# Returns the exit code; swallows both stderr and any terminating exception.
+function Invoke-NativeQuiet {
+    param([scriptblock]$Call)
+    try {
+        & $Call 2>&1 | Out-Null
+        return $LASTEXITCODE
+    } catch {
+        return 1
+    }
+}
+
+# Run a native command, shield against NativeCommandError, and return both
+# the merged stdout+stderr output (as a trimmed string) and the exit code.
+# Used when a caller needs to surface the command's error text on failure
+# (e.g. `claude plugin marketplace add` schema-validation errors).
+#
+# NOTE: this helper is also defined on the fix/marketplace-add-stderr
+# branch (PR #11). If both branches land, the rebase merge conflict
+# resolution is "take either copy — they're identical".
+function Invoke-NativeCapture {
+    param([scriptblock]$Call)
+    try {
+        $output = (& $Call 2>&1 | Out-String).Trim()
+        return [pscustomobject]@{ ExitCode = $LASTEXITCODE; Output = $output }
+    } catch {
+        return [pscustomobject]@{ ExitCode = 1; Output = $_.Exception.Message }
+    }
+}
+
 # ── Preconditions ───────────────────────────────────────────────────
 
 function Test-Preconditions {
@@ -747,38 +779,6 @@ function Setup-ClaudeEnv {
 function Setup-PluginMarketplaces {
     if (-not (Has-Command claude)) { return }
     if (-not (Has-Command gh))     { return }
-
-    # Native-command calls below use Invoke-NativeQuiet so that PowerShell's
-    # NativeCommandError promotion (triggered by stderr writes under
-    # $ErrorActionPreference='Stop') doesn't defeat the silent-skip contract.
-    # Returns the exit code; swallows both stderr and any terminating exception.
-    function Invoke-NativeQuiet {
-        param([scriptblock]$Call)
-        try {
-            & $Call 2>&1 | Out-Null
-            return $LASTEXITCODE
-        } catch {
-            return 1
-        }
-    }
-
-    # Run a native command, shield against NativeCommandError, and return both
-    # the merged stdout+stderr output (as a trimmed string) and the exit code.
-    # Used when a caller needs to surface the command's error text on failure
-    # (e.g. `claude plugin marketplace add` schema-validation errors).
-    #
-    # NOTE: this helper is also defined on the fix/marketplace-add-stderr
-    # branch (PR #11). If both branches land, the rebase merge conflict
-    # resolution is "take either copy — they're identical".
-    function Invoke-NativeCapture {
-        param([scriptblock]$Call)
-        try {
-            $output = (& $Call 2>&1 | Out-String).Trim()
-            return [pscustomobject]@{ ExitCode = $LASTEXITCODE; Output = $output }
-        } catch {
-            return [pscustomobject]@{ ExitCode = 1; Output = $_.Exception.Message }
-        }
-    }
 
     if ((Invoke-NativeQuiet { gh auth status }) -ne 0) { return }
 
