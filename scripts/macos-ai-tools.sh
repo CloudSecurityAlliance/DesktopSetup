@@ -22,7 +22,7 @@
 
 set -euo pipefail
 
-SCRIPT_VERSION="2026.04202000"
+SCRIPT_VERSION="2026.04210000"
 
 # ── CSA plugin marketplaces ─────────────────────────────────────────
 # Plugin marketplaces to register with Claude Code. Each entry is an
@@ -757,7 +757,7 @@ install_plugins() {
   registered_repos="$(claude plugin marketplace list 2>/dev/null \
     | sed -n 's/.*GitHub (\([^)]*\)).*/\1/p')"
   installed_plugins="$(claude plugin list 2>/dev/null \
-    | sed -n 's/^\s*❯\s*\(.*\)$/\1/p')"
+    | sed -n 's/^[[:space:]]*❯[[:space:]]*\(.*\)$/\1/p')"
 
   local gh_authed=0
   if has_command gh && gh auth status >/dev/null 2>&1; then gh_authed=1; fi
@@ -768,6 +768,7 @@ install_plugins() {
   # Track which marketplaces we've processed so we don't re-probe.
   declare -A seen_markets=()
   declare -A market_usable=()   # [name]=1 if we should install from it
+  declare -A seen_plugins=()    # dedup guard across list files
 
   # Pass 1: ensure each referenced marketplace is registered.
   local line name market repo kind
@@ -781,8 +782,10 @@ install_plugins() {
 
     repo="${PLUGIN_MARKETPLACE_REPOS[$market]:-}"
     if [[ -z "$repo" ]]; then
-      # Unknown marketplace — not in our map. Skip silently; this
-      # shouldn't happen if list files are kept in sync with the map.
+      # Unknown marketplace in list file — developer mistake (list/map
+      # drift). Warn so it's caught quickly; this only fires for CSA
+      # editors, never for external users running the public installer.
+      warn "Plugin list references unknown marketplace '$market' — update PLUGIN_MARKETPLACE_REPOS"
       continue
     fi
 
@@ -816,6 +819,9 @@ install_plugins() {
     [[ -z "$line" ]] && continue
     name="${line%@*}"
     market="${line#*@}"
+
+    [[ -n "${seen_plugins[${name}@${market}]:-}" ]] && continue
+    seen_plugins[${name}@${market}]=1
 
     [[ -n "${market_usable[$market]:-}" ]] || continue
     grep -qxF "${name}@${market}" <<< "$installed_plugins" && continue
