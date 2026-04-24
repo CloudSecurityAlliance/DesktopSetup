@@ -23,7 +23,7 @@
 
 set -euo pipefail
 
-SCRIPT_VERSION="2026.04242330"
+SCRIPT_VERSION="2026.04250000"
 
 # ── CSA plugin marketplaces ─────────────────────────────────────────
 # Plugin marketplaces to register with Claude Code. Each entry is an
@@ -146,6 +146,20 @@ get_version() {
   fi
 }
 
+# Read CFBundleShortVersionString from a macOS .app bundle. Echoes empty
+# on any failure (missing .app, missing key, unreadable plist). Use with
+# `${ver:+, v$ver}` to only append the version if one was found.
+get_app_version() {
+  defaults read "$1/Contents/Info.plist" CFBundleShortVersionString 2>/dev/null
+}
+
+# Echo the .app bundle's mtime as YYYY-MM-DD, reflecting last install or
+# self-update. Useful at-a-glance staleness signal alongside the version.
+# Empty on failure.
+get_app_mtime() {
+  date -r "$1" +%Y-%m-%d 2>/dev/null
+}
+
 confirm() {
   if [[ -n "${NONINTERACTIVE-}" ]]; then return 0; fi
   local reply
@@ -253,10 +267,16 @@ preflight() {
   fi
 
   # 1Password (GUI app — needed for biometric CLI unlock)
-  if brew list --cask 1password >/dev/null 2>&1; then
-    echo "  1Password ......... installed (Homebrew cask)"
-  elif [[ -d "/Applications/1Password.app" ]]; then
-    echo "  1Password ......... installed (non-Homebrew)"
+  if [[ -d "/Applications/1Password.app" ]]; then
+    local onep_ver onep_dt onep_method
+    onep_ver="$(get_app_version /Applications/1Password.app)"
+    onep_dt="$(get_app_mtime /Applications/1Password.app)"
+    if brew list --cask 1password >/dev/null 2>&1; then
+      onep_method="Homebrew cask"
+    else
+      onep_method="non-Homebrew"
+    fi
+    echo "  1Password ......... installed ($onep_method${onep_ver:+, v$onep_ver}${onep_dt:+ · $onep_dt})"
   else
     echo "  1Password ......... install via Homebrew cask"
   fi
@@ -269,19 +289,31 @@ preflight() {
   fi
 
   # Claude Desktop
-  if brew list --cask claude >/dev/null 2>&1; then
-    echo "  Claude Desktop .... installed (Homebrew cask)"
-  elif [[ -d "/Applications/Claude.app" ]]; then
-    echo "  Claude Desktop .... installed (non-Homebrew)"
+  if [[ -d "/Applications/Claude.app" ]]; then
+    local claude_ver claude_dt claude_method
+    claude_ver="$(get_app_version /Applications/Claude.app)"
+    claude_dt="$(get_app_mtime /Applications/Claude.app)"
+    if brew list --cask claude >/dev/null 2>&1; then
+      claude_method="Homebrew cask"
+    else
+      claude_method="non-Homebrew"
+    fi
+    echo "  Claude Desktop .... installed ($claude_method${claude_ver:+, v$claude_ver}${claude_dt:+ · $claude_dt})"
   else
     echo "  Claude Desktop .... install via Homebrew cask"
   fi
 
   # ChatGPT Desktop
-  if brew list --cask chatgpt >/dev/null 2>&1; then
-    echo "  ChatGPT Desktop ... installed (Homebrew cask)"
-  elif [[ -d "/Applications/ChatGPT.app" ]]; then
-    echo "  ChatGPT Desktop ... installed (non-Homebrew)"
+  if [[ -d "/Applications/ChatGPT.app" ]]; then
+    local chatgpt_ver chatgpt_dt chatgpt_method
+    chatgpt_ver="$(get_app_version /Applications/ChatGPT.app)"
+    chatgpt_dt="$(get_app_mtime /Applications/ChatGPT.app)"
+    if brew list --cask chatgpt >/dev/null 2>&1; then
+      chatgpt_method="Homebrew cask"
+    else
+      chatgpt_method="non-Homebrew"
+    fi
+    echo "  ChatGPT Desktop ... installed ($chatgpt_method${chatgpt_ver:+, v$chatgpt_ver}${chatgpt_dt:+ · $chatgpt_dt})"
   else
     echo "  ChatGPT Desktop ... install via Homebrew cask"
   fi
