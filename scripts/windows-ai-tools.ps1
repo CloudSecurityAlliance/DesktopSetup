@@ -18,7 +18,7 @@
 
 $ErrorActionPreference = 'Stop'
 
-$ScriptVersion = "2026.04211900"
+$ScriptVersion = "2026.04212115"
 
 # ── CSA plugin marketplaces ─────────────────────────────────────────
 # Plugin marketplaces to register with Claude Code. Each entry is an
@@ -93,6 +93,20 @@ function Invoke-NativeQuiet {
         return $LASTEXITCODE
     } catch {
         return 1
+    }
+}
+
+# Run a native command, shield against NativeCommandError, and return both
+# the merged stdout+stderr output (as a trimmed string) and the exit code.
+# Used when a caller needs to surface the command's error text on failure
+# (e.g. `claude plugin marketplace add` schema-validation errors).
+function Invoke-NativeCapture {
+    param([scriptblock]$Call)
+    try {
+        $output = (& $Call 2>&1 | Out-String).Trim()
+        return [pscustomobject]@{ ExitCode = $LASTEXITCODE; Output = $output }
+    } catch {
+        return [pscustomobject]@{ ExitCode = 1; Output = $_.Exception.Message }
     }
 }
 
@@ -803,10 +817,16 @@ function Setup-PluginMarketplaces {
         if ($alreadyAdded -contains $repo) { continue }
         if ((Invoke-NativeQuiet { gh api "repos/$repo" }) -ne 0) { continue }
 
-        if ((Invoke-NativeQuiet { claude plugin marketplace add $repo }) -eq 0) {
+        # Capture stderr so a real failure (e.g. schema-invalid manifest)
+        # surfaces its reason instead of a generic "Failed to register".
+        $result = Invoke-NativeCapture { claude plugin marketplace add $repo }
+        if ($result.ExitCode -eq 0) {
             $added += $repo
         } else {
-            $failed += $repo
+            $failed += [pscustomobject]@{
+                Repo   = $repo
+                Output = if ($result.Output) { $result.Output } else { '<no stderr output>' }
+            }
         }
     }
 
@@ -816,7 +836,10 @@ function Setup-PluginMarketplaces {
     }
     if ($failed.Count -gt 0) {
         Write-Warn "Failed to register $($failed.Count) marketplace(s):"
-        $failed | ForEach-Object { Write-Host "  ! $_" }
+        foreach ($f in $failed) {
+            Write-Host "  ! $($f.Repo)"
+            Write-Host "      $($f.Output)"
+        }
     }
 }
 

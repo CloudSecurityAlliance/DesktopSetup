@@ -87,7 +87,7 @@ All scripts (both platforms) duplicate their output helpers, precondition checks
 `macos-ai-tools.sh`, `windows-ai-tools.ps1`, and `macos-update.sh` share the same silent-by-default registration contract:
 1. If `claude` or `gh` is missing, or `gh` is not authenticated, return silently — no warning, no action-item line. A user outside CSA-Internal running the installer should not see chatter about repos they can't see.
 2. For each entry in `CSA_MARKETPLACES`: skip if already registered (parsed from `claude plugin marketplace list`); probe access with `gh api repos/$repo` and silently skip on non-zero exit; otherwise `claude plugin marketplace add $repo`.
-3. Only print output when a marketplace is actually added (success line) or when `add` itself errors (warn line). Inaccessible and already-registered entries produce no output.
+3. Only print output when a marketplace is actually added (success line) or when `add` itself errors (warn line). Inaccessible and already-registered entries produce no output. The warn line includes the captured stderr from `claude plugin marketplace add`, indented under the failed entry, so the schema/auth/network reason is visible (bash: `add_err="$(cmd 2>&1 >/dev/null)"`; PowerShell: `Invoke-NativeCapture`).
 4. The updater additionally runs `claude plugin marketplace update` after the add pass to refresh all registered sources — this step always prints its `Refreshing plugin marketplaces` info line since refreshing is the updater's core purpose.
 
 ### Script execution flow
