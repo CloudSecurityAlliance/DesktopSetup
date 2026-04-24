@@ -8,6 +8,26 @@
 #   scripts/macos-ai-tools.sh
 #   scripts/windows-ai-tools.ps1
 #   scripts/macos-update.sh
+#
+# ─────────────────────────────────────────────────────────────────────
+# MANUAL INSTALL (CSA staff only — requires GitHub access to the
+# CloudSecurityAlliance-Internal org for the private marketplaces)
+#
+#   1. Register the marketplaces these plugins come from:
+#      claude plugin marketplace add CloudSecurityAlliance/csa-plugins-official
+#      claude plugin marketplace add CloudSecurityAlliance-Internal/CINO-Plugins
+#      claude plugin marketplace add CloudSecurityAlliance-Internal/Research-Plugins
+#      claude plugin marketplace add CloudSecurityAlliance-Internal/Training-Plugins
+#
+#   2. Install every plugin from this file in one go:
+#      curl -fsSL https://raw.githubusercontent.com/CloudSecurityAlliance/DesktopSetup/HEAD/scripts/csa-plugins-internal.txt \
+#        | grep -v -E '^\s*(#|$)' \
+#        | xargs -n1 claude plugin install
+#
+#      Or install a specific plugin using its <plugin>@<marketplace>
+#      form from the list below:
+#      claude plugin install cwe-analysis@csa-plugins-official
+# ─────────────────────────────────────────────────────────────────────
 
 cwe-analysis@csa-plugins-official
 incident-analysis@csa-plugins-official
