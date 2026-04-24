@@ -39,25 +39,28 @@ CSA_MARKETPLACES=(
   "CloudSecurityAlliance/csa-plugins-official"
 )
 
-# Marketplace name → GitHub repo. See the matching block in
-# scripts/macos-ai-tools.sh for the full rationale.
+# Marketplace name → GitHub repo. Function-based lookup rather than
+# an associative array because macOS ships bash 3.2, which does not
+# support `declare -A`. See the matching block in
+# scripts/macos-ai-tools.sh for full rationale.
 #
-# KEEP IN SYNC: duplicated as PLUGIN_MARKETPLACE_REPOS in
+# KEEP IN SYNC: duplicated as plugin_marketplace_repo in
 #   scripts/macos-ai-tools.sh
 # and as $PluginMarketplaceRepos in
 #   scripts/windows-ai-tools.ps1
-declare -A PLUGIN_MARKETPLACE_REPOS=(
-  # Public
-  [claude-plugins-official]="anthropics/claude-plugins-official"
-  [anthropic-agent-skills]="anthropics/skills"
-  # CSA-internal
-  [accounting-plugins]="CloudSecurityAlliance-Internal/Accounting-Plugins"
-  [csa-cino-plugins]="CloudSecurityAlliance-Internal/CINO-Plugins"
-  [csa-plugins]="CloudSecurityAlliance-Internal/CSA-Plugins"
-  [csa-research-plugins]="CloudSecurityAlliance-Internal/Research-Plugins"
-  [csa-training-plugins]="CloudSecurityAlliance-Internal/Training-Plugins"
-  [csa-plugins-official]="CloudSecurityAlliance/csa-plugins-official"
-)
+plugin_marketplace_repo() {
+  case "$1" in
+    claude-plugins-official) echo "anthropics/claude-plugins-official" ;;
+    anthropic-agent-skills)  echo "anthropics/skills" ;;
+    accounting-plugins)      echo "CloudSecurityAlliance-Internal/Accounting-Plugins" ;;
+    csa-cino-plugins)        echo "CloudSecurityAlliance-Internal/CINO-Plugins" ;;
+    csa-plugins)             echo "CloudSecurityAlliance-Internal/CSA-Plugins" ;;
+    csa-research-plugins)    echo "CloudSecurityAlliance-Internal/Research-Plugins" ;;
+    csa-training-plugins)    echo "CloudSecurityAlliance-Internal/Training-Plugins" ;;
+    csa-plugins-official)    echo "CloudSecurityAlliance/csa-plugins-official" ;;
+    *) ;;
+  esac
+}
 
 # ── Output helpers ──────────────────────────────────────────────────
 
@@ -433,10 +436,10 @@ install_plugins() {
   local added=() installed=() failed=() failed_errs=()
   local add_err inst_err
 
-  # Track which marketplaces we've processed so we don't re-probe.
-  declare -A seen_markets=()
-  declare -A market_usable=()   # [name]=1 if we should install from it
-  declare -A seen_plugins=()    # dedup guard across list files
+  # Track which marketplaces/plugins we've processed. Indexed arrays
+  # + string-search rather than associative arrays to stay compatible
+  # with macOS bash 3.2.
+  local seen_markets=() market_usable=() seen_plugins=()
 
   # Pass 1: ensure each referenced marketplace is registered.
   local line name market repo kind
@@ -445,15 +448,15 @@ install_plugins() {
     name="${line%@*}"
     market="${line#*@}"
 
-    if [[ -n "${seen_markets[$market]:-}" ]]; then continue; fi
-    seen_markets[$market]=1
+    [[ " ${seen_markets[*]:-} " == *" $market "* ]] && continue
+    seen_markets+=("$market")
 
-    repo="${PLUGIN_MARKETPLACE_REPOS[$market]:-}"
+    repo="$(plugin_marketplace_repo "$market")"
     if [[ -z "$repo" ]]; then
       # Unknown marketplace in list file — developer mistake (list/map
       # drift). Warn so it's caught quickly; this only fires for CSA
       # editors, never for external users running the public installer.
-      warn "Plugin list references unknown marketplace '$market' — update PLUGIN_MARKETPLACE_REPOS"
+      warn "Plugin list references unknown marketplace '$market' — update plugin_marketplace_repo"
       continue
     fi
 
@@ -461,7 +464,7 @@ install_plugins() {
 
     # Already registered — mark as usable, move on.
     if grep -qxF "$repo" <<< "$registered_repos"; then
-      market_usable[$market]=1
+      market_usable+=("$market")
       continue
     fi
 
@@ -474,7 +477,7 @@ install_plugins() {
     # Register the marketplace.
     if add_err="$(claude plugin marketplace add "$repo" 2>&1 >/dev/null)"; then
       added+=("$repo")
-      market_usable[$market]=1
+      market_usable+=("$market")
     else
       failed+=("marketplace $repo")
       failed_errs+=("${add_err:-<no stderr output>}")
@@ -488,10 +491,10 @@ install_plugins() {
     name="${line%@*}"
     market="${line#*@}"
 
-    [[ -n "${seen_plugins[${name}@${market}]:-}" ]] && continue
-    seen_plugins[${name}@${market}]=1
+    [[ " ${seen_plugins[*]:-} " == *" ${name}@${market} "* ]] && continue
+    seen_plugins+=("${name}@${market}")
 
-    [[ -n "${market_usable[$market]:-}" ]] || continue
+    [[ " ${market_usable[*]:-} " == *" $market "* ]] || continue
     grep -qxF "${name}@${market}" <<< "$installed_plugins" && continue
 
     if inst_err="$(claude plugin install "${name}@${market}" 2>&1 >/dev/null)"; then
