@@ -18,7 +18,7 @@
 
 $ErrorActionPreference = 'Stop'
 
-$ScriptVersion = "2026.04231540"
+$ScriptVersion = "2026.04242300"
 
 # ── CSA plugin marketplaces ─────────────────────────────────────────
 # Plugin marketplaces to register with Claude Code. Each entry is an
@@ -377,7 +377,7 @@ function Show-Preflight {
 
     # Plugin marketplaces
     Write-Host "  Plugin marketplaces  probe $($CSA_MARKETPLACES.Count) CSA repos, add any your GitHub account can access"
-    Write-Host "  Plugins              install defaults from csa-plugins.txt (+ csa-plugins-internal.txt if accessible)"
+    Show-PluginsPreview
 
     Write-Host ""
 }
@@ -887,6 +887,54 @@ function Get-PluginListEntries {
     }
 }
 
+# Preflight helper: print one line summarizing what Install-Plugins would
+# do. Fetches the list files and diffs against `claude plugin list`.
+# Intentionally cheap -- no gh-probes here, so the count is "up to N";
+# CSA plugins the user can't access get filtered out at actual install
+# time.
+function Show-PluginsPreview {
+    try {
+        $publicList = Invoke-RestMethod -Uri $PluginListUrlPublic -Headers @{ 'Cache-Control' = 'no-cache' } -ErrorAction Stop
+    } catch { $publicList = '' }
+    try {
+        $internalList = Invoke-RestMethod -Uri $PluginListUrlInternal -Headers @{ 'Cache-Control' = 'no-cache' } -ErrorAction Stop
+    } catch { $internalList = '' }
+
+    if (-not $publicList -and -not $internalList) {
+        Write-Host "  Plugins              (skipped: couldn't fetch plugin lists)"
+        return
+    }
+
+    $installedPlugins = @()
+    if (Has-Command claude) {
+        $pluginListing = claude plugin list 2>$null
+        foreach ($line in $pluginListing) {
+            if ($line -match '^\s*❯\s*(.*)$') { $installedPlugins += $matches[1].Trim() }
+        }
+    }
+
+    $allEntries = @()
+    $allEntries += Get-PluginListEntries $publicList
+    $allEntries += Get-PluginListEntries $internalList
+
+    $total = $allEntries.Count
+    $already = 0
+    foreach ($entry in $allEntries) {
+        if ($installedPlugins -contains $entry) { $already += 1 }
+    }
+    $new = $total - $already
+
+    if ($total -eq 0) {
+        Write-Host "  Plugins              (list files empty)"
+    } elseif ($new -eq 0) {
+        Write-Host "  Plugins              all $already defaults already installed"
+    } elseif ($already -eq 0) {
+        Write-Host "  Plugins              install up to $total defaults from csa-plugins*.txt"
+    } else {
+        Write-Host "  Plugins              install up to $new new ($already already present)"
+    }
+}
+
 function Install-Plugins {
     if (-not (Has-Command claude)) { return }
 
@@ -914,7 +962,6 @@ function Install-Plugins {
     $ghAuthed = (Has-Command gh) -and ((Invoke-NativeQuiet { gh auth status }) -eq 0)
 
     $added = @()
-    $installed = @()
     $failed = @()
 
     $allEntries = @()
@@ -936,7 +983,7 @@ function Install-Plugins {
 
         $repo = $PluginMarketplaceRepos[$market]
         if (-not $repo) {
-            # Unknown marketplace in list file — developer mistake.
+            # Unknown marketplace in list file -- developer mistake.
             Write-Warn "Plugin list references unknown marketplace '$market' -- update `$PluginMarketplaceRepos"
             continue
         }
@@ -963,7 +1010,14 @@ function Install-Plugins {
         }
     }
 
-    # Pass 2: install plugins.
+    if ($added.Count -gt 0) {
+        Write-Success "Registered plugin marketplaces:"
+        $added | ForEach-Object { Write-Host "  + $_" }
+    }
+
+    # Pass 2: collect plugins to install (in usable marketplace, not already
+    # installed, deduped across list files).
+    $pendingInstalls = @()
     foreach ($entry in $allEntries) {
         $parts = $entry -split '@', 2
         if ($parts.Count -ne 2) { continue }
@@ -977,31 +1031,31 @@ function Install-Plugins {
         if (-not $marketUsable.ContainsKey($market)) { continue }
         if ($installedPlugins -contains $key) { continue }
 
-        $result = Invoke-NativeCapture { claude plugin install $key }
-        if ($result.ExitCode -eq 0) {
-            $installed += $key
-        } else {
-            $failed += [pscustomobject]@{
-                What   = "plugin $key"
-                Output = if ($result.Output) { $result.Output } else { '<no stderr output>' }
+        $pendingInstalls += $key
+    }
+
+    # Pass 3: announce, then install each pending plugin with per-item
+    # progress so the user sees forward motion instead of a silent wait.
+    if ($pendingInstalls.Count -gt 0) {
+        Write-Info "Installing $($pendingInstalls.Count) plugin(s):"
+        foreach ($plugin in $pendingInstalls) {
+            $result = Invoke-NativeCapture { claude plugin install $plugin }
+            if ($result.ExitCode -eq 0) {
+                Write-Host "  + $plugin"
+            } else {
+                $out = if ($result.Output) { $result.Output } else { '<no stderr output>' }
+                $failed += [pscustomobject]@{
+                    What   = "plugin $plugin"
+                    Output = $out
+                }
+                Write-Host "  ! $plugin"
+                Write-Host "      $out"
             }
         }
     }
 
-    if ($added.Count -gt 0) {
-        Write-Success "Registered plugin marketplaces:"
-        $added | ForEach-Object { Write-Host "  + $_" }
-    }
-    if ($installed.Count -gt 0) {
-        Write-Success "Installed plugins:"
-        $installed | ForEach-Object { Write-Host "  + $_" }
-    }
     if ($failed.Count -gt 0) {
-        Write-Warn "Failed on $($failed.Count) item(s):"
-        foreach ($f in $failed) {
-            Write-Host "  ! $($f.What)"
-            Write-Host "      $($f.Output)"
-        }
+        Write-Warn "Plugin install finished with $($failed.Count) failure(s) (details above)."
     }
 }
 
