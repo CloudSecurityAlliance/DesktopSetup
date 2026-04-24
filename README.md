@@ -135,6 +135,69 @@ bash -c "$(curl -fsSL -H 'Cache-Control: no-cache' https://raw.githubusercontent
 irm https://raw.githubusercontent.com/CloudSecurityAlliance/DesktopSetup/HEAD/scripts/windows-work-tools.ps1 -Headers @{'Cache-Control'='no-cache'} | iex
 ```
 
+## Plugins installed
+
+The AI tools installers (and the macOS updater) install a curated set of
+Claude Code plugins so CSA staff can use them right away and explore
+what's possible. Public plugins install for everyone; CSA-marketplace
+plugins install only if your GitHub account can access the private CSA
+marketplaces.
+
+### Process & planning
+- **superpowers** — brainstorming, writing-plans, TDD, systematic-debugging, code review, verification, dispatching-parallel-agents, using-git-worktrees
+- **feature-dev** — `/brainstorm`, `/write-plan`, `/execute-plan`, `/implement`, `/finish-branch`
+- **claude-code-setup** — claude-automation-recommender (scan a repo, recommend hooks/agents/skills)
+- **claude-md-management** — `/init` improvements, claude-md-improver
+- **session-report** — HTML report of tokens, cache, skills, expensive prompts
+- **explanatory-output-style** — toggle: add educational explanations to responses
+- **learning-output-style** — toggle: interactive learning with contribution requests
+
+### Software development
+- **commit-commands** — `/commit`, `/commit-push-pr`, `/clean_gone`
+- **code-review** — `/review`
+- **pr-review-toolkit** — `/review-pr`, multi-agent PR review (silent-failure-hunter, type-design-analyzer, pr-test-analyzer, comment-analyzer, code-simplifier)
+- **github** — GitHub MCP (issues, PRs, code search, releases, reviews)
+- **greptile** — Greptile code intelligence
+- **frontend-design** — polished UI code that avoids generic AI aesthetics
+- **playwright** — browser automation and UI testing via Playwright MCP
+- **chrome-devtools-mcp** — Chrome DevTools MCP (debugging, performance, a11y, LCP)
+- **playground** — single-file interactive HTML explorers
+- **typescript-lsp** — TypeScript language server integration
+- **semgrep** — Semgrep security scanning (requires `semgrep` CLI)
+- **security-guidance** — security review and guidance
+- **cloudflare** — Workers, Pages, D1/R2/KV, Durable Objects, Agents SDK, Wrangler
+
+### Building Claude apps
+- **claude-api** — Claude API / Anthropic SDK (migrations, caching, tool use, batching)
+- **agent-sdk-dev** — `/new-sdk-app`, Agent SDK verifiers
+- **mcp-server-dev** — build-mcp-server, build-mcp-app, build-mcpb (local .mcpb bundles)
+- **plugin-dev** — `/create-plugin`, plugin-structure, command/agent/skill/hook development
+- **skill-creator** — create, edit, and benchmark skills
+- **pydantic-ai** — Pydantic AI framework
+
+### Business & productivity
+- **slack** — `/standup`, `/find-discussions`, `/summarize-channel`, `/draft-announcement`, `/channel-digest`
+- **document-skills** — docx, pptx, pdf, xlsx, canvas-design, brand-guidelines, internal-comms, theme-factory, webapp-testing
+- **example-skills** — reference implementations of the document skills above
+
+### CSA-specific (installed if you're on CSA-Internal teams)
+- **cwe-analysis** — CWE assignment, chains, AI relevance
+- **incident-analysis** — OSINT, timeline, impact, defensive recs for cloud/AI incidents
+- **nist-ir-8477-mapping** — map between frameworks using NIST IR 8477
+- **security-knowledge-ingestion** — convert standards/regs into structured data
+- **cino-project-tracker** — CINO Airtable project registry
+- **audience-lens** — build audience profiles for writing tasks
+- **writing-style-forge** — generate writing-style plugins from samples
+- **research-initiative-tracker** — CSA research initiative tracking
+- **csa-certification-development**, **csa-training-content-development**, **csa-training-design-system** — training & certification workflows
+
+The plugin lists live in [`scripts/csa-plugins.txt`](scripts/csa-plugins.txt)
+and [`scripts/csa-plugins-internal.txt`](scripts/csa-plugins-internal.txt)
+— edit those to change what gets installed by default. Users can
+disable any individual plugin locally with `claude plugin disable <name>`.
+
+---
+
 ## Repository contents
 
 ### `scripts/`

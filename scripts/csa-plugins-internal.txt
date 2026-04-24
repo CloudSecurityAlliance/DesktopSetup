@@ -1,0 +1,25 @@
+# CSA default plugin list — private CSA marketplaces.
+# Each entry's marketplace is gh-probed before install; marketplaces the
+# user's GitHub account can't access are silently skipped along with all
+# their plugins. External users of the public DesktopSetup repo see
+# zero chatter about these.
+#
+# Read by the install_plugins / Install-Plugins functions in:
+#   scripts/macos-ai-tools.sh
+#   scripts/windows-ai-tools.ps1
+#   scripts/macos-update.sh
+
+cwe-analysis@csa-plugins-official
+incident-analysis@csa-plugins-official
+nist-ir-8477-mapping@csa-plugins-official
+security-knowledge-ingestion@csa-plugins-official
+
+cino-project-tracker@csa-cino-plugins
+
+audience-lens@csa-research-plugins
+research-initiative-tracker@csa-research-plugins
+writing-style-forge@csa-research-plugins
+
+csa-certification-development@csa-training-plugins
+csa-training-content-development@csa-training-plugins
+csa-training-design-system@csa-training-plugins
