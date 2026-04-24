@@ -97,10 +97,12 @@ function Refresh-Path {
     $env:PATH = "$machinePath;$userPath"
 }
 
-# Native-command calls below use Invoke-NativeQuiet so that PowerShell's
-# NativeCommandError promotion (triggered by stderr writes under
-# $ErrorActionPreference='Stop') doesn't defeat the silent-skip contract.
-# Returns the exit code; swallows both stderr and any terminating exception.
+# Run a native command, swallow stdout+stderr, return its exit code.
+# Why: under $ErrorActionPreference='Stop', a native command that exits
+# non-zero AND writes to stderr (e.g. `gh auth status` when logged out)
+# is promoted to a terminating NativeCommandError before $LASTEXITCODE
+# can be checked. This wrapper absorbs the promotion so callers can
+# branch on the exit code as intended.
 function Invoke-NativeQuiet {
     param([scriptblock]$Call)
     try {
@@ -115,10 +117,6 @@ function Invoke-NativeQuiet {
 # the merged stdout+stderr output (as a trimmed string) and the exit code.
 # Used when a caller needs to surface the command's error text on failure
 # (e.g. `claude plugin marketplace add` schema-validation errors).
-#
-# NOTE: this helper is also defined on the fix/marketplace-add-stderr
-# branch (PR #11). If both branches land, the rebase merge conflict
-# resolution is "take either copy — they're identical".
 function Invoke-NativeCapture {
     param([scriptblock]$Call)
     try {
@@ -126,6 +124,22 @@ function Invoke-NativeCapture {
         return [pscustomobject]@{ ExitCode = $LASTEXITCODE; Output = $output }
     } catch {
         return [pscustomobject]@{ ExitCode = 1; Output = $_.Exception.Message }
+    }
+}
+
+# Run a native command, swallow stderr, return stdout on success or $null
+# on failure. Same NativeCommandError shield as Invoke-NativeQuiet, but
+# preserves stdout so callers can capture values (e.g. `gh api user --jq`).
+# Note: `2>$null` alone does NOT prevent NativeCommandError promotion in
+# Windows PowerShell 5.1 — the try/catch is required.
+function Invoke-NativeOutput {
+    param([scriptblock]$Call)
+    try {
+        $result = & $Call 2>$null
+        if ($LASTEXITCODE -ne 0) { return $null }
+        return $result
+    } catch {
+        return $null
     }
 }
 
@@ -495,8 +509,7 @@ function Install-GH {
 function Setup-GHAuth {
     if (-not (Has-Command gh)) { return }
 
-    $authStatus = gh auth status 2>&1
-    if ($LASTEXITCODE -eq 0) {
+    if ((Invoke-NativeQuiet { gh auth status }) -eq 0) {
         Write-Info "GitHub CLI already authenticated"
         return
     }
@@ -509,7 +522,10 @@ function Setup-GHAuth {
     Write-Host ""
     Write-Info "GitHub CLI is installed but not authenticated."
     if (Confirm-Step "Run 'gh auth login' now?") {
-        gh auth login --git-protocol https
+        # --scopes user:email: lets Setup-GitIdentity read the user's
+        # primary email via `gh api user/emails` when it's not public on
+        # the user profile. Without it that endpoint returns HTTP 404.
+        gh auth login --git-protocol https --scopes user:email
         if ($LASTEXITCODE -ne 0) {
             Write-Warn "gh auth login failed; you can run it manually later"
         }
@@ -528,8 +544,7 @@ function Setup-GitIdentity {
     # Need gh authenticated to pull profile info
     $ghAuthed = $false
     if (Has-Command gh) {
-        gh auth status 2>&1 | Out-Null
-        if ($LASTEXITCODE -eq 0) { $ghAuthed = $true }
+        if ((Invoke-NativeQuiet { gh auth status }) -eq 0) { $ghAuthed = $true }
     }
 
     if (-not $ghAuthed) {
@@ -540,12 +555,14 @@ function Setup-GitIdentity {
     }
 
     # Fetch name and email from GitHub profile
-    $ghName  = gh api user --jq '.name // empty' 2>$null
-    $ghEmail = gh api user --jq '.email // empty' 2>$null
+    $ghName  = Invoke-NativeOutput { gh api user --jq '.name // empty' }
+    $ghEmail = Invoke-NativeOutput { gh api user --jq '.email // empty' }
 
-    # If email is private/null, try the emails endpoint
+    # If email is private/null, try the emails endpoint. Requires user:email
+    # scope on the gh token -- returns 404 otherwise, which is fine; we just
+    # fall through without an email and the user can set it manually.
     if (-not $ghEmail) {
-        $ghEmail = gh api user/emails --jq '[.[] | select(.primary==true)][0].email // empty' 2>$null
+        $ghEmail = Invoke-NativeOutput { gh api user/emails --jq '[.[] | select(.primary==true)][0].email // empty' }
     }
 
     # Use GitHub values only for fields not already set
@@ -562,7 +579,13 @@ function Setup-GitIdentity {
     if ($env:NONINTERACTIVE -eq '1') {
         if (-not $currentName  -and $setName)  { git config --global user.name  $setName }
         if (-not $currentEmail -and $setEmail) { git config --global user.email $setEmail }
-        Write-Info "Git identity configured from GitHub profile"
+        if ($setName -and $setEmail) {
+            Write-Info "Git identity configured from GitHub profile"
+        } else {
+            Write-Warn "Git identity partially configured from GitHub profile. Still missing:"
+            if (-not $setName)  { Write-Host "  user.name  (run: git config --global user.name `"Your Name`")" }
+            if (-not $setEmail) { Write-Host "  user.email (run: git config --global user.email `"you@example.com`")" }
+        }
         return
     }
 
@@ -579,6 +602,18 @@ function Setup-GitIdentity {
         if (-not $currentEmail -and $setEmail) {
             git config --global user.email $setEmail
             Write-Success "Set user.email to: $setEmail"
+        }
+
+        # Catch partial success: GitHub didn't expose everything we needed
+        # (common cause: existing gh token lacks the user:email scope, so
+        # the email fallback returns 404 and we have no email to set).
+        if (-not $setName -or -not $setEmail) {
+            Write-Warn "GitHub didn't expose everything. Set manually:"
+            if (-not $setName)  { Write-Host "  git config --global user.name `"Your Name`"" }
+            if (-not $setEmail) {
+                Write-Host "  git config --global user.email `"you@example.com`""
+                Write-Host "  (or run 'gh auth refresh --scopes user:email' and re-run this script to pull it from GitHub)"
+            }
         }
     } else {
         Write-Warn "Skipped. Set manually with:"
@@ -800,10 +835,16 @@ function Setup-PluginMarketplaces {
         if ($alreadyAdded -contains $repo) { continue }
         if ((Invoke-NativeQuiet { gh api "repos/$repo" }) -ne 0) { continue }
 
-        if ((Invoke-NativeQuiet { claude plugin marketplace add $repo }) -eq 0) {
+        # Capture stderr so a real failure (e.g. schema-invalid manifest)
+        # surfaces its reason instead of a generic "Failed to register".
+        $result = Invoke-NativeCapture { claude plugin marketplace add $repo }
+        if ($result.ExitCode -eq 0) {
             $added += $repo
         } else {
-            $failed += $repo
+            $failed += [pscustomobject]@{
+                Repo   = $repo
+                Output = if ($result.Output) { $result.Output } else { '<no stderr output>' }
+            }
         }
     }
 
@@ -813,7 +854,10 @@ function Setup-PluginMarketplaces {
     }
     if ($failed.Count -gt 0) {
         Write-Warn "Failed to register $($failed.Count) marketplace(s):"
-        $failed | ForEach-Object { Write-Host "  ! $_" }
+        foreach ($f in $failed) {
+            Write-Host "  ! $($f.Repo)"
+            Write-Host "      $($f.Output)"
+        }
     }
 }
 
@@ -1018,8 +1062,7 @@ function Show-Summary {
     Write-Host ""
     Write-Info "Next steps:"
     if (Has-Command gh) {
-        $authCheck = gh auth status 2>&1
-        if ($LASTEXITCODE -ne 0) {
+        if ((Invoke-NativeQuiet { gh auth status }) -ne 0) {
             Write-Host "  - Run 'gh auth login --git-protocol https' to authenticate with GitHub"
         }
     }
@@ -1073,6 +1116,8 @@ function Main {
     Install-Git
     Set-LongPathSupport
     Install-GH
+    Setup-GHAuth
+    Setup-GitIdentity
     Install-Python
     Install-Node
     Install-1Password
@@ -1083,8 +1128,6 @@ function Main {
     Install-Codex
     Install-Gemini
     Setup-ClaudeEnv
-    Setup-GHAuth
-    Setup-GitIdentity
     Setup-PluginMarketplaces
     Install-Plugins
     Show-Summary

@@ -460,7 +460,10 @@ setup_gh_auth() {
   echo ""
   info "GitHub CLI is installed but not authenticated."
   if confirm "Run 'gh auth login' now?"; then
-    gh auth login --git-protocol https || warn "gh auth login failed; you can run it manually later"
+    # --scopes user:email: lets setup_git_identity read the user's primary
+    # email via `gh api user/emails` when it's not public on the user
+    # profile. Without it that endpoint returns HTTP 404.
+    gh auth login --git-protocol https --scopes user:email || warn "gh auth login failed; you can run it manually later"
   fi
 }
 
@@ -562,7 +565,13 @@ setup_git_identity() {
     # In non-interactive mode, set what we can silently
     [[ -z "$current_name" && -n "$set_name" ]]   && git config --global user.name "$set_name"
     [[ -z "$current_email" && -n "$set_email" ]] && git config --global user.email "$set_email"
-    info "Git identity configured from GitHub profile"
+    if [[ -n "$set_name" && -n "$set_email" ]]; then
+      info "Git identity configured from GitHub profile"
+    else
+      warn "Git identity partially configured from GitHub profile. Still missing:"
+      [[ -z "$set_name" ]]  && echo "  user.name  (run: git config --global user.name \"Your Name\")"
+      [[ -z "$set_email" ]] && echo "  user.email (run: git config --global user.email \"you@example.com\")"
+    fi
     return 0
   fi
 
@@ -578,6 +587,18 @@ setup_git_identity() {
   if confirm "Set Git identity from your GitHub profile?"; then
     [[ -z "$current_name" && -n "$set_name" ]]   && git config --global user.name "$set_name"   && success "Set user.name to: $set_name"
     [[ -z "$current_email" && -n "$set_email" ]] && git config --global user.email "$set_email" && success "Set user.email to: $set_email"
+
+    # Catch partial success: GitHub didn't expose everything we needed
+    # (common cause: existing gh token lacks the user:email scope, so the
+    # email fallback returns 404 and we have no email to set).
+    if [[ -z "$set_name" || -z "$set_email" ]]; then
+      warn "GitHub didn't expose everything. Set manually:"
+      [[ -z "$set_name" ]] && echo "  git config --global user.name \"Your Name\""
+      if [[ -z "$set_email" ]]; then
+        echo "  git config --global user.email \"you@example.com\""
+        echo "  (or run 'gh auth refresh --scopes user:email' and re-run this script to pull it from GitHub)"
+      fi
+    fi
   else
     warn "Skipped. Set manually with:"
     [[ -z "$current_name" ]]  && echo "  git config --global user.name \"Your Name\""
@@ -696,17 +717,21 @@ setup_plugin_marketplaces() {
   already_added="$(claude plugin marketplace list 2>/dev/null \
     | sed -n 's/.*GitHub (\([^)]*\)).*/\1/p')"
 
-  local added=() failed=()
-  local repo
+  local added=() failed=() failed_errs=()
+  local repo add_err
   for repo in "${CSA_MARKETPLACES[@]}"; do
     # Already registered, or not accessible to this account — silently skip.
     grep -qxF "$repo" <<< "$already_added" && continue
     gh api "repos/$repo" >/dev/null 2>&1 || continue
 
-    if claude plugin marketplace add "$repo" >/dev/null 2>&1; then
+    # Capture stderr (into add_err) so a real failure shows its reason;
+    # discard stdout. `2>&1 >/dev/null` inside $(...) redirects stderr to
+    # the captured stdout stream, then sends original stdout to /dev/null.
+    if add_err="$(claude plugin marketplace add "$repo" 2>&1 >/dev/null)"; then
       added+=("$repo")
     else
       failed+=("$repo")
+      failed_errs+=("${add_err:-<no stderr output>}")
     fi
   done
 
@@ -716,7 +741,10 @@ setup_plugin_marketplaces() {
   fi
   if [[ ${#failed[@]} -gt 0 ]]; then
     warn "Failed to register ${#failed[@]} marketplace(s):"
-    printf '  ! %s\n' "${failed[@]}"
+    local i
+    for i in "${!failed[@]}"; do
+      printf '  ! %s\n      %s\n' "${failed[$i]}" "${failed_errs[$i]}"
+    done
   fi
 }
 
@@ -968,6 +996,8 @@ main() {
   install_python
   install_git
   install_gh
+  setup_gh_auth
+  setup_git_identity
   install_1password
   install_1password_cli
   install_claude_desktop
@@ -976,8 +1006,6 @@ main() {
   install_codex
   install_gemini
   setup_claude_env
-  setup_gh_auth
-  setup_git_identity
   setup_plugin_marketplaces
   install_plugins
   summary

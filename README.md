@@ -9,10 +9,12 @@ Installs Claude Desktop, ChatGPT Desktop, Claude Code, Codex CLI, Gemini CLI, pl
 ### macOS
 
 ```bash
-bash -c "$(curl -fsSL https://raw.githubusercontent.com/CloudSecurityAlliance/DesktopSetup/HEAD/scripts/macos-ai-tools.sh)"
+bash -c "$(curl -fsSL -H 'Cache-Control: no-cache' https://raw.githubusercontent.com/CloudSecurityAlliance/DesktopSetup/HEAD/scripts/macos-ai-tools.sh)"
 ```
 
 The macOS script shares a base layer (Xcode CLI Tools, Homebrew, Node.js/npm, Python) and installs it if not already present.
+
+> **Note:** The `-H 'Cache-Control: no-cache'` flag forces a fresh download from GitHub — without it, a stale copy from the CDN edge cache can persist for a few minutes after we ship fixes.
 
 ### Windows
 
@@ -39,10 +41,12 @@ When prompted "Do you want to change the execution policy?", type `Y` and press 
 **Step 3 — Run the AI tools script.** Close the Administrator window and open a regular PowerShell window:
 
 ```powershell
-irm https://raw.githubusercontent.com/CloudSecurityAlliance/DesktopSetup/HEAD/scripts/windows-ai-tools.ps1 | iex
+irm https://raw.githubusercontent.com/CloudSecurityAlliance/DesktopSetup/HEAD/scripts/windows-ai-tools.ps1 -Headers @{'Cache-Control'='no-cache'} | iex
 ```
 
 The Windows AI tools script also installs Git, GitHub CLI, Python, and Node.js (via winget) alongside the AI apps and CLIs. Requires Windows 10/11 and winget.
+
+> **Note:** The `-Headers @{'Cache-Control'='no-cache'}` flag forces a fresh download from GitHub — without it, a stale copy from the CDN edge cache can persist for a few minutes after we ship fixes.
 
 **Step 4 — Restore the original policy.** Once you're done running scripts, re-open PowerShell as Administrator and set the policy back to whatever Step 1 reported:
 
@@ -57,7 +61,7 @@ Replace `Restricted` with the value from Step 1. If you plan to run PowerShell s
 Connect your AI coding CLIs to Airtable, GitHub, and Gmail. Scans your existing config files and environment for tokens, validates each against the service's API, deduplicates them into a labeled catalog (A, B, C…), and writes the right token to each tool. Also detects and removes old npm/stdio-based MCP entries that no longer work.
 
 ```bash
-bash -c "$(curl -fsSL https://raw.githubusercontent.com/CloudSecurityAlliance/DesktopSetup/HEAD/scripts/macos-mcp-setup.sh)"
+bash -c "$(curl -fsSL -H 'Cache-Control: no-cache' https://raw.githubusercontent.com/CloudSecurityAlliance/DesktopSetup/HEAD/scripts/macos-mcp-setup.sh)"
 ```
 
 ## Clone a repo & start Claude
@@ -67,13 +71,13 @@ Once AI tools are installed, use these one-liners to clone any CSA repo and laun
 ### macOS
 
 ```bash
-bash -c "$(curl -fsSL https://raw.githubusercontent.com/CloudSecurityAlliance/DesktopSetup/HEAD/scripts/clone-and-claude.sh)" -- ORG/REPO
+bash -c "$(curl -fsSL -H 'Cache-Control: no-cache' https://raw.githubusercontent.com/CloudSecurityAlliance/DesktopSetup/HEAD/scripts/clone-and-claude.sh)" -- ORG/REPO
 ```
 
 ### Windows
 
 ```powershell
-$env:CSA_REPO='ORG/REPO'; irm https://raw.githubusercontent.com/CloudSecurityAlliance/DesktopSetup/HEAD/scripts/clone-and-claude.ps1 | iex
+$env:CSA_REPO='ORG/REPO'; irm https://raw.githubusercontent.com/CloudSecurityAlliance/DesktopSetup/HEAD/scripts/clone-and-claude.ps1 -Headers @{'Cache-Control'='no-cache'} | iex
 ```
 
 The scripts check prerequisites, clone the repo to `~/GitHub/OrgName/RepoName`, and tell you how to launch Claude Code. Safe to re-run — they skip the clone if the repo already exists and pull latest changes instead.
@@ -85,7 +89,7 @@ The scripts check prerequisites, clone the repo to `~/GitHub/OrgName/RepoName`, 
 Run the update script to update everything at once (Homebrew formulas/casks, npm globals, pip packages, and Claude Code). Saves a snapshot of all installed versions before updating so you can roll back if anything breaks:
 
 ```bash
-bash -c "$(curl -fsSL https://raw.githubusercontent.com/CloudSecurityAlliance/DesktopSetup/HEAD/scripts/macos-update.sh)"
+bash -c "$(curl -fsSL -H 'Cache-Control: no-cache' https://raw.githubusercontent.com/CloudSecurityAlliance/DesktopSetup/HEAD/scripts/macos-update.sh)"
 ```
 
 Or update individual package managers manually:
@@ -120,7 +124,7 @@ Optional — install these alongside AI tools for a complete work setup. Covers 
 **Installs:** 1Password, Slack, Zoom, Chrome, Microsoft Office, Git, GitHub CLI. Optional dev profile adds VS Code, AWS CLI, and Wrangler.
 
 ```bash
-bash -c "$(curl -fsSL https://raw.githubusercontent.com/CloudSecurityAlliance/DesktopSetup/HEAD/scripts/macos-work-tools.sh)"
+bash -c "$(curl -fsSL -H 'Cache-Control: no-cache' https://raw.githubusercontent.com/CloudSecurityAlliance/DesktopSetup/HEAD/scripts/macos-work-tools.sh)"
 ```
 
 ### Windows
@@ -128,7 +132,7 @@ bash -c "$(curl -fsSL https://raw.githubusercontent.com/CloudSecurityAlliance/De
 **Installs:** Git, GitHub CLI, 1Password, Slack, Zoom, Chrome. Optional dev profile adds VS Code, AWS CLI, and Wrangler. Requires the PowerShell execution policy from the Windows AI tools section above.
 
 ```powershell
-irm https://raw.githubusercontent.com/CloudSecurityAlliance/DesktopSetup/HEAD/scripts/windows-work-tools.ps1 | iex
+irm https://raw.githubusercontent.com/CloudSecurityAlliance/DesktopSetup/HEAD/scripts/windows-work-tools.ps1 -Headers @{'Cache-Control'='no-cache'} | iex
 ```
 
 ## Plugins installed
