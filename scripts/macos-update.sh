@@ -17,7 +17,7 @@
 
 set -euo pipefail
 
-SCRIPT_VERSION="2026.04231532"
+SCRIPT_VERSION="2026.04242300"
 
 # ── CSA plugin marketplaces ─────────────────────────────────────────
 # Each update run will add any entries from this list that aren't yet
@@ -276,6 +276,7 @@ preflight() {
   # Plugin marketplaces
   if has_command claude; then
     echo "  Plugin marketplaces: refresh registered, add accessible CSA repos"
+    install_plugins_preview
     echo ""
   fi
 }
@@ -417,6 +418,53 @@ plugin_list_entries() {
   grep -v -E '^\s*(#|$)'
 }
 
+# Preflight helper: print one line summarizing what install_plugins would
+# do. Fetches the list files and diffs against `claude plugin list`.
+# Intentionally cheap — no gh-probes here, so the count is "up to N";
+# CSA plugins the user can't access get filtered out at actual install
+# time.
+install_plugins_preview() {
+  if ! has_command curl; then
+    echo "  Plugins              (skipped: curl not available)"
+    return 0
+  fi
+
+  local public_list internal_list
+  public_list="$(curl -fsSL -H 'Cache-Control: no-cache' "$PLUGIN_LIST_URL_PUBLIC" 2>/dev/null || true)"
+  internal_list="$(curl -fsSL -H 'Cache-Control: no-cache' "$PLUGIN_LIST_URL_INTERNAL" 2>/dev/null || true)"
+
+  if [[ -z "$public_list" && -z "$internal_list" ]]; then
+    echo "  Plugins              (skipped: couldn't fetch plugin lists)"
+    return 0
+  fi
+
+  local installed_plugins=""
+  if has_command claude; then
+    installed_plugins="$(claude plugin list 2>/dev/null \
+      | sed -n 's/^[[:space:]]*❯[[:space:]]*\(.*\)$/\1/p')"
+  fi
+
+  local total=0 already=0 line
+  while IFS= read -r line; do
+    [[ -z "$line" ]] && continue
+    total=$((total + 1))
+    if [[ -n "$installed_plugins" ]] && grep -qxF "$line" <<< "$installed_plugins"; then
+      already=$((already + 1))
+    fi
+  done < <(printf '%s\n%s\n' "$public_list" "$internal_list" | plugin_list_entries)
+
+  local new=$((total - already))
+  if [[ $total -eq 0 ]]; then
+    echo "  Plugins              (list files empty)"
+  elif [[ $new -eq 0 ]]; then
+    echo "  Plugins              all $already defaults already installed"
+  elif [[ $already -eq 0 ]]; then
+    echo "  Plugins              install up to $total defaults from csa-plugins*.txt"
+  else
+    echo "  Plugins              install up to $new new ($already already present)"
+  fi
+}
+
 install_plugins() {
   has_command claude || return 0
   has_command curl || return 0
@@ -440,7 +488,7 @@ install_plugins() {
   local gh_authed=0
   if has_command gh && gh auth status >/dev/null 2>&1; then gh_authed=1; fi
 
-  local added=() installed=() failed=() failed_errs=()
+  local added=() failed=() failed_errs=()
   local add_err inst_err
 
   # Track which marketplaces/plugins we've processed. Indexed arrays
@@ -491,8 +539,14 @@ install_plugins() {
     fi
   done < <(printf '%s\n%s\n' "$public_list" "$internal_list" | plugin_list_entries)
 
-  # Pass 2: install each plugin whose marketplace is usable and that
-  # isn't already installed.
+  if [[ ${#added[@]} -gt 0 ]]; then
+    success "Registered plugin marketplaces:"
+    printf '  + %s\n' "${added[@]}"
+  fi
+
+  # Pass 2: collect plugins to install (in usable marketplace, not already
+  # installed, deduped across list files).
+  local pending_installs=()
   while IFS= read -r line; do
     [[ -z "$line" ]] && continue
     name="${line%@*}"
@@ -504,28 +558,27 @@ install_plugins() {
     [[ " ${market_usable[*]:-} " == *" $market "* ]] || continue
     grep -qxF "${name}@${market}" <<< "$installed_plugins" && continue
 
-    if inst_err="$(claude plugin install "${name}@${market}" 2>&1 >/dev/null)"; then
-      installed+=("${name}@${market}")
-    else
-      failed+=("plugin ${name}@${market}")
-      failed_errs+=("${inst_err:-<no stderr output>}")
-    fi
+    pending_installs+=("${name}@${market}")
   done < <(printf '%s\n%s\n' "$public_list" "$internal_list" | plugin_list_entries)
 
-  if [[ ${#added[@]} -gt 0 ]]; then
-    success "Registered plugin marketplaces:"
-    printf '  + %s\n' "${added[@]}"
-  fi
-  if [[ ${#installed[@]} -gt 0 ]]; then
-    success "Installed plugins:"
-    printf '  + %s\n' "${installed[@]}"
-  fi
-  if [[ ${#failed[@]} -gt 0 ]]; then
-    warn "Failed on ${#failed[@]} item(s):"
-    local i
-    for i in "${!failed[@]}"; do
-      printf '  ! %s\n      %s\n' "${failed[$i]}" "${failed_errs[$i]}"
+  # Pass 3: announce, then install each pending plugin with per-item
+  # progress so the user sees forward motion instead of a silent wait.
+  if [[ ${#pending_installs[@]} -gt 0 ]]; then
+    info "Installing ${#pending_installs[@]} plugin(s):"
+    local plugin
+    for plugin in "${pending_installs[@]}"; do
+      if inst_err="$(claude plugin install "$plugin" 2>&1 >/dev/null)"; then
+        printf '  + %s\n' "$plugin"
+      else
+        failed+=("plugin $plugin")
+        failed_errs+=("${inst_err:-<no stderr output>}")
+        printf '  ! %s\n      %s\n' "$plugin" "${inst_err:-<no stderr output>}"
+      fi
     done
+  fi
+
+  if [[ ${#failed[@]} -gt 0 ]]; then
+    warn "Plugin install finished with ${#failed[@]} failure(s) (details above)."
   fi
 }
 
