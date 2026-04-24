@@ -28,10 +28,12 @@ $ScriptVersion = "2026.04250000"
 #
 # KEEP IN SYNC: This array is duplicated in
 #   scripts/macos-ai-tools.sh      (installer, macOS)
-#   scripts/macos-update.sh        (updater, macOS)
-# All three files hard-code the same list. When adding or removing a
+#   scripts/macos-update.sh        (full updater, macOS)
+#   scripts/macos-plugins.sh       (standalone plugins, macOS)
+#   scripts/windows-plugins.ps1    (standalone plugins, Windows)
+# All five files hard-code the same list. When adding or removing a
 # marketplace, update every file and bump each file's SCRIPT_VERSION /
-# $ScriptVersion — otherwise the installer and updater will drift.
+# $ScriptVersion -- otherwise the scripts will drift.
 $CSA_MARKETPLACES = @(
     "CloudSecurityAlliance-Internal/Accounting-Plugins"
     "CloudSecurityAlliance-Internal/CINO-Plugins"
@@ -44,9 +46,12 @@ $CSA_MARKETPLACES = @(
 # Marketplace name -> GitHub repo. See the matching block in
 # scripts/macos-ai-tools.sh for the full rationale.
 #
-# KEEP IN SYNC: duplicated as PLUGIN_MARKETPLACE_REPOS in
+# KEEP IN SYNC: duplicated as plugin_marketplace_repo in
 #   scripts/macos-ai-tools.sh
 #   scripts/macos-update.sh
+#   scripts/macos-plugins.sh
+# and as $PluginMarketplaceRepos in
+#   scripts/windows-plugins.ps1
 $PluginMarketplaceRepos = @{
     'claude-plugins-official'  = 'anthropics/claude-plugins-official'
     'anthropic-agent-skills'   = 'anthropics/skills'

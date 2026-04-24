@@ -92,6 +92,12 @@ Run the update script to update everything at once (Homebrew formulas/casks, npm
 bash -c "$(curl -fsSL -H 'Cache-Control: no-cache' https://raw.githubusercontent.com/CloudSecurityAlliance/DesktopSetup/HEAD/scripts/macos-update.sh)"
 ```
 
+**Plugins only** — if you just want to refresh CSA Claude Code plugins (no Homebrew/npm/pip), run the standalone plugins script:
+
+```bash
+bash -c "$(curl -fsSL -H 'Cache-Control: no-cache' https://raw.githubusercontent.com/CloudSecurityAlliance/DesktopSetup/HEAD/scripts/macos-plugins.sh)"
+```
+
 Or update individual package managers manually:
 
 ```bash
@@ -112,6 +118,12 @@ npm update -g @openai/codex @google/gemini-cli
 ```
 
 Claude Code updates itself automatically.
+
+**Plugins only** — Windows counterpart of `macos-plugins.sh`:
+
+```powershell
+irm https://raw.githubusercontent.com/CloudSecurityAlliance/DesktopSetup/HEAD/scripts/windows-plugins.ps1 -Headers @{'Cache-Control'='no-cache'} | iex
+```
 
 ---
 
@@ -207,6 +219,8 @@ Each script is self-contained and idempotent (safe to re-run):
 - **`macos-ai-tools.sh`** — AI desktop apps and coding assistants with migration support (macOS)
 - **`macos-mcp-setup.sh`** — Discover, validate, and write MCP server tokens (Airtable, GitHub, Gmail) for Claude Code, Codex, and Gemini; cleans up legacy npm/stdio entries (macOS)
 - **`macos-update.sh`** — Update all installed tools with version snapshots (macOS)
+- **`macos-plugins.sh`** — Standalone Claude Code plugin install/update (macOS)
+- **`windows-plugins.ps1`** — Standalone Claude Code plugin install/update (Windows)
 - **`macos-work-tools.sh`** — Core work apps + optional developer tools (macOS)
 - **`windows-ai-tools.ps1`** — AI desktop apps and coding assistants with migration support (Windows)
 - **`windows-work-tools.ps1`** — Core work apps + optional developer tools (Windows)

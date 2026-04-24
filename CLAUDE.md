@@ -10,11 +10,13 @@ DesktopSetup is the Cloud Security Alliance's machine bootstrap. Scripts manage 
 - `macos-work-tools.sh` — Core work apps (1Password, Slack, Zoom, Chrome, Office, Git, GitHub CLI) + optional dev profile (VS Code, AWS CLI, Wrangler). Post-install: `gh auth login` + Git identity from GitHub profile
 - `macos-ai-tools.sh` — AI desktop apps (Claude Desktop, ChatGPT) + Git, GitHub CLI + auth + Git identity from GitHub profile, AI coding CLIs (Claude Code, Codex, Gemini) with migration from wrong install methods. Registers accessible CSA plugin marketplaces with Claude Code (via `gh`-probed access check)
 - `macos-update.sh` — Updates everything: Homebrew formulas/casks, npm globals, pip packages, Claude Code (`claude update`), plus syncs CSA plugin marketplaces (adds missing accessible ones, refreshes all registered). Snapshots all versions before updating for rollback.
+- `macos-plugins.sh` — Standalone plugin install/update. Just the plugin-related work from `macos-update.sh` (register CSA marketplaces, install default plugins, refresh marketplaces) without the Homebrew/npm/pip steps. Use when you just want to get current on plugins without the full update cycle.
 - `macos-mcp-setup.sh` — Configures MCP servers (Airtable, GitHub, Gmail) for Claude Code, Codex, and Gemini. Discovers tokens from existing config files and environment, validates them against each service's API, and writes to each tool's config.
 
 **Windows (PowerShell):**
 - `windows-work-tools.ps1` — Same tool set as macOS work tools, using winget instead of Homebrew
 - `windows-ai-tools.ps1` — Same AI tools as macOS (desktop apps + CLIs), using winget + npm. Includes migration support, Git identity from GitHub profile, and CSA plugin marketplace registration.
+- `windows-plugins.ps1` — Standalone plugin install/update, Windows counterpart to `macos-plugins.sh`. Runs just the plugin workflow without touching winget apps.
 
 **Cross-platform:**
 - `clone-and-claude.sh` / `clone-and-claude.ps1` — Clone a CSA repo into `~/GitHub/OrgName/RepoName` and print instructions to launch Claude Code
@@ -28,9 +30,11 @@ scripts/
   macos-work-tools.sh       # Work apps + optional dev tools (macOS)
   macos-ai-tools.sh         # AI desktop apps + coding CLIs (macOS)
   macos-update.sh           # Update everything + snapshot for rollback (macOS)
+  macos-plugins.sh          # Standalone plugin install/update (macOS)
   macos-mcp-setup.sh        # Configure MCP servers for AI CLIs (macOS)
   windows-work-tools.ps1    # Work apps + optional dev tools (Windows)
   windows-ai-tools.ps1      # AI desktop apps + coding CLIs (Windows)
+  windows-plugins.ps1       # Standalone plugin install/update (Windows)
   clone-and-claude.sh       # Clone repo & launch Claude (macOS)
   clone-and-claude.ps1      # Clone repo & launch Claude (Windows)
 archives/                   # Previous script versions for reference
@@ -81,17 +85,17 @@ Requires Python 3 (the script calls `abort` if `python3` is not found). Gmail is
 All scripts declare `SCRIPT_VERSION="YYYY.MMDDHHSS"` near the top. Update this value when making changes — use the current date/time in that format.
 
 ### Shared boilerplate
-All scripts (both platforms) duplicate their output helpers, precondition checks, and utility functions. macOS uses `has_command`, `confirm`, `ensure_brew_in_path`; Windows uses `Has-Command`. The two macOS install scripts additionally share `install_xcode_cli_tools`, `install_homebrew`, `install_node`, `setup_gh_auth`, and `setup_git_identity`. The `CSA_MARKETPLACES` array (list of plugin marketplace `ORG/REPO` strings) is duplicated across `macos-ai-tools.sh`, `windows-ai-tools.ps1`, and `macos-update.sh` — update all three when adding a new marketplace, and bump each file's `SCRIPT_VERSION`. **When changing shared logic, update all files that use it.** The marketplace-name → repo mapping is similarly duplicated across the three scripts: as a `plugin_marketplace_repo` bash function in `macos-ai-tools.sh` and `macos-update.sh` (function-based because macOS ships bash 3.2, which doesn't support `declare -A` associative arrays), and as a `$PluginMarketplaceRepos` hashtable in `windows-ai-tools.ps1`. The actual plugin lists, however, are single-source: `scripts/csa-plugins.txt` and `scripts/csa-plugins-internal.txt` are fetched from HEAD at runtime, so list-only changes do **not** require a script edit or `SCRIPT_VERSION` bump.
+All scripts (both platforms) duplicate their output helpers, precondition checks, and utility functions. macOS uses `has_command`, `confirm`, `ensure_brew_in_path`; Windows uses `Has-Command`. The two macOS install scripts additionally share `install_xcode_cli_tools`, `install_homebrew`, `install_node`, `setup_gh_auth`, and `setup_git_identity`. The `CSA_MARKETPLACES` array (list of plugin marketplace `ORG/REPO` strings) is duplicated across **five** scripts: `macos-ai-tools.sh`, `windows-ai-tools.ps1`, `macos-update.sh`, `macos-plugins.sh`, `windows-plugins.ps1` — update all five when adding a new marketplace, and bump each file's `SCRIPT_VERSION`. **When changing shared logic, update all files that use it.** The marketplace-name → repo mapping is similarly duplicated across all five scripts: as a `plugin_marketplace_repo` bash function in the three `.sh` files (function-based because macOS ships bash 3.2, which doesn't support `declare -A` associative arrays), and as a `$PluginMarketplaceRepos` hashtable in the two `.ps1` files. The actual plugin lists, however, are single-source: `scripts/csa-plugins.txt` and `scripts/csa-plugins-internal.txt` are fetched from HEAD at runtime, so list-only changes do **not** require a script edit or `SCRIPT_VERSION` bump.
 
 ### Plugin marketplace registration
-`macos-ai-tools.sh`, `windows-ai-tools.ps1`, and `macos-update.sh` share the same silent-by-default registration contract:
+`macos-ai-tools.sh`, `windows-ai-tools.ps1`, `macos-update.sh`, `macos-plugins.sh`, and `windows-plugins.ps1` share the same silent-by-default registration contract:
 1. If `claude` or `gh` is missing, or `gh` is not authenticated, return silently — no warning, no action-item line. A user outside CSA-Internal running the installer should not see chatter about repos they can't see.
 2. For each entry in `CSA_MARKETPLACES`: skip if already registered (parsed from `claude plugin marketplace list`); probe access with `gh api repos/$repo` and silently skip on non-zero exit; otherwise `claude plugin marketplace add $repo`.
 3. Only print output when a marketplace is actually added (success line) or when `add` itself errors (warn line). Inaccessible and already-registered entries produce no output. The warn line includes the captured stderr from `claude plugin marketplace add`, indented under the failed entry, so the schema/auth/network reason is visible (bash: `add_err="$(cmd 2>&1 >/dev/null)"`; PowerShell: `Invoke-NativeCapture`).
 4. The updater additionally runs `claude plugin marketplace update` after the add pass to refresh all registered sources — this step always prints its `Refreshing plugin marketplaces` info line since refreshing is the updater's core purpose.
 
 ### Plugin install contract
-`macos-ai-tools.sh`, `windows-ai-tools.ps1`, and `macos-update.sh` share a silent-by-default plugin-install contract — similar shape to marketplace registration, but driven by list files:
+The plugin-install contract is shared across all five scripts — `macos-ai-tools.sh`, `windows-ai-tools.ps1`, `macos-update.sh`, `macos-plugins.sh`, and `windows-plugins.ps1` — silent-by-default, driven by list files:
 1. Fetch `scripts/csa-plugins.txt` (public) and `scripts/csa-plugins-internal.txt` (CSA-internal) from HEAD via `curl` / `Invoke-RestMethod`. If both fetches fail or `claude`/`curl` is missing, the whole step is a silent no-op.
 2. Each entry is `<plugin>@<marketplace>`. Blank lines and `#`-prefixed lines are ignored.
 3. Pass 1: ensure each referenced marketplace is registered. Public marketplaces (`claude-plugins-official`, `anthropic-agent-skills`) register unconditionally. CSA marketplaces (`csa-plugins`, `csa-cino-plugins`, `csa-research-plugins`, `csa-training-plugins`, `csa-plugins-official`, `accounting-plugins`) are `gh`-probed first via their underlying repo — inaccessible ones silently skip every plugin from that marketplace, matching the existing CSA-marketplace registration contract. Any registrations that happened print a `Registered plugin marketplaces:` success block right after this pass.
@@ -111,6 +115,7 @@ No test suite. Use these to check scripts:
 bash -n scripts/macos-work-tools.sh
 bash -n scripts/macos-ai-tools.sh
 bash -n scripts/macos-update.sh
+bash -n scripts/macos-plugins.sh
 bash -n scripts/macos-mcp-setup.sh
 bash -n scripts/clone-and-claude.sh
 
@@ -118,6 +123,7 @@ bash -n scripts/clone-and-claude.sh
 shellcheck scripts/macos-work-tools.sh
 shellcheck scripts/macos-ai-tools.sh
 shellcheck scripts/macos-update.sh
+shellcheck scripts/macos-plugins.sh
 shellcheck scripts/macos-mcp-setup.sh
 shellcheck scripts/clone-and-claude.sh
 ```
@@ -136,6 +142,9 @@ bash -c "$(curl -fsSL -H 'Cache-Control: no-cache' https://raw.githubusercontent
 
 # macOS — Update everything
 bash -c "$(curl -fsSL -H 'Cache-Control: no-cache' https://raw.githubusercontent.com/CloudSecurityAlliance/DesktopSetup/HEAD/scripts/macos-update.sh)"
+
+# macOS — Plugin install/update only (no brew/npm/pip)
+bash -c "$(curl -fsSL -H 'Cache-Control: no-cache' https://raw.githubusercontent.com/CloudSecurityAlliance/DesktopSetup/HEAD/scripts/macos-plugins.sh)"
 
 # macOS — Configure MCP servers
 bash -c "$(curl -fsSL -H 'Cache-Control: no-cache' https://raw.githubusercontent.com/CloudSecurityAlliance/DesktopSetup/HEAD/scripts/macos-mcp-setup.sh)"
