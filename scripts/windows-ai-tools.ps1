@@ -18,7 +18,7 @@
 
 $ErrorActionPreference = 'Stop'
 
-$ScriptVersion = "2026.04242300"
+$ScriptVersion = "2026.04250000"
 
 # ── CSA plugin marketplaces ─────────────────────────────────────────
 # Plugin marketplaces to register with Claude Code. Each entry is an
@@ -80,6 +80,27 @@ function Get-ToolVersion {
             $output = & $Command @Arguments 2>$null
             if ($output) { return ($output | Select-Object -First 1) }
         } catch {}
+    }
+    return $null
+}
+
+# Query winget for an exact-id package, return its Version field or $null
+# if not installed / parse failed. Winget's columnar output varies in
+# width, so we look for a line that contains the ID followed by at least
+# one non-whitespace token (the version). Graceful degradation: callers
+# should treat $null as "installed but version unknown" only if a
+# separate presence check has already passed.
+function Get-WingetVersion {
+    param([string]$Id)
+    try {
+        $output = winget list --exact --id $Id --accept-source-agreements 2>$null
+    } catch { return $null }
+    if (-not $output) { return $null }
+    $pattern = [regex]::Escape($Id) + '\s+(\S+)'
+    foreach ($line in $output) {
+        if ($line -match $pattern) {
+            return $matches[1]
+        }
     }
     return $null
 }
@@ -309,7 +330,9 @@ function Show-Preflight {
     # --exact: avoid matching AgileBits.1Password.CLI
     $onePwGui = winget list --exact --id AgileBits.1Password --accept-source-agreements 2>$null
     if ($onePwGui -and ($onePwGui | Select-String 'AgileBits.1Password')) {
-        Write-Host "  1Password ......... installed (winget)"
+        $v = Get-WingetVersion 'AgileBits.1Password'
+        $suffix = if ($v) { ", v$v" } else { '' }
+        Write-Host "  1Password ......... installed (winget$suffix)"
     } else {
         Write-Host "  1Password ......... install via winget"
     }
@@ -325,7 +348,9 @@ function Show-Preflight {
     # Claude Desktop
     $claudeDesktop = winget list --id Anthropic.Claude --accept-source-agreements 2>$null
     if ($claudeDesktop -and ($claudeDesktop | Select-String 'Anthropic.Claude')) {
-        Write-Host "  Claude Desktop .... installed (winget)"
+        $v = Get-WingetVersion 'Anthropic.Claude'
+        $suffix = if ($v) { ", v$v" } else { '' }
+        Write-Host "  Claude Desktop .... installed (winget$suffix)"
     } else {
         Write-Host "  Claude Desktop .... install via winget"
     }
@@ -333,7 +358,9 @@ function Show-Preflight {
     # ChatGPT Desktop
     $chatgptDesktop = winget list --id OpenAI.ChatGPT --accept-source-agreements 2>$null
     if ($chatgptDesktop -and ($chatgptDesktop | Select-String 'OpenAI.ChatGPT')) {
-        Write-Host "  ChatGPT Desktop ... installed (winget)"
+        $v = Get-WingetVersion 'OpenAI.ChatGPT'
+        $suffix = if ($v) { ", v$v" } else { '' }
+        Write-Host "  ChatGPT Desktop ... installed (winget$suffix)"
     } else {
         Write-Host "  ChatGPT Desktop ... install via winget"
     }
