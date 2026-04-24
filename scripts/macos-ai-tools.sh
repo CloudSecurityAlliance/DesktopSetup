@@ -22,7 +22,7 @@
 
 set -euo pipefail
 
-SCRIPT_VERSION="2026.04242300"
+SCRIPT_VERSION="2026.04242330"
 
 # ── CSA plugin marketplaces ─────────────────────────────────────────
 # Plugin marketplaces to register with Claude Code. Each entry is an
@@ -270,6 +270,8 @@ preflight() {
   # Claude Desktop
   if brew list --cask claude >/dev/null 2>&1; then
     echo "  Claude Desktop .... installed (Homebrew cask)"
+  elif [[ -d "/Applications/Claude.app" ]]; then
+    echo "  Claude Desktop .... installed (non-Homebrew)"
   else
     echo "  Claude Desktop .... install via Homebrew cask"
   fi
@@ -277,6 +279,8 @@ preflight() {
   # ChatGPT Desktop
   if brew list --cask chatgpt >/dev/null 2>&1; then
     echo "  ChatGPT Desktop ... installed (Homebrew cask)"
+  elif [[ -d "/Applications/ChatGPT.app" ]]; then
+    echo "  ChatGPT Desktop ... installed (non-Homebrew)"
   else
     echo "  ChatGPT Desktop ... install via Homebrew cask"
   fi
@@ -504,6 +508,11 @@ install_claude_desktop() {
     return 0
   fi
 
+  if [[ -d "/Applications/Claude.app" ]]; then
+    info "Claude Desktop already installed (non-Homebrew); skipping"
+    return 0
+  fi
+
   info "Installing Claude Desktop"
   brew install --cask claude || warn "Failed to install Claude Desktop"
 }
@@ -513,6 +522,11 @@ install_chatgpt() {
 
   if brew list --cask chatgpt >/dev/null 2>&1; then
     info "ChatGPT Desktop already installed; skipping"
+    return 0
+  fi
+
+  if [[ -d "/Applications/ChatGPT.app" ]]; then
+    info "ChatGPT Desktop already installed (non-Homebrew); skipping"
     return 0
   fi
 
@@ -965,10 +979,10 @@ summary() {
   if has_command op; then
     echo "  1Password CLI ..... $(get_version op --version)"
   fi
-  if brew list --cask claude >/dev/null 2>&1; then
+  if brew list --cask claude >/dev/null 2>&1 || [[ -d "/Applications/Claude.app" ]]; then
     echo "  Claude Desktop .... installed"
   fi
-  if brew list --cask chatgpt >/dev/null 2>&1; then
+  if brew list --cask chatgpt >/dev/null 2>&1 || [[ -d "/Applications/ChatGPT.app" ]]; then
     echo "  ChatGPT Desktop ... installed"
   fi
   if has_command claude; then
