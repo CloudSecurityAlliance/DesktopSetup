@@ -11,8 +11,9 @@
 #   6. GitHub CLI (gh) + authentication
 #   7. 1Password (via Homebrew cask, GUI app — needed for biometric CLI unlock)
 #   8. 1Password CLI (via Homebrew)
-#   9. Claude Desktop (via Homebrew cask, auto-updates)
-#  10. ChatGPT Desktop (via Homebrew cask, auto-updates)
+#   9. Claude Desktop (via Homebrew cask; app self-updates, so direct-
+#      download copies are detected and left alone)
+#  10. ChatGPT Desktop (via Homebrew cask; same self-update story)
 #  11. Claude Code (native installer, auto-updates)
 #  12. OpenAI Codex CLI (via npm)
 #  13. Google Gemini CLI (via npm)
