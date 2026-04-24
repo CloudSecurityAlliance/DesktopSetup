@@ -27,9 +27,11 @@ SCRIPT_VERSION="2026.04242300"
 # KEEP IN SYNC: This array is duplicated in
 #   scripts/macos-ai-tools.sh      (installer, macOS)
 #   scripts/windows-ai-tools.ps1   (installer, Windows)
-# All three files hard-code the same list. When adding or removing a
+#   scripts/macos-plugins.sh       (standalone plugins, macOS)
+#   scripts/windows-plugins.ps1    (standalone plugins, Windows)
+# All five files hard-code the same list. When adding or removing a
 # marketplace, update every file and bump each file's SCRIPT_VERSION /
-# $ScriptVersion — otherwise the installer and updater will drift.
+# $ScriptVersion — otherwise the scripts will drift.
 CSA_MARKETPLACES=(
   "CloudSecurityAlliance-Internal/Accounting-Plugins"
   "CloudSecurityAlliance-Internal/CINO-Plugins"
@@ -46,8 +48,10 @@ CSA_MARKETPLACES=(
 #
 # KEEP IN SYNC: duplicated as plugin_marketplace_repo in
 #   scripts/macos-ai-tools.sh
+#   scripts/macos-plugins.sh
 # and as $PluginMarketplaceRepos in
 #   scripts/windows-ai-tools.ps1
+#   scripts/windows-plugins.ps1
 plugin_marketplace_repo() {
   case "$1" in
     claude-plugins-official) echo "anthropics/claude-plugins-official" ;;
