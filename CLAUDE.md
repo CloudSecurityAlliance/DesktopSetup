@@ -37,8 +37,11 @@ scripts/
   windows-plugins.ps1       # Standalone plugin install/update (Windows)
   clone-and-claude.sh       # Clone repo & launch Claude (macOS)
   clone-and-claude.ps1      # Clone repo & launch Claude (Windows)
+  csa-plugins.txt           # Public default plugin list (fetched from HEAD at runtime)
+  csa-plugins-internal.txt  # CSA-internal default plugin list (fetched from HEAD at runtime)
 archives/                   # Previous script versions for reference
 docs/                       # Design documents (e.g., Windows AI tools design/process)
+TODO.md                     # Audit findings, priority-grouped with file:line citations
 .github/
   ISSUE_TEMPLATE/           # Issue templates for contributions
   rulesets/                 # Branch protection rules
@@ -68,6 +71,7 @@ docs/                       # Design documents (e.g., Windows AI tools design/pr
 - Same output helper pattern: `Write-Info`, `Write-Success`, `Write-Warn`, `Write-Err`, `Abort`
 - Same utility function pattern: `Has-Command` instead of `has_command`
 - Installation strategy: winget for system tools and desktop apps, npm for AI CLIs
+- `windows-ai-tools.ps1` base layer: winget → Git, GitHub CLI, Node.js, Python (installed if missing); `windows-work-tools.ps1` does not install Python or Node.js
 - Both scripts support migration from wrong install methods (same concept as macOS)
 - `windows-work-tools.ps1` does **not** include Microsoft Office (unlike the macOS equivalent); core set is Git, GitHub CLI, 1Password, Slack, Zoom, Chrome — same core + dev profile selection as the macOS equivalent (dev adds VS Code, AWS CLI, Wrangler)
 
