@@ -23,7 +23,7 @@
 
 set -euo pipefail
 
-SCRIPT_VERSION="2026.04250000"
+SCRIPT_VERSION="2026.04271200"
 
 # ── CSA plugin marketplaces ─────────────────────────────────────────
 # Plugin marketplaces to register with Claude Code. Each entry is an
@@ -78,6 +78,22 @@ plugin_marketplace_repo() {
     *) ;;  # unknown — print nothing
   esac
 }
+
+# ── CSA MCP server ──────────────────────────────────────────────────
+# Registers the CSA MCP server with Claude Code (HTTP transport,
+# OAuth 2.1 + PKCE). The server is in soft launch — open to
+# @cloudsecurityalliance.org accounts and beta testers — so we gate
+# registration behind a `gh`-probe of a canonical CSA-Internal repo,
+# matching the silent-by-default contract used for plugin marketplaces.
+#
+# KEEP IN SYNC: same constants and logic in
+#   scripts/windows-ai-tools.ps1
+#   scripts/macos-update.sh
+#   scripts/macos-plugins.sh
+#   scripts/windows-plugins.ps1
+CSA_MCP_NAME="csa-mcp"
+CSA_MCP_URL="https://cloudsecurityalliance.org/mcp"
+CSA_MCP_GATE_REPO="CloudSecurityAlliance-Internal/CSA-Plugins"
 
 # ── Output helpers ──────────────────────────────────────────────────
 
@@ -360,6 +376,7 @@ preflight() {
   # Plugin marketplaces
   echo "  Plugin marketplaces  probe ${#CSA_MARKETPLACES[@]} CSA repos, add any your GitHub account can access"
   install_plugins_preview
+  echo "  CSA MCP server       register $CSA_MCP_NAME if your GitHub account has CSA-Internal access"
 
   echo ""
 }
@@ -799,6 +816,35 @@ setup_plugin_marketplaces() {
   fi
 }
 
+# Register the CSA MCP server (csa-mcp) with Claude Code if missing.
+# Silent-by-default: returns silently when claude/gh is unavailable, gh
+# is unauthenticated, csa-mcp is already registered, or the user lacks
+# CSA-Internal access. The server uses OAuth 2.1 + PKCE, so the user
+# must run /mcp inside Claude Code to complete the browser sign-in —
+# we print that reminder only on a fresh registration.
+setup_csa_mcp_server() {
+  has_command claude || return 0
+  has_command gh || return 0
+  gh auth status >/dev/null 2>&1 || return 0
+
+  # Already registered? Don't clobber — would invalidate the OAuth session.
+  if claude mcp list 2>/dev/null | grep -qE "^${CSA_MCP_NAME}[: ]"; then
+    return 0
+  fi
+
+  # CSA-membership gate via gh probe of a canonical CSA-Internal repo.
+  gh api "repos/$CSA_MCP_GATE_REPO" >/dev/null 2>&1 || return 0
+
+  local add_err
+  if add_err="$(claude mcp add --transport http --scope user "$CSA_MCP_NAME" "$CSA_MCP_URL" 2>&1 >/dev/null)"; then
+    success "Registered Claude Code MCP server: $CSA_MCP_NAME"
+    info "Run /mcp inside Claude Code to authenticate with the CSA MCP server."
+  else
+    warn "Failed to register Claude Code MCP server '$CSA_MCP_NAME':"
+    printf '      %s\n' "${add_err:-<no stderr output>}"
+  fi
+}
+
 # ── Plugin install ──────────────────────────────────────────────────
 # Fetch the public and internal plugin list files from HEAD, register
 # any missing marketplaces (CSA marketplaces are gh-probed first),
@@ -1111,6 +1157,7 @@ main() {
   setup_claude_env
   setup_plugin_marketplaces
   install_plugins
+  setup_csa_mcp_server
   summary
 }
 

@@ -18,7 +18,7 @@
 
 $ErrorActionPreference = 'Stop'
 
-$ScriptVersion = "2026.04250000"
+$ScriptVersion = "2026.04271200"
 
 # ── CSA plugin marketplaces ─────────────────────────────────────────
 # Plugin marketplaces to register with Claude Code. Each entry is an
@@ -62,6 +62,21 @@ $PluginMarketplaceRepos = @{
     'csa-training-plugins'     = 'CloudSecurityAlliance-Internal/Training-Plugins'
     'csa-plugins-official'     = 'CloudSecurityAlliance/csa-plugins-official'
 }
+
+# ── CSA MCP server ──────────────────────────────────────────────────
+# Registers the CSA MCP server with Claude Code (HTTP transport,
+# OAuth 2.1 + PKCE). Gated on `gh` access to a canonical CSA-Internal
+# repo since the server is in soft launch. See
+# scripts/macos-ai-tools.sh for full rationale.
+#
+# KEEP IN SYNC: same constants and logic in
+#   scripts/macos-ai-tools.sh
+#   scripts/macos-update.sh
+#   scripts/macos-plugins.sh
+#   scripts/windows-plugins.ps1
+$CSA_MCP_NAME      = 'csa-mcp'
+$CSA_MCP_URL       = 'https://cloudsecurityalliance.org/mcp'
+$CSA_MCP_GATE_REPO = 'CloudSecurityAlliance-Internal/CSA-Plugins'
 
 # ── Output helpers ──────────────────────────────────────────────────
 
@@ -410,6 +425,7 @@ function Show-Preflight {
     # Plugin marketplaces
     Write-Host "  Plugin marketplaces  probe $($CSA_MARKETPLACES.Count) CSA repos, add any your GitHub account can access"
     Show-PluginsPreview
+    Write-Host "  CSA MCP server       register $CSA_MCP_NAME if your GitHub account has CSA-Internal access"
 
     Write-Host ""
 }
@@ -893,6 +909,36 @@ function Setup-PluginMarketplaces {
     }
 }
 
+# Register the CSA MCP server (csa-mcp) with Claude Code if missing.
+# Silent unless we actually register. Does not clobber an existing
+# entry -- removing and re-adding would invalidate the OAuth session.
+# The user must run /mcp inside Claude Code to complete browser sign-in;
+# we print that reminder only on a fresh registration.
+function Register-CSAMcpServer {
+    if (-not (Has-Command claude)) { return }
+    if (-not (Has-Command gh))     { return }
+    if ((Invoke-NativeQuiet { gh auth status }) -ne 0) { return }
+
+    # Already registered? Silent skip.
+    $listing = claude mcp list 2>$null
+    foreach ($line in $listing) {
+        if ($line -match "^${CSA_MCP_NAME}[: ]") { return }
+    }
+
+    # CSA-membership gate via gh probe of a canonical CSA-Internal repo.
+    if ((Invoke-NativeQuiet { gh api "repos/$CSA_MCP_GATE_REPO" }) -ne 0) { return }
+
+    $result = Invoke-NativeCapture { claude mcp add --transport http --scope user $CSA_MCP_NAME $CSA_MCP_URL }
+    if ($result.ExitCode -eq 0) {
+        Write-Success "Registered Claude Code MCP server: $CSA_MCP_NAME"
+        Write-Info "Run /mcp inside Claude Code to authenticate with the CSA MCP server."
+    } else {
+        Write-Warn "Failed to register Claude Code MCP server '$CSA_MCP_NAME':"
+        $msg = if ($result.Output) { $result.Output } else { '<no stderr output>' }
+        Write-Host "      $msg"
+    }
+}
+
 # ── Plugin install ──────────────────────────────────────────────────
 # Fetch the public and internal plugin list files from HEAD, register
 # any missing marketplaces (CSA ones are gh-probed first), then
@@ -1216,6 +1262,7 @@ function Main {
     Setup-ClaudeEnv
     Setup-PluginMarketplaces
     Install-Plugins
+    Register-CSAMcpServer
     Show-Summary
 }
 
