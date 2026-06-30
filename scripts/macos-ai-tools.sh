@@ -23,7 +23,7 @@
 
 set -euo pipefail
 
-SCRIPT_VERSION="2026.04271200"
+SCRIPT_VERSION="2026.06291200"
 
 # ── CSA plugin marketplaces ─────────────────────────────────────────
 # Plugin marketplaces to register with Claude Code. Each entry is an
@@ -81,10 +81,12 @@ plugin_marketplace_repo() {
 
 # ── CSA MCP server ──────────────────────────────────────────────────
 # Registers the CSA MCP server with Claude Code (HTTP transport,
-# OAuth 2.1 + PKCE). The server is in soft launch — open to
-# @cloudsecurityalliance.org accounts and beta testers — so we gate
-# registration behind a `gh`-probe of a canonical CSA-Internal repo,
-# matching the silent-by-default contract used for plugin marketplaces.
+# OAuth 2.1 + PKCE). The server answers unauthenticated callers, so the
+# gate is not about access — we gate registration behind a `gh`-probe of
+# a canonical CSA-Internal repo because this public bootstrap should only
+# auto-wire CSA tooling into CSA-eligible accounts; a stranger shouldn't
+# get a CSA OAuth server added unprompted. Matches the silent-by-default
+# contract used for plugin marketplaces.
 #
 # KEEP IN SYNC: same constants and logic in
 #   scripts/windows-ai-tools.ps1

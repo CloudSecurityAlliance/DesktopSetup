@@ -18,7 +18,7 @@
 
 $ErrorActionPreference = 'Stop'
 
-$ScriptVersion = "2026.04271200"
+$ScriptVersion = "2026.06291200"
 
 # ── CSA plugin marketplaces ─────────────────────────────────────────
 # Plugin marketplaces to register with Claude Code. Each entry is an
@@ -66,8 +66,9 @@ $PluginMarketplaceRepos = @{
 # ── CSA MCP server ──────────────────────────────────────────────────
 # Registers the CSA MCP server with Claude Code (HTTP transport,
 # OAuth 2.1 + PKCE). Gated on `gh` access to a canonical CSA-Internal
-# repo since the server is in soft launch. See
-# scripts/macos-ai-tools.sh for full rationale.
+# repo so this public bootstrap only auto-wires CSA tooling for CSA-
+# eligible accounts — not because the server is restricted (it answers
+# unauthenticated callers). See scripts/macos-ai-tools.sh for full rationale.
 #
 # KEEP IN SYNC: same constants and logic in
 #   scripts/macos-ai-tools.sh
