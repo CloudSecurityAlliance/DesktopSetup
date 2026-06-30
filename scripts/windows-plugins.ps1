@@ -13,7 +13,7 @@
 
 $ErrorActionPreference = 'Stop'
 
-$ScriptVersion = "2026.04250100"
+$ScriptVersion = "2026.04271200"
 
 # ── CSA plugin marketplaces ─────────────────────────────────────────
 # Registered in Setup-PluginMarketplaces regardless of whether
@@ -56,6 +56,13 @@ $PluginMarketplaceRepos = @{
     'csa-training-plugins'     = 'CloudSecurityAlliance-Internal/Training-Plugins'
     'csa-plugins-official'     = 'CloudSecurityAlliance/csa-plugins-official'
 }
+
+# ── CSA MCP server ──────────────────────────────────────────────────
+# See scripts/macos-ai-tools.sh for full rationale. Keep these constants
+# and the Register-CSAMcpServer function in sync across all five scripts.
+$CSA_MCP_NAME      = 'csa-mcp'
+$CSA_MCP_URL       = 'https://cloudsecurityalliance.org/mcp'
+$CSA_MCP_GATE_REPO = 'CloudSecurityAlliance-Internal/CSA-Plugins'
 
 # ── Output helpers ──────────────────────────────────────────────────
 
@@ -370,6 +377,33 @@ function Setup-PluginMarketplaces {
     }
 }
 
+# Register the CSA MCP server (csa-mcp) with Claude Code if missing.
+# See scripts/windows-ai-tools.ps1 Register-CSAMcpServer for full rationale --
+# silent unless we actually register, gh-probed CSA-Internal access gate,
+# does not clobber existing OAuth sessions.
+function Register-CSAMcpServer {
+    if (-not (Has-Command claude)) { return }
+    if (-not (Has-Command gh))     { return }
+    if ((Invoke-NativeQuiet { gh auth status }) -ne 0) { return }
+
+    $listing = claude mcp list 2>$null
+    foreach ($line in $listing) {
+        if ($line -match "^${CSA_MCP_NAME}[: ]") { return }
+    }
+
+    if ((Invoke-NativeQuiet { gh api "repos/$CSA_MCP_GATE_REPO" }) -ne 0) { return }
+
+    $result = Invoke-NativeCapture { claude mcp add --transport http --scope user $CSA_MCP_NAME $CSA_MCP_URL }
+    if ($result.ExitCode -eq 0) {
+        Write-Success "Registered Claude Code MCP server: $CSA_MCP_NAME"
+        Write-Info "Run /mcp inside Claude Code to authenticate with the CSA MCP server."
+    } else {
+        Write-Warn "Failed to register Claude Code MCP server '$CSA_MCP_NAME':"
+        $msg = if ($result.Output) { $result.Output } else { '<no stderr output>' }
+        Write-Host "      $msg"
+    }
+}
+
 # ── Preflight ───────────────────────────────────────────────────────
 
 function Show-Preflight {
@@ -379,6 +413,7 @@ function Show-Preflight {
 
     Write-Host "  Plugin marketplaces: refresh registered, add accessible CSA repos"
     Show-PluginsPreview
+    Write-Host "  CSA MCP server     : register $CSA_MCP_NAME if your GitHub account has CSA-Internal access"
 
     Write-Host ""
 }
@@ -399,6 +434,7 @@ function Main {
 
     Setup-PluginMarketplaces
     Install-Plugins
+    Register-CSAMcpServer
 
     Write-Info "Refreshing plugin marketplaces"
     $result = Invoke-NativeCapture { claude plugin marketplace update }

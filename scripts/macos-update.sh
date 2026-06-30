@@ -17,7 +17,7 @@
 
 set -euo pipefail
 
-SCRIPT_VERSION="2026.04242300"
+SCRIPT_VERSION="2026.04271200"
 
 # ── CSA plugin marketplaces ─────────────────────────────────────────
 # Each update run will add any entries from this list that aren't yet
@@ -65,6 +65,13 @@ plugin_marketplace_repo() {
     *) ;;
   esac
 }
+
+# ── CSA MCP server ──────────────────────────────────────────────────
+# See scripts/macos-ai-tools.sh for full rationale. Keep these constants
+# and the setup_csa_mcp_server function in sync across all five scripts.
+CSA_MCP_NAME="csa-mcp"
+CSA_MCP_URL="https://cloudsecurityalliance.org/mcp"
+CSA_MCP_GATE_REPO="CloudSecurityAlliance-Internal/CSA-Plugins"
 
 # ── Output helpers ──────────────────────────────────────────────────
 
@@ -281,6 +288,7 @@ preflight() {
   if has_command claude; then
     echo "  Plugin marketplaces: refresh registered, add accessible CSA repos"
     install_plugins_preview
+    echo "  CSA MCP server     : register $CSA_MCP_NAME if your GitHub account has CSA-Internal access"
     echo ""
   fi
 }
@@ -392,6 +400,31 @@ sync_plugin_marketplaces() {
 
   info "Refreshing plugin marketplaces"
   claude plugin marketplace update || warn "marketplace update failed; continuing"
+}
+
+# Register the CSA MCP server (csa-mcp) with Claude Code if missing.
+# See scripts/macos-ai-tools.sh setup_csa_mcp_server for full rationale —
+# silent unless we actually register, gh-probed CSA-Internal access gate,
+# does not clobber existing OAuth sessions.
+setup_csa_mcp_server() {
+  has_command claude || return 0
+  has_command gh || return 0
+  gh auth status >/dev/null 2>&1 || return 0
+
+  if claude mcp list 2>/dev/null | grep -qE "^${CSA_MCP_NAME}[: ]"; then
+    return 0
+  fi
+
+  gh api "repos/$CSA_MCP_GATE_REPO" >/dev/null 2>&1 || return 0
+
+  local add_err
+  if add_err="$(claude mcp add --transport http --scope user "$CSA_MCP_NAME" "$CSA_MCP_URL" 2>&1 >/dev/null)"; then
+    success "Registered Claude Code MCP server: $CSA_MCP_NAME"
+    info "Run /mcp inside Claude Code to authenticate with the CSA MCP server."
+  else
+    warn "Failed to register Claude Code MCP server '$CSA_MCP_NAME':"
+    printf '      %s\n' "${add_err:-<no stderr output>}"
+  fi
 }
 
 # ── Plugin install ──────────────────────────────────────────────────
@@ -657,6 +690,7 @@ main() {
   update_claude_code
   sync_plugin_marketplaces
   install_plugins
+  setup_csa_mcp_server
   summary
 }
 
