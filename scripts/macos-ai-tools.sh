@@ -7,23 +7,25 @@
 #   2. Homebrew (macOS package manager)
 #   3. Node.js (via Homebrew, provides npm)
 #   4. Python (via Homebrew, provides python3/pip3)
-#   5. Git (via Homebrew, latest version)
-#   6. GitHub CLI (gh) + authentication
-#   7. 1Password (via Homebrew cask, GUI app — needed for biometric CLI unlock)
-#   8. 1Password CLI (via Homebrew)
-#   9. Claude Desktop (via Homebrew cask; app self-updates, so direct-
+#   5. Document toolchain: pandoc + typst (via Homebrew), plus pyyaml +
+#      pymupdf in ~/.default_venv — required by the document-pipeline plugin
+#   6. Git (via Homebrew, latest version)
+#   7. GitHub CLI (gh) + authentication
+#   8. 1Password (via Homebrew cask, GUI app — needed for biometric CLI unlock)
+#   9. 1Password CLI (via Homebrew)
+#  10. Claude Desktop (via Homebrew cask; app self-updates, so direct-
 #      download copies are detected and left alone)
-#  10. ChatGPT Desktop (via Homebrew cask; same self-update story)
-#  11. Claude Code (native installer, auto-updates)
-#  12. OpenAI Codex CLI (via npm)
-#  13. Google Gemini CLI (via npm)
+#  11. ChatGPT Desktop (via Homebrew cask; same self-update story)
+#  12. Claude Code (native installer, auto-updates)
+#  13. OpenAI Codex CLI (via npm)
+#  14. Google Gemini CLI (via npm)
 #
 # Usage:
 #   bash -c "$(curl -fsSL https://raw.githubusercontent.com/CloudSecurityAlliance/DesktopSetup/HEAD/scripts/macos-ai-tools.sh)"
 
 set -euo pipefail
 
-SCRIPT_VERSION="2026.06291200"
+SCRIPT_VERSION="2026.08241200"
 
 # ── CSA plugin marketplaces ─────────────────────────────────────────
 # Plugin marketplaces to register with Claude Code. Each entry is an
@@ -272,6 +274,23 @@ preflight() {
     echo "  Python ............ install via Homebrew"
   fi
 
+  # Document toolchain (document-pipeline plugin: Markdown -> tagged PDF)
+  if has_command pandoc; then
+    echo "  pandoc ............ installed ($(get_version pandoc --version))"
+  else
+    echo "  pandoc ............ install via Homebrew"
+  fi
+  if has_command typst; then
+    echo "  typst ............. installed ($(get_version typst --version))"
+  else
+    echo "  typst ............. install via Homebrew"
+  fi
+  if python3 -c 'import yaml, fitz' >/dev/null 2>&1; then
+    echo "  Preflight deps .... installed (pyyaml, pymupdf)"
+  else
+    echo "  Preflight deps .... install pyyaml + pymupdf into ~/.default_venv"
+  fi
+
   # Git
   if has_command git && brew list --formula git >/dev/null 2>&1; then
     echo "  Git ............... installed ($(get_version git --version))"
@@ -480,6 +499,61 @@ install_python() {
 
   info "Installing Python"
   brew install python || abort "Failed to install Python"
+}
+
+# ── Document toolchain ──────────────────────────────────────────────
+# pandoc and typst render Markdown into CSA-branded, PDF/UA-1 tagged
+# PDFs; the document-pipeline plugin's build script hard-requires both
+# on PATH and exits 1 without them. pyyaml + pymupdf back its preflight
+# checks.
+#
+# The deps go in a venv, not brew's python3: Homebrew Python is PEP 668
+# externally-managed, so `pip install` into it fails outright. We use
+# ~/.default_venv because document-pipeline's own launcher already probes
+# it (after $CSA_PYTHON and any PATH python3 that already has the deps),
+# so no PATH or env wiring is needed on our side.
+CSA_VENV="$HOME/.default_venv"
+CSA_DOC_PY_DEPS=(pyyaml pymupdf)
+
+install_doc_toolchain() {
+  ensure_brew_in_path
+
+  local f
+  for f in pandoc typst; do
+    if brew list --formula "$f" >/dev/null 2>&1; then
+      info "$f already installed: $(get_version "$f" --version)"
+    else
+      info "Installing $f"
+      brew install "$f" \
+        || warn "Failed to install $f — document rendering stays broken until it is installed"
+    fi
+  done
+}
+
+install_doc_python_deps() {
+  if ! has_command python3; then
+    warn "No python3 — skipping document preflight deps"
+    return 0
+  fi
+
+  # Some other python3 on PATH may already satisfy them. Leave it alone.
+  if python3 -c 'import yaml, fitz' >/dev/null 2>&1; then
+    info "Document preflight deps already available to python3"
+    return 0
+  fi
+
+  if [[ ! -x "$CSA_VENV/bin/python3" ]]; then
+    info "Creating Python venv at $CSA_VENV"
+    python3 -m venv "$CSA_VENV" || {
+      warn "Could not create $CSA_VENV — skipping document preflight deps"
+      return 0
+    }
+  fi
+
+  info "Installing document preflight deps (${CSA_DOC_PY_DEPS[*]}) into $CSA_VENV"
+  "$CSA_VENV/bin/python3" -m pip install --quiet --upgrade pip >/dev/null 2>&1 || true
+  "$CSA_VENV/bin/python3" -m pip install --quiet --upgrade "${CSA_DOC_PY_DEPS[@]}" \
+    || warn "Failed to install ${CSA_DOC_PY_DEPS[*]} — csa-preflight will print its own install hint"
 }
 
 install_git() {
@@ -1052,6 +1126,12 @@ summary() {
     echo "  Python ............ $(get_version python3 --version)"
     echo "  pip ............... $(get_version pip3 --version)"
   fi
+  if has_command pandoc; then
+    echo "  pandoc ............ $(get_version pandoc --version)"
+  fi
+  if has_command typst; then
+    echo "  typst ............. $(get_version typst --version)"
+  fi
   if has_command git; then
     echo "  Git ............... $(get_version git --version)"
   fi
@@ -1145,6 +1225,8 @@ main() {
   install_homebrew
   install_node
   install_python
+  install_doc_toolchain
+  install_doc_python_deps
   install_git
   install_gh
   setup_gh_auth
