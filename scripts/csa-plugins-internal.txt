@@ -15,6 +15,7 @@
 #
 #   1. Register the marketplaces these plugins come from:
 #      claude plugin marketplace add CloudSecurityAlliance/csa-plugins-official
+#      claude plugin marketplace add CloudSecurityAlliance-Internal/CSA-Plugins
 #      claude plugin marketplace add CloudSecurityAlliance-Internal/CINO-Plugins
 #      claude plugin marketplace add CloudSecurityAlliance-Internal/Research-Plugins
 #      claude plugin marketplace add CloudSecurityAlliance-Internal/Training-Plugins
@@ -33,6 +34,10 @@ cwe-analysis@csa-plugins-official
 incident-analysis@csa-plugins-official
 nist-ir-8477-mapping@csa-plugins-official
 security-knowledge-ingestion@csa-plugins-official
+
+document-pipeline@csa-plugins
+vendor-research@csa-plugins
+csa-spreadsheets@csa-plugins
 
 cino-project-tracker@csa-cino-plugins
 
