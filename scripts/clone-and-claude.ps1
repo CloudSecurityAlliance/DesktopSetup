@@ -35,11 +35,20 @@ function Has-Command {
 # (e.g. `claude plugin marketplace add` schema-validation errors).
 function Invoke-NativeCapture {
     param([scriptblock]$Call)
+    # $ErrorActionPreference='Continue' for the duration, not just a try/catch. Under
+    # Windows PowerShell 5.1 the catch alone still turns a SUCCESSFUL command that wrote
+    # to stderr into a failure — measured: this returned $null on 5.1 and the real value
+    # on pwsh 7 for the same input. Callers use these as probes (`if ($x -and ...)`), so
+    # that silently reported 'not installed' for anything winget or npm was chatty about.
+    $prev = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
     try {
         $output = (& $Call 2>&1 | Out-String).Trim()
         return [pscustomobject]@{ ExitCode = $LASTEXITCODE; Output = $output }
     } catch {
         return [pscustomobject]@{ ExitCode = 1; Output = $_.Exception.Message }
+    } finally {
+        $ErrorActionPreference = $prev
     }
 }
 

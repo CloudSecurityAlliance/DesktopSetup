@@ -44,12 +44,16 @@ function Has-Command {
 # branch on the exit code as intended.
 function Invoke-NativeQuiet {
     param([scriptblock]$Call)
-    try {
-        & $Call 2>&1 | Out-Null
-        return $LASTEXITCODE
-    } catch {
-        return 1
-    }
+    # $ErrorActionPreference='Continue' for the duration, not just a try/catch. Under
+    # Windows PowerShell 5.1 the catch alone still turns a SUCCESSFUL command that wrote
+    # to stderr into a failure — measured: this returned $null on 5.1 and the real value
+    # on pwsh 7 for the same input. Callers use these as probes (`if ($x -and ...)`), so
+    # that silently reported 'not installed' for anything winget or npm was chatty about.
+    $prev = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+    try { & $Call *> $null; return $LASTEXITCODE }
+    catch { return 1 }
+    finally { $ErrorActionPreference = $prev }
 }
 
 # Run a native command, swallow stderr, return stdout on success or $null
@@ -59,12 +63,21 @@ function Invoke-NativeQuiet {
 # Windows PowerShell 5.1 — the try/catch is required.
 function Invoke-NativeOutput {
     param([scriptblock]$Call)
+    # $ErrorActionPreference='Continue' for the duration, not just a try/catch. Under
+    # Windows PowerShell 5.1 the catch alone still turns a SUCCESSFUL command that wrote
+    # to stderr into a failure — measured: this returned $null on 5.1 and the real value
+    # on pwsh 7 for the same input. Callers use these as probes (`if ($x -and ...)`), so
+    # that silently reported 'not installed' for anything winget or npm was chatty about.
+    $prev = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
     try {
         $result = & $Call 2>$null
         if ($LASTEXITCODE -ne 0) { return $null }
         return $result
     } catch {
         return $null
+    } finally {
+        $ErrorActionPreference = $prev
     }
 }
 
@@ -98,11 +111,20 @@ function Invoke-NativeShow {
 # (e.g. `claude plugin marketplace add` schema-validation errors).
 function Invoke-NativeCapture {
     param([scriptblock]$Call)
+    # $ErrorActionPreference='Continue' for the duration, not just a try/catch. Under
+    # Windows PowerShell 5.1 the catch alone still turns a SUCCESSFUL command that wrote
+    # to stderr into a failure — measured: this returned $null on 5.1 and the real value
+    # on pwsh 7 for the same input. Callers use these as probes (`if ($x -and ...)`), so
+    # that silently reported 'not installed' for anything winget or npm was chatty about.
+    $prev = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
     try {
         $output = (& $Call 2>&1 | Out-String).Trim()
         return [pscustomobject]@{ ExitCode = $LASTEXITCODE; Output = $output }
     } catch {
         return [pscustomobject]@{ ExitCode = 1; Output = $_.Exception.Message }
+    } finally {
+        $ErrorActionPreference = $prev
     }
 }
 
