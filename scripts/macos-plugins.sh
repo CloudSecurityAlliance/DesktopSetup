@@ -167,7 +167,7 @@ install_plugins_preview() {
   local installed_plugins=""
   if has_command claude; then
     installed_plugins="$(claude plugin list 2>/dev/null \
-      | sed -n 's/^[[:space:]]*❯[[:space:]]*\(.*\)$/\1/p')"
+      | grep -oE '[A-Za-z0-9._-]+@[A-Za-z0-9._-]+')"
   fi
 
   local total=0 already=0 line
@@ -207,7 +207,7 @@ install_plugins() {
   registered_repos="$(claude plugin marketplace list 2>/dev/null \
     | sed -n 's/.*GitHub (\([^)]*\)).*/\1/p')"
   installed_plugins="$(claude plugin list 2>/dev/null \
-    | sed -n 's/^[[:space:]]*❯[[:space:]]*\(.*\)$/\1/p')"
+    | grep -oE '[A-Za-z0-9._-]+@[A-Za-z0-9._-]+')"
 
   local gh_authed=0
   if has_command gh && gh auth status >/dev/null 2>&1; then gh_authed=1; fi

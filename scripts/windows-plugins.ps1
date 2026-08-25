@@ -185,9 +185,9 @@ function Show-PluginsPreview {
 
     $installedPlugins = @()
     if (Has-Command claude) {
-        $pluginListing = claude plugin list 2>$null
-        foreach ($line in $pluginListing) {
-            if ($line -match '^\s*❯\s*(.*)$') { $installedPlugins += $matches[1].Trim() }
+        $pluginListing = (Invoke-NativeCapture { claude plugin list }).Output
+        foreach ($m in [regex]::Matches([string]$pluginListing, '[A-Za-z0-9._-]+@[A-Za-z0-9._-]+')) {
+            $installedPlugins += $m.Value
         }
     }
 
@@ -231,9 +231,9 @@ function Install-Plugins {
         if ($line -match 'GitHub \(([^)]+)\)') { $registeredRepos += $matches[1] }
     }
     $installedPlugins = @()
-    $pluginListing = claude plugin list 2>$null
-    foreach ($line in $pluginListing) {
-        if ($line -match '^\s*❯\s*(.*)$') { $installedPlugins += $matches[1].Trim() }
+    $pluginListing = (Invoke-NativeCapture { claude plugin list }).Output
+    foreach ($m in [regex]::Matches([string]$pluginListing, '[A-Za-z0-9._-]+@[A-Za-z0-9._-]+')) {
+        $installedPlugins += $m.Value
     }
 
     $ghAuthed = (Has-Command gh) -and ((Invoke-NativeQuiet { gh auth status }) -eq 0)

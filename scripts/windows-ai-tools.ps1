@@ -1099,9 +1099,9 @@ function Show-PluginsPreview {
 
     $installedPlugins = @()
     if (Has-Command claude) {
-        $pluginListing = Invoke-NativeOutput { claude plugin list }
-        foreach ($line in $pluginListing) {
-            if ($line -match '^\s*❯\s*(.*)$') { $installedPlugins += $matches[1].Trim() }
+        $pluginListing = (Invoke-NativeCapture { claude plugin list }).Output
+        foreach ($m in [regex]::Matches([string]$pluginListing, '[A-Za-z0-9._-]+@[A-Za-z0-9._-]+')) {
+            $installedPlugins += $m.Value
         }
     }
 
@@ -1146,9 +1146,17 @@ function Install-Plugins {
         if ($line -match 'GitHub \(([^)]+)\)') { $registeredRepos += $matches[1] }
     }
     $installedPlugins = @()
-    $pluginListing = Invoke-NativeOutput { claude plugin list }
-    foreach ($line in $pluginListing) {
-        if ($line -match '^\s*❯\s*(.*)$') { $installedPlugins += $matches[1].Trim() }
+            # Parse name@marketplace tokens rather than anchoring on the leading '❯'
+            # glyph. Windows consoles routinely misdecode non-ASCII from `claude` (the
+            # same mangling that shows '×' as '├ù' in transcripts), so a glyph-anchored
+            # match silently finds nothing — every plugin then looks uninstalled and all
+            # 43 are reinstalled on every run. Token matching is ASCII and survives
+            # bullets, colour codes and format changes.
+    # Capture regardless of exit code: a chatty-but-working `claude plugin list` must
+    # not be read as "nothing is installed".
+    $pluginListing = (Invoke-NativeCapture { claude plugin list }).Output
+    foreach ($m in [regex]::Matches([string]$pluginListing, '[A-Za-z0-9._-]+@[A-Za-z0-9._-]+')) {
+        $installedPlugins += $m.Value
     }
 
     $ghAuthed = (Has-Command gh) -and ((Invoke-NativeQuiet { gh auth status }) -eq 0)
