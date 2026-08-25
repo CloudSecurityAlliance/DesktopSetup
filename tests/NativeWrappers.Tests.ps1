@@ -108,9 +108,14 @@ Describe 'Invoke-NativeCapture' {
         (Invoke-NativeCapture { sh -c 'exit 4' }).ExitCode | Should -Be 4
     }
     It 'is what `gh auth status` needs, since that writes its normal output to stderr' {
-        $r = Invoke-NativeCapture { sh -c 'echo "Logged in to github.com" >&2; exit 0' }
+        # Single-word output, no nested quotes. Windows PowerShell 5.1 does not pass quotes
+        # *inside* a native argument the way pwsh 7 does, so `sh -c 'echo "a b" >&2'` arrives
+        # truncated at the first space — this assertion failed with "expected 'Logged in' to
+        # match 'Logged'" until the quoting was removed. The behaviour under test is that
+        # stderr-only output is captured at all, which needs no spaces to demonstrate.
+        $r = Invoke-NativeCapture { sh -c 'echo LoggedIn >&2; exit 0' }
         $r.ExitCode | Should -Be 0
-        $r.Output | Should -Match 'Logged in'
+        $r.Output | Should -Match 'LoggedIn'
     }
 }
 
