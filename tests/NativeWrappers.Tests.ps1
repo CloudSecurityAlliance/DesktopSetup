@@ -38,8 +38,15 @@ BeforeAll {
         $script:source, [ref]$null, [ref]$errors)
     if ($errors) { throw "cannot parse $($script:source): $($errors.Count) error(s)" }
 
+    # Write-CsaLog / Write-CsaNativeLog are what the wrappers call to record a command in the
+    # CSA_DEBUG log. They have to be loaded too, or every wrapper test fails with
+    # CommandNotFoundException - which is how this list was found to be incomplete.
+    #
+    # $CsaLog is deliberately left unset, so those two return immediately: these tests are
+    # about the wrappers' contract, and asserting it holds with logging OFF is asserting it
+    # for the path every normal run takes.
     $wanted = 'Invoke-NativeQuiet', 'Invoke-NativeOutput', 'Invoke-NativeShow',
-              'Invoke-NativeCapture'
+              'Invoke-NativeCapture', 'Write-CsaLog', 'Write-CsaNativeLog'
     $definitions = $ast.FindAll(
         { $args[0] -is [System.Management.Automation.Language.FunctionDefinitionAst] }, $true)
     foreach ($definition in $definitions) {
@@ -54,6 +61,47 @@ Describe 'the wrappers are defined in the script under test' {
         foreach ($n in 'Invoke-NativeQuiet','Invoke-NativeOutput','Invoke-NativeShow','Invoke-NativeCapture') {
             Get-Command $n -ErrorAction SilentlyContinue | Should -Not -BeNullOrEmpty
         }
+    }
+
+    It 'loads the logging helpers the wrappers depend on' {
+        # Not decoration: the wrappers call Write-CsaNativeLog unconditionally, so if this
+        # list ever falls behind again, every other test in this file fails with
+        # CommandNotFoundException and the reason is three screens up. This one names it.
+        foreach ($n in 'Write-CsaLog','Write-CsaNativeLog') {
+            Get-Command $n -ErrorAction SilentlyContinue | Should -Not -BeNullOrEmpty
+        }
+    }
+}
+
+Describe 'logging does not change what a wrapper returns' {
+    # The wrappers take a different code path when $CsaLog is set (they capture output in
+    # order to write it down). The contract must not depend on which path ran.
+    It 'Invoke-NativeCapture reports the same exit code either way' {
+        $script:CsaLog = $null
+        $off = Invoke-NativeCapture { & sh -c 'echo out; echo err 1>&2; exit 7' }
+        $script:CsaLog = (Join-Path ([IO.Path]::GetTempPath()) ("csa-test-{0}.log" -f [guid]::NewGuid()))
+        try {
+            $on = Invoke-NativeCapture { & sh -c 'echo out; echo err 1>&2; exit 7' }
+        } finally {
+            Remove-Item $script:CsaLog -ErrorAction SilentlyContinue
+            $script:CsaLog = $null
+        }
+        $on.ExitCode | Should -Be $off.ExitCode
+        $on.ExitCode | Should -Be 7
+    }
+
+    It 'Invoke-NativeQuiet reports the same exit code either way' {
+        $script:CsaLog = $null
+        $off = Invoke-NativeQuiet { & sh -c 'echo chatty 1>&2; exit 3' }
+        $script:CsaLog = (Join-Path ([IO.Path]::GetTempPath()) ("csa-test-{0}.log" -f [guid]::NewGuid()))
+        try {
+            $on = Invoke-NativeQuiet { & sh -c 'echo chatty 1>&2; exit 3' }
+        } finally {
+            Remove-Item $script:CsaLog -ErrorAction SilentlyContinue
+            $script:CsaLog = $null
+        }
+        $on | Should -Be $off
+        $on | Should -Be 3
     }
 }
 
