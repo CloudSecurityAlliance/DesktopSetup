@@ -65,6 +65,28 @@ jobs:
           }
           if ($failed) { exit 1 }
 
+      - name: Pester
+        shell: pwsh
+        run: |
+          Install-Module Pester -Force -Scope CurrentUser -SkipPublisherCheck
+          $config = New-PesterConfiguration
+          $config.Run.Path = 'tests'
+          $config.Run.Exit = $true
+          $config.Output.Verbosity = 'Detailed'
+          Invoke-Pester -Configuration $config
+
+      - name: Pester under Windows PowerShell 5.1
+        shell: powershell
+        run: |
+          # The runtime the scripts actually target. pwsh 7 and 5.1 differ on native stderr
+          # handling — the exact behaviour the Invoke-Native* wrappers exist for — so running
+          # the suite here as well is the only place that difference is exercised at all.
+          Install-Module Pester -Force -Scope CurrentUser -SkipPublisherCheck
+          $config = New-PesterConfiguration
+          $config.Run.Path = 'tests'
+          $config.Run.Exit = $true
+          Invoke-Pester -Configuration $config
+
       - name: PSScriptAnalyzer
         shell: pwsh
         run: |
