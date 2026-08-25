@@ -116,9 +116,9 @@ function Write-CsaLog {
         if (-not (Test-Path $CsaLog)) {
             "=== DesktopSetup $(Get-Date -Format o) ===" | Set-Content $CsaLog -Encoding UTF8
             "This log is REDACTED for known credential shapes, but review it before sharing." |
-                Add-Content $CsaLog
+                Add-Content $CsaLog -Encoding UTF8
             "PowerShell $($PSVersionTable.PSVersion) $($PSVersionTable.PSEdition) on $env:COMPUTERNAME" |
-                Add-Content $CsaLog
+                Add-Content $CsaLog -Encoding UTF8
             # A bare native call piped to Out-Null. Not through a wrapper: the wrappers call
             # THIS, and the recursion would be unbounded.
             icacls $CsaLog /inheritance:r /grant:r "$($env:USERNAME):(R,W)" | Out-Null
