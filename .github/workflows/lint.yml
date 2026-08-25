@@ -115,3 +115,6 @@ jobs:
 
       - name: Windows PowerShell 5.1 hazards
         run: python3 tools/check-powershell-native.py
+
+      - name: README must not ask for a multi-line paste
+        run: python3 tools/check-paste-safety.py

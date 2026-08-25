@@ -228,15 +228,35 @@ reach the script.
 
 ### Windows
 
-Two statements — set the variable, then run. The variable stays set for the rest of that
-PowerShell window, so a second run also logs.
+> **Paste these one at a time.** Copying both lines together and pasting them into the console
+> has been observed to close the window immediately, before either line runs. Two separate
+> pastes, or the single-line form further down, both avoid it.
+
+First, turn logging on:
 
 ```powershell
 $env:CSA_DEBUG = '1'
+```
+
+Then run the script:
+
+```powershell
 irm https://raw.githubusercontent.com/CloudSecurityAlliance/DesktopSetup/HEAD/scripts/windows-ai-tools.ps1 -Headers @{'Cache-Control'='no-cache'} | iex
 ```
 
-To stop logging again: `Remove-Item Env:\CSA_DEBUG`
+The variable stays set for the rest of that PowerShell window, so a second run also logs. To
+stop logging again:
+
+```powershell
+Remove-Item Env:\CSA_DEBUG
+```
+
+**Or as a single line**, if you would rather paste once — same thing, joined with `;`, which is
+the form this README already uses for `CSA_REPO` below:
+
+```powershell
+$env:CSA_DEBUG = '1'; irm https://raw.githubusercontent.com/CloudSecurityAlliance/DesktopSetup/HEAD/scripts/windows-ai-tools.ps1 -Headers @{'Cache-Control'='no-cache'} | iex
+```
 
 **There is no `-Debug` switch, and the two obvious guesses both go wrong:**
 
@@ -249,13 +269,18 @@ The reason there is no switch: `irm … | iex` fetches text and executes it, so 
 receives an argument vector for a flag to arrive in. An environment variable is the only thing
 that crosses that boundary — which is also how `NONINTERACTIVE` works here.
 
-Either spelling is accepted, since `$env:` is easy to forget, and so is any of `1`, `true`,
-`yes` or `on` in any case:
+Either spelling is accepted, since `$env:` is easy to forget — these are **alternatives, not a
+sequence**, so use one or the other:
 
 ```powershell
-$env:CSA_DEBUG = '1'      # documented
-$CSA_DEBUG = '1'          # also works
+$env:CSA_DEBUG = '1'
 ```
+
+```powershell
+$CSA_DEBUG = '1'
+```
+
+So is any of `1`, `true`, `yes` or `on`, in any case.
 
 ### The log
 

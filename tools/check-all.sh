@@ -35,6 +35,9 @@ check python3 tools/check-duplication.py
 step "native-call guards"
 check python3 tools/check-powershell-native.py
 
+step "paste safety"
+check python3 tools/check-paste-safety.py
+
 if command -v pwsh >/dev/null; then
   step "powershell parse"
   check pwsh -NoProfile -c '
