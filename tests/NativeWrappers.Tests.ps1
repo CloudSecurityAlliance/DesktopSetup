@@ -26,11 +26,17 @@ BeforeAll {
     $text = Get-Content $script:source -Raw
     foreach ($name in 'Invoke-NativeQuiet','Invoke-NativeOutput','Invoke-NativeShow','Invoke-NativeCapture') {
         $m = [regex]::Match($text, "(?m)^function $name \{")
-        $depth = 0; $i = $m.Index + $m.Length - 1
-        while ($i -lt $text.Length) {
+        $depth = 0; $i = $m.Index + $m.Length - 1; $closed = $false
+        # No `break` here, deliberately. Under Windows PowerShell 5.1 a `break` inside a
+        # `while` nested in a `foreach` inside a Pester block escapes the loop entirely and
+        # aborts the run — every test in the file failed with "a 'break' or 'continue'
+        # statement with a label that does not match any enclosing loop escaped from your
+        # code" (Pester #2669). pwsh 7 runs it happily, which is precisely why the suite is
+        # also run under 5.1 in CI: that job found this on its first execution.
+        while (-not $closed -and $i -lt $text.Length) {
             if ($text[$i] -eq '{') { $depth++ }
-            elseif ($text[$i] -eq '}') { $depth--; if ($depth -eq 0) { break } }
-            $i++
+            elseif ($text[$i] -eq '}') { $depth--; if ($depth -eq 0) { $closed = $true } }
+            if (-not $closed) { $i++ }
         }
         . ([scriptblock]::Create($text.Substring($m.Index, $i - $m.Index + 1)))
     }
