@@ -1393,8 +1393,11 @@ function Main {
     Setup-PluginMarketplaces
     Install-Plugins
     Register-CSAMcpServer
-    Invoke-CSAInternalSetup
     Show-Summary
+    # Runs LAST, after the summary, so the internal setup's own output - including
+    # the "you still need to log in" banner - is the final thing on screen rather
+    # than buried under install output the user has stopped reading.
+    Invoke-CSAInternalSetup
 }
 
 Main

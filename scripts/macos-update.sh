@@ -718,8 +718,11 @@ main() {
   sync_plugin_marketplaces
   install_plugins
   setup_csa_mcp_server
-  setup_csa_internal_tools
   summary
+  # Runs LAST, after the summary, so the internal setup's own output — including the
+  # "you still need to log in" banner — is the final thing on screen instead of being
+  # buried under a wall of install output the user has stopped reading.
+  setup_csa_internal_tools
 }
 
 main "$@"
