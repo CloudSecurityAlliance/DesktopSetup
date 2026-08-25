@@ -36,6 +36,76 @@ function Has-Command {
     return [bool](Get-Command $Name -ErrorAction SilentlyContinue)
 }
 
+# Run a native command, swallow stdout+stderr, return its exit code.
+# Why: under $ErrorActionPreference='Stop', a native command that exits
+# non-zero AND writes to stderr (e.g. `gh auth status` when logged out)
+# is promoted to a terminating NativeCommandError before $LASTEXITCODE
+# can be checked. This wrapper absorbs the promotion so callers can
+# branch on the exit code as intended.
+function Invoke-NativeQuiet {
+    param([scriptblock]$Call)
+    try {
+        & $Call 2>&1 | Out-Null
+        return $LASTEXITCODE
+    } catch {
+        return 1
+    }
+}
+
+# Run a native command, swallow stderr, return stdout on success or $null
+# on failure. Same NativeCommandError shield as Invoke-NativeQuiet, but
+# preserves stdout so callers can capture values (e.g. `gh api user --jq`).
+# Note: `2>$null` alone does NOT prevent NativeCommandError promotion in
+# Windows PowerShell 5.1 — the try/catch is required.
+function Invoke-NativeOutput {
+    param([scriptblock]$Call)
+    try {
+        $result = & $Call 2>$null
+        if ($LASTEXITCODE -ne 0) { return $null }
+        return $result
+    } catch {
+        return $null
+    }
+}
+
+# Run a native command with its output VISIBLE, shielded against NativeCommandError,
+# returning the exit code. The fourth member of this family, for the case the other
+# three cannot serve: an installer or download whose progress the user should see.
+#
+# Why it is needed at all: a bare native call is unsafe under
+# $ErrorActionPreference='Stop'. npm prints deprecation warnings to stderr as a matter
+# of routine and winget occasionally does too, and either terminates the script BEFORE
+# the caller's `if ($LASTEXITCODE -ne 0)` can run — so the script's own error handling
+# becomes unreachable exactly when it is needed. Setting 'Continue' for the duration
+# suppresses the promotion without hiding anything.
+#
+# Callers keep using `if ($LASTEXITCODE -ne 0)` after this: $LASTEXITCODE is global and
+# is still the native command's, because nothing between it and the caller runs another
+# native command. Assign the result to $null rather than letting it fall out, or the
+# exit code prints into the transcript.
+function Invoke-NativeShow {
+    param([scriptblock]$Call)
+    $prev = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+    try { & $Call; return $LASTEXITCODE }
+    catch { return 1 }
+    finally { $ErrorActionPreference = $prev }
+}
+
+# Run a native command, shield against NativeCommandError, and return both
+# the merged stdout+stderr output (as a trimmed string) and the exit code.
+# Used when a caller needs to surface the command's error text on failure
+# (e.g. `claude plugin marketplace add` schema-validation errors).
+function Invoke-NativeCapture {
+    param([scriptblock]$Call)
+    try {
+        $output = (& $Call 2>&1 | Out-String).Trim()
+        return [pscustomobject]@{ ExitCode = $LASTEXITCODE; Output = $output }
+    } catch {
+        return [pscustomobject]@{ ExitCode = 1; Output = $_.Exception.Message }
+    }
+}
+
 function Get-ToolVersion {
     param([string]$Command, [string[]]$Arguments)
     if (Has-Command $Command) {
@@ -62,7 +132,7 @@ function Refresh-Path {
 
 function Test-WingetInstalled {
     param([string]$Id)
-    $result = winget list --id $Id --accept-source-agreements 2>$null
+    $result = Invoke-NativeOutput { winget list --id $Id --accept-source-agreements }
     return ($result -and ($result | Select-String $Id))
 }
 
@@ -223,11 +293,11 @@ function Install-WingetPackage {
 
     if (Test-WingetInstalled $Id) {
         Write-Info "Upgrading $Label"
-        winget upgrade --id $Id --accept-package-agreements --accept-source-agreements
+        $null = Invoke-NativeShow { winget upgrade --id $Id --accept-package-agreements --accept-source-agreements }
         # winget upgrade returns non-zero if already up to date — that's fine
     } else {
         Write-Info "Installing $Label"
-        winget install --id $Id --accept-package-agreements --accept-source-agreements
+        $null = Invoke-NativeShow { winget install --id $Id --accept-package-agreements --accept-source-agreements }
         if ($LASTEXITCODE -ne 0) { Write-Warn "Failed to install $Label" }
     }
     Refresh-Path
@@ -243,14 +313,14 @@ function Install-NpmPackage {
 
     if (Has-Command $Bin) {
         Write-Info "Updating $Label"
-        npm update -g $Package
+        $null = Invoke-NativeShow { npm update -g $Package }
         if ($LASTEXITCODE -ne 0) {
-            npm install -g $Package
+            $null = Invoke-NativeShow { npm install -g $Package }
             if ($LASTEXITCODE -ne 0) { Write-Warn "Failed to update $Label" }
         }
     } else {
         Write-Info "Installing $Label"
-        npm install -g $Package
+        $null = Invoke-NativeShow { npm install -g $Package }
         if ($LASTEXITCODE -ne 0) { Write-Warn "Failed to install $Label" }
     }
 }
@@ -259,17 +329,17 @@ function Install-NpmPackage {
 
 function Install-Git {
     if (Has-Command git) {
-        $wingetGit = winget list --id Git.Git --accept-source-agreements 2>$null
+        $wingetGit = Invoke-NativeOutput { winget list --id Git.Git --accept-source-agreements }
         if ($wingetGit -and ($wingetGit | Select-String 'Git.Git')) {
             Write-Info "Upgrading Git via winget"
-            winget upgrade --id Git.Git --accept-package-agreements --accept-source-agreements
+            $null = Invoke-NativeShow { winget upgrade --id Git.Git --accept-package-agreements --accept-source-agreements }
         } else {
             $gitVer = Get-ToolVersion git '--version'
             Write-Info "Git already installed (non-winget): $gitVer"
         }
     } else {
         Write-Info "Installing Git via winget"
-        winget install Git.Git --accept-package-agreements --accept-source-agreements
+        $null = Invoke-NativeShow { winget install Git.Git --accept-package-agreements --accept-source-agreements }
         if ($LASTEXITCODE -ne 0) { Abort "Failed to install Git." }
     }
     Refresh-Path
@@ -284,12 +354,12 @@ function Set-LongPathSupport {
 
     # 1. Git core.longpaths (user scope)
     if (Has-Command git) {
-        $currentGit = git config --global --get core.longpaths 2>$null
+        $currentGit = Invoke-NativeOutput { git config --global --get core.longpaths }
         if ($currentGit -eq 'true') {
             Write-Info "Git core.longpaths already enabled"
         } else {
             Write-Info "Enabling Git long-path support (core.longpaths=true)"
-            git config --global core.longpaths true
+            $null = Invoke-NativeShow { git config --global core.longpaths true }
         }
     }
 
@@ -338,17 +408,17 @@ function Set-LongPathSupport {
 
 function Install-GH {
     if (Has-Command gh) {
-        $wingetGH = winget list --id GitHub.cli --accept-source-agreements 2>$null
+        $wingetGH = Invoke-NativeOutput { winget list --id GitHub.cli --accept-source-agreements }
         if ($wingetGH -and ($wingetGH | Select-String 'GitHub.cli')) {
             Write-Info "Upgrading GitHub CLI via winget"
-            winget upgrade --id GitHub.cli --accept-package-agreements --accept-source-agreements
+            $null = Invoke-NativeShow { winget upgrade --id GitHub.cli --accept-package-agreements --accept-source-agreements }
         } else {
             $ghVer = Get-ToolVersion gh '--version'
             Write-Info "GitHub CLI already installed (non-winget): $ghVer"
         }
     } else {
         Write-Info "Installing GitHub CLI via winget"
-        winget install GitHub.cli --accept-package-agreements --accept-source-agreements
+        $null = Invoke-NativeShow { winget install GitHub.cli --accept-package-agreements --accept-source-agreements }
         if ($LASTEXITCODE -ne 0) { Abort "Failed to install GitHub CLI." }
     }
     Refresh-Path
@@ -356,17 +426,17 @@ function Install-GH {
 
 function Install-Node {
     if (Has-Command node) {
-        $wingetNode = winget list --id OpenJS.NodeJS.LTS --accept-source-agreements 2>$null
+        $wingetNode = Invoke-NativeOutput { winget list --id OpenJS.NodeJS.LTS --accept-source-agreements }
         if ($wingetNode -and ($wingetNode | Select-String 'OpenJS.NodeJS.LTS')) {
             Write-Info "Upgrading Node.js via winget"
-            winget upgrade --id OpenJS.NodeJS.LTS --accept-package-agreements --accept-source-agreements
+            $null = Invoke-NativeShow { winget upgrade --id OpenJS.NodeJS.LTS --accept-package-agreements --accept-source-agreements }
         } else {
             $nodeVer = Get-ToolVersion node '--version'
             Write-Info "Node.js already installed (non-winget): $nodeVer"
         }
     } else {
         Write-Info "Installing Node.js LTS via winget"
-        winget install OpenJS.NodeJS.LTS --accept-package-agreements --accept-source-agreements
+        $null = Invoke-NativeShow { winget install OpenJS.NodeJS.LTS --accept-package-agreements --accept-source-agreements }
         if ($LASTEXITCODE -ne 0) { Abort "Failed to install Node.js." }
     }
     Refresh-Path
@@ -397,8 +467,7 @@ function Install-Dev {
 function Setup-GHAuth {
     if (-not (Has-Command gh)) { return }
 
-    $authStatus = gh auth status 2>&1
-    if ($LASTEXITCODE -eq 0) {
+    if ((Invoke-NativeQuiet { gh auth status }) -eq 0) {
         Write-Info "GitHub CLI already authenticated"
         return
     }
@@ -411,7 +480,10 @@ function Setup-GHAuth {
     Write-Host ""
     Write-Info "GitHub CLI is installed but not authenticated."
     if (Confirm-Step "Run 'gh auth login' now?") {
-        gh auth login --git-protocol https
+        # --scopes user:email: lets Setup-GitIdentity read the user's
+        # primary email via `gh api user/emails` when it's not public on
+        # the user profile. Without it that endpoint returns HTTP 404.
+        $null = Invoke-NativeShow { gh auth login --git-protocol https --scopes user:email }
         if ($LASTEXITCODE -ne 0) {
             Write-Warn "gh auth login failed; you can run it manually later"
         }
@@ -473,7 +545,7 @@ function Show-Summary {
     Write-Host "  - Sign in to 1Password, Slack, Zoom, and Chrome"
     Write-Host "  - Install Microsoft Office from your Microsoft 365 portal"
     if (Has-Command gh) {
-        $authCheck = gh auth status 2>&1
+        $authCheck = (Invoke-NativeCapture { gh auth status }).Output
         if ($LASTEXITCODE -ne 0) {
             Write-Host "  - Run 'gh auth login --git-protocol https' to authenticate with GitHub"
         }

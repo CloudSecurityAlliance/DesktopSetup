@@ -68,7 +68,6 @@ fi
 
 ORG="${REPO_SLUG%%/*}"
 REPO="${REPO_SLUG##*/}"
-DEFAULT_DIR="$HOME/GitHub/$ORG/$REPO"
 
 info "Cloud Security Alliance — Clone & Claude"
 echo ""
