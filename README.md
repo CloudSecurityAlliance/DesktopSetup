@@ -169,13 +169,11 @@ marketplaces.
 - **code-review** — `/review`
 - **pr-review-toolkit** — `/review-pr`, multi-agent PR review (silent-failure-hunter, type-design-analyzer, pr-test-analyzer, comment-analyzer, code-simplifier)
 - **github** — GitHub MCP (issues, PRs, code search, releases, reviews)
-- **greptile** — Greptile code intelligence
 - **frontend-design** — polished UI code that avoids generic AI aesthetics
 - **playwright** — browser automation and UI testing via Playwright MCP
 - **chrome-devtools-mcp** — Chrome DevTools MCP (debugging, performance, a11y, LCP)
 - **playground** — single-file interactive HTML explorers
 - **typescript-lsp** — TypeScript language server integration
-- **semgrep** — Semgrep security scanning (requires `semgrep` CLI)
 - **security-guidance** — security review and guidance
 - **cloudflare** — Workers, Pages, D1/R2/KV, Durable Objects, Agents SDK, Wrangler
 
