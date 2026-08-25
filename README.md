@@ -211,6 +211,33 @@ disable any individual plugin locally with `claude plugin disable <name>`.
 
 ---
 
+## When something goes wrong
+
+Re-run the same command with `CSA_DEBUG=1`. Everything still prints to the screen, and a full
+transcript — every command, its output and its exit code — is written to a file in your home
+directory:
+
+**macOS**
+
+```bash
+CSA_DEBUG=1 bash -c "$(curl -fsSL -H 'Cache-Control: no-cache' https://raw.githubusercontent.com/CloudSecurityAlliance/DesktopSetup/HEAD/scripts/macos-ai-tools.sh)"
+```
+
+**Windows**
+
+```powershell
+$env:CSA_DEBUG = '1'
+irm https://raw.githubusercontent.com/CloudSecurityAlliance/DesktopSetup/HEAD/scripts/windows-ai-tools.ps1 -Headers @{'Cache-Control'='no-cache'} | iex
+```
+
+The path is printed at the start and at the end: `~/desktopsetup-YYYYMMDD-HHMMSS.log`, readable
+only by you. One file covers the whole run, including the CSA-internal setup.
+
+Known credential shapes (tokens, client secrets, bearer headers) are replaced with `<redacted>`
+before anything is written, and the CSA OAuth client is never captured at all. That is a safety
+net, not a guarantee: **read the file before you send it to anyone.** The first line of every
+log says so too.
+
 ## Repository contents
 
 ### `scripts/`

@@ -72,6 +72,111 @@ function Write-Warn    { param([string]$Message) Write-Host "Warning: $Message" 
 function Write-Err     { param([string]$Message) Write-Host "Error: $Message" -ForegroundColor Red }
 function Abort         { param([string]$Message) Write-Err $Message; exit 1 }
 
+# ── Debug logging ───────────────────────────────────────────────────
+#
+# CSA_DEBUG=1 records every native command, its output and its exit code to a timestamped
+# file, and prints the path. Off by default.
+#
+#   $env:CSA_DEBUG = '1'
+#
+# An environment variable rather than a -Debug switch because the documented invocation is
+# `irm ... | iex`, which gives the script no argument vector at all (NONINTERACTIVE already
+# works this way). CSA_LOG is exported so anything this script invokes - notably the
+# CSA-internal setup, fetched and run as a scriptblock - appends to the SAME file. One file
+# per run: the person debugging is being asked to send a log, and "send both of them, and
+# mind the timestamps" is how half a report goes missing.
+#
+# Nothing needs to be added at the call sites. Every native command in these scripts already
+# goes through Invoke-Native* (check-powershell-native.py enforces it), so the wrappers are
+# the one place that has to know about this.
+$SCRIPT_LABEL = 'windows-plugins.ps1'
+$CsaDebug = ($env:CSA_DEBUG -eq '1')
+$CsaLog = $null
+if ($CsaDebug) {
+    if ($env:CSA_LOG) {
+        $CsaLog = $env:CSA_LOG
+    } else {
+        $CsaLog = Join-Path $env:USERPROFILE ("desktopsetup-{0}.log" -f (Get-Date -Format 'yyyyMMdd-HHmmss'))
+        $env:CSA_LOG = $CsaLog
+    }
+}
+
+# Redacted by shape, keeping the key so the line stays diagnostic: `client_secret: <redacted>`
+# still tells you which line failed, `<redacted>` does not. EVERY pattern must define the
+# 'keep' group even when it captures nothing - .NET leaves an unknown group reference in the
+# replacement as LITERAL TEXT, so a pattern without one writes '${keep}' into the log.
+#
+# The key/value pattern tolerates the JSON shape ("client_secret": "..."), because the quote
+# between key and colon otherwise breaks the match - and that is exactly how a credentials
+# file is written.
+$CsaSecretPatterns = @(
+    '(?<keep>(oauth_token|client_secret|refresh_token|access_token|private_key)"?\s*[:=]\s*"?)[^\s,}"]+',
+    '(?<keep>)(gh[pousr]_[A-Za-z0-9]{16,}|github_pat_[A-Za-z0-9_]{20,})',
+    '(?<keep>"?temp_clone_token"?\s*[:=]\s*"?)[A-Za-z0-9]{16,}',
+    '(?<keep>Bearer\s+)\S{16,}',
+    '(?<keep>)ya29\.[A-Za-z0-9._-]{20,}'
+)
+
+function Write-CsaLog {
+    param([string]$Line, [string]$Kind = 'log')
+    if (-not $CsaLog) { return }
+    $redacted = $Line
+    foreach ($pattern in $CsaSecretPatterns) {
+        $redacted = [regex]::Replace($redacted, $pattern, '${keep}<redacted>',
+                                     [Text.RegularExpressions.RegexOptions]::IgnoreCase)
+    }
+    try {
+        if (-not (Test-Path $CsaLog)) {
+            "=== DesktopSetup $(Get-Date -Format o) ===" | Set-Content $CsaLog
+            "This log is REDACTED for known credential shapes, but review it before sharing." |
+                Add-Content $CsaLog
+            "PowerShell $($PSVersionTable.PSVersion) $($PSVersionTable.PSEdition) on $env:COMPUTERNAME" |
+                Add-Content $CsaLog
+            # A bare native call piped to Out-Null. Not through a wrapper: the wrappers call
+            # THIS, and the recursion would be unbounded.
+            icacls $CsaLog /inheritance:r /grant:r "$($env:USERNAME):(R,W)" | Out-Null
+        }
+        "{0:HH:mm:ss} [{1}] {2}" -f (Get-Date), $Kind, $redacted | Add-Content $CsaLog
+    } catch { }   # a log that cannot be written must never stop the install
+}
+
+# What a wrapper records. Kept in one place so all four agree: the command as written, its
+# exit code, and its output - the last being the part that matters, since a discarded stderr
+# is a discarded diagnosis.
+# Printed at the end of every run, either way. The moment somebody needs the logging
+# incantation is the moment the run went wrong - not later, in a README they are not reading.
+function Show-CsaDebugHint {
+    if ($CsaLog) {
+        Write-Info "debug log: $CsaLog  (redacted, but review before sharing)"
+    } else {
+        Write-Host "  if anything above went wrong, re-run with logging on:" -ForegroundColor DarkGray
+        Write-Host "    `$env:CSA_DEBUG = '1'" -ForegroundColor DarkGray
+    }
+}
+
+function Write-CsaNativeLog {
+    param([scriptblock]$Call, [int]$Code, [string]$Output)
+    if (-not $CsaLog) { return }
+    Write-CsaLog ("{0} -> exit {1}" -f $Call.ToString().Trim(), $Code) 'run'
+    if ($Output) { foreach ($line in ($Output -split "`r?`n")) { Write-CsaLog $line 'out' } }
+}
+
+# AFTER the definitions above, not up where $CsaLog is decided. PowerShell does not hoist
+# functions: a call placed earlier in the file than its `function` statement fails at runtime
+# with "the term 'Write-CsaLog' is not recognized" - which is exactly what the first version
+# of this did, and nothing local caught it. The parse check only parses, and the Pester tests
+# load each function on its own. It took a run on a real Windows machine.
+if ($CsaDebug -and $CsaLog) {
+    Write-Info "debug logging to $CsaLog"
+    # Create the file NOW rather than on the first command that gets logged. A script can
+    # abort before running anything - the Administrator guard and the preconditions both do -
+    # and then the path announced above names a file that does not exist. "Send me the log"
+    # then sends nothing, and the one fact worth having (which check refused to proceed) is
+    # lost with it.
+    Write-CsaLog ("{0} starting; CSA_DEBUG=1, no argument vector (irm|iex)" -f $SCRIPT_LABEL) 'info'
+}
+
+
 # ── Utility functions ───────────────────────────────────────────────
 
 function Has-Command {
@@ -95,9 +200,12 @@ function Invoke-NativeOutput {
     $ErrorActionPreference = 'Continue'
     try {
         $result = & $Call 2>$null
-        if ($LASTEXITCODE -ne 0) { return $null }
+        $code = $LASTEXITCODE
+        Write-CsaNativeLog $Call $code ($result | Out-String)
+        if ($code -ne 0) { return $null }
         return $result
     } catch {
+        Write-CsaNativeLog $Call 1 $_.Exception.Message
         return $null
     } finally {
         $ErrorActionPreference = $prev
@@ -123,8 +231,22 @@ function Invoke-NativeShow {
     param([scriptblock]$Call)
     $prev = $ErrorActionPreference
     $ErrorActionPreference = 'Continue'
-    try { & $Call; return $LASTEXITCODE }
-    catch { return 1 }
+    try {
+        # Output goes to the console, so with logging off there is nothing to intercept and
+        # this stays a plain pass-through. With logging on it is teed, not captured, because
+        # this wrapper's whole purpose is that the user sees the command work.
+        if ($CsaLog) {
+            $captured = & $Call 2>&1 | ForEach-Object {
+                if ($_ -is [System.Management.Automation.ErrorRecord]) { $_.Exception.Message } else { $_ }
+            } | Tee-Object -Variable teed | Out-String
+            $code = $LASTEXITCODE
+            Write-CsaNativeLog $Call $code $captured
+            return $code
+        }
+        & $Call
+        return $LASTEXITCODE
+    }
+    catch { Write-CsaNativeLog $Call 1 $_.Exception.Message; return 1 }
     finally { $ErrorActionPreference = $prev }
 }
 
@@ -140,8 +262,22 @@ function Invoke-NativeQuiet {
     # that silently reported 'not installed' for anything winget or npm was chatty about.
     $prev = $ErrorActionPreference
     $ErrorActionPreference = 'Continue'
-    try { & $Call *> $null; return $LASTEXITCODE }
-    catch { return 1 }
+    try {
+        # `*> $null` throws the output away, which is right for a probe and wrong for a
+        # debug log - the discarded text is the diagnosis. With logging on it is captured
+        # and written down instead; the caller still gets only the exit code either way.
+        if ($CsaLog) {
+            $captured = (& $Call 2>&1 | ForEach-Object {
+                if ($_ -is [System.Management.Automation.ErrorRecord]) { $_.Exception.Message } else { $_ }
+            } | Out-String).Trim()
+            $code = $LASTEXITCODE
+            Write-CsaNativeLog $Call $code $captured
+            return $code
+        }
+        & $Call *> $null
+        return $LASTEXITCODE
+    }
+    catch { Write-CsaNativeLog $Call 1 $_.Exception.Message; return 1 }
     finally { $ErrorActionPreference = $prev }
 }
 
@@ -158,9 +294,18 @@ function Invoke-NativeCapture {
     $prev = $ErrorActionPreference
     $ErrorActionPreference = 'Continue'
     try {
-        $output = (& $Call 2>&1 | Out-String).Trim()
-        return [pscustomobject]@{ ExitCode = $LASTEXITCODE; Output = $output }
+        # Unwrap the ErrorRecords `2>&1` makes of stderr. Without this the capture carries
+        # PowerShell's decoration - "At line:N char:M", the source line, CategoryInfo -
+        # ahead of the message. NOT .TargetObject, which is null for these records and
+        # produced an entirely EMPTY capture when tried (measured on 5.1.26100).
+        $output = (& $Call 2>&1 | ForEach-Object {
+            if ($_ -is [System.Management.Automation.ErrorRecord]) { $_.Exception.Message } else { $_ }
+        } | Out-String).Trim()
+        $code = $LASTEXITCODE
+        Write-CsaNativeLog $Call $code $output
+        return [pscustomobject]@{ ExitCode = $code; Output = $output }
     } catch {
+        Write-CsaNativeLog $Call 1 $_.Exception.Message
         return [pscustomobject]@{ ExitCode = 1; Output = $_.Exception.Message }
     } finally {
         $ErrorActionPreference = $prev
@@ -538,3 +683,4 @@ function Main {
 }
 
 Main
+Show-CsaDebugHint

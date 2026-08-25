@@ -92,9 +92,57 @@ All scripts declare a version string near the top — `SCRIPT_VERSION="YYYY.MMDD
 **These are checked now, not just documented.** `.github/workflows/lint.yml` runs on every PR: `bash -n` + shellcheck on the `.sh` files, and — because GitHub runners have `pwsh` and the authoring machine does not — a **parse check and PSScriptAnalyzer on the `.ps1` files**, which had never been verified anywhere before. Plus two repo-specific checks in `tools/`:
 
 - **`check-duplication.py`** — a function duplicated across scripts must be byte-identical in behaviour (comments and whitespace ignored). Names that are *meant* to differ live in its `PER_SCRIPT` map with a reason, so allowing a difference is a deliberate act. This turns the instruction below from a discipline into a check; when it was first run, twelve functions had already drifted.
-- **`check-powershell-native.py`** — a native command (`winget`, `npm`, `gh`, `claude`, `git`, …) invoked in a script that sets `$ErrorActionPreference = 'Stop'` must go through `Invoke-Native*` or a `try/catch`. **`2>$null` does not prevent `NativeCommandError` promotion** — it hides the text, not the termination. When first run this found 14 unguarded calls, 13 of them in `windows-work-tools.ps1`, including every `winget install/upgrade` and `npm install -g`; npm writes deprecation warnings to stderr routinely, so that script terminated on a *successful* run.
+- **`check-powershell-native.py`** — a native command (`winget`, `npm`, `gh`, `claude`, `git`, `icacls`, …) invoked in a script that sets `$ErrorActionPreference = 'Stop'` must go through a wrapper that sets `'Continue'`, or a `try/catch`. When first run this found 14 unguarded calls, 13 of them in `windows-work-tools.ps1`, including every `winget install/upgrade` and `npm install -g`; npm writes deprecation warnings to stderr routinely, so that script terminated on a *successful* run.
+
+  **The full behaviour, measured on 5.1.26100** — in the shape these scripts actually run in, `& ([ScriptBlock]::Create(…))` invoked from a `'Stop'` session, which is how one script here runs another:
+
+  | form | result |
+  |---|---|
+  | bare call | kills the script **and its caller** |
+  | `\| Out-Null` | kills the script and its caller |
+  | `$x = cmd` (assignment) | kills the script and its caller |
+  | `cmd 2>$null` | kills the script and its caller |
+  | `cmd *> $null` | kills the script and its caller |
+  | `$x = cmd 2>&1 \| Out-String` | kills the script and its caller |
+  | any of the above, after `EAP = 'Continue'` | **all six survive** |
+
+  So **no form of redirection helps** — `2>$null` hides the text, not the termination — and a bare call is no safer than a redirected one. The trap that makes this hard to believe: standalone, the same error is only *statement*-terminating, so the script carries on and every form above looks survivable in isolation. Inside `& ([ScriptBlock]::Create(…))` the whole invocation is **one statement in the caller**, so an error that merely ends a statement in the callee ends the entire call in the caller. Measure it the way it is deployed or not at all. (This table exists because the note it replaced had the conclusion backwards, twice — once in each direction.)
+
+  The check also **self-tests before it reports**: an inline fixture it must fail on, run first, because two separate bugs here (a `\w*` that swallowed command names, a six-line `try {` window that exempted exactly the region where the wrappers live) each turned it into a check that printed *"all native calls are guarded"* no matter what. A clean bill of health from a check that cannot fail is worse than no check, because it is believed.
 
 **Run everything locally with `./tools/check-all.sh`** — it mirrors CI exactly.
+
+### Debug mode
+
+`CSA_DEBUG=1` makes any script write a timestamped, mode-0600 log to `$HOME` —
+`desktopsetup-YYYYMMDD-HHMMSS.log` — while still printing to the screen. An environment
+variable rather than a flag because the documented invocation is `curl … | bash` / `irm … |
+iex`, which passes no argument vector at all (`NONINTERACTIVE` already works this way).
+
+Two different mechanisms, for a reason:
+
+- **PowerShell:** the four `Invoke-Native*` wrappers log. Nothing at the call sites changed,
+  because `check-powershell-native.py` already guarantees every native command goes through
+  one — the wrappers were already the choke point.
+- **bash:** `exec > >(csa_redact | tee -a "$CSA_LOG") 2>&1`, process-wide. There is no
+  equivalent choke point here (bash has no `NativeCommandError` problem, so there are no
+  wrappers), and retrofitting one onto ~1000 lines of direct calls would capture only the
+  calls someone remembered. The redirection captures everything, including code written
+  before anyone thought about logging. Verified on bash 3.2.57: no output is lost, on a clean
+  exit, an `exit N`, or an uncaught failure under `set -e`.
+
+`CSA_LOG` is **exported**, so the CSA-internal setup — fetched and run as a separate process —
+appends to the *same* file instead of opening a second one. One file per run: the person
+debugging is being asked to send a log, and "send both of them, and mind the timestamps" is
+how half a report goes missing. The bash redactor is line-buffered (`sed -l`, or `-u` on GNU)
+so the parent's output does not sit in the pipe while the child writes to the file ahead of it.
+
+Credential shapes are redacted **keeping the key** — `client_secret: <redacted>` still says
+which line failed, `<redacted>` does not — and ANSI colour is stripped from the file only. The
+patterns are verified by extracting the live code from each script and running the same cases
+through it; that check found two real defects, `${keep}` leaking as literal text and the JSON
+form `"client_secret": "…"` not matching at all. The OAuth client fetch is excluded from
+logging *by construction* rather than by pattern, because a base64 blob has no shape to match.
 
 ### What local `pwsh` proves, and what it does not
 
