@@ -197,6 +197,9 @@ marketplaces.
 - **incident-analysis** — OSINT, timeline, impact, defensive recs for cloud/AI incidents
 - **nist-ir-8477-mapping** — map between frameworks using NIST IR 8477
 - **security-knowledge-ingestion** — convert standards/regs into structured data
+- **document-pipeline** — Markdown to a branded, accessible CSA PDF (render, preflight, copy edit, design review). Needs `pandoc` and `typst` — see its README
+- **vendor-research** — guided vendor evaluation and procurement decisions
+- **csa-spreadsheets** — parse CCM/AICM spreadsheets into JSON, CSV, or Markdown
 - **cino-project-tracker** — CINO Airtable project registry
 - **audience-lens** — build audience profiles for writing tasks
 - **writing-style-forge** — generate writing-style plugins from samples
