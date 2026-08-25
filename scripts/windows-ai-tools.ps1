@@ -262,11 +262,11 @@ function Detect-Migrations {
     # Claude: should be native installer, not npm or winget
     # Check both the original scoped package name and the bare "claude" package.
     if (Has-Command npm) {
-        $npmList = npm list -g @anthropic-ai/claude-code 2>$null
+        $npmList = Invoke-NativeOutput { npm list -g @anthropic-ai/claude-code }
         if ($npmList -and ($npmList | Select-String '@anthropic-ai/claude-code')) {
             $script:claudeMigration += "npm"
         } else {
-            $npmListBare = npm list -g claude 2>$null
+            $npmListBare = Invoke-NativeOutput { npm list -g claude }
             if ($npmListBare -and ($npmListBare | Select-String 'claude@')) {
                 $script:claudeMigration += "npm"
             }
@@ -315,7 +315,7 @@ function Show-Preflight {
     $lpReg = Get-ItemPropertyValue -Path 'HKLM:\SYSTEM\CurrentControlSet\Control\FileSystem' `
                                    -Name 'LongPathsEnabled' -ErrorAction SilentlyContinue
     $lpGit = $null
-    if (Has-Command git) { $lpGit = git config --global --get core.longpaths 2>$null }
+    if (Has-Command git) { $lpGit = Invoke-NativeOutput { git config --global --get core.longpaths } }
     if ($lpReg -eq 1 -and $lpGit -eq 'true') {
         Write-Host "  Long paths ........ enabled (git + registry)"
     } else {
@@ -500,7 +500,7 @@ function Set-LongPathSupport {
 
     # 1. Git core.longpaths (user scope)
     if (Has-Command git) {
-        $currentGit = git config --global --get core.longpaths 2>$null
+        $currentGit = Invoke-NativeOutput { git config --global --get core.longpaths }
         if ($currentGit -eq 'true') {
             Write-Info "Git core.longpaths already enabled"
         } else {
@@ -596,8 +596,8 @@ function Setup-GHAuth {
 }
 
 function Setup-GitIdentity {
-    $currentName  = git config --global user.name 2>$null
-    $currentEmail = git config --global user.email 2>$null
+    $currentName  = Invoke-NativeOutput { git config --global user.name }
+    $currentEmail = Invoke-NativeOutput { git config --global user.email }
 
     if ($currentName -and $currentEmail) {
         Write-Info "Git identity already configured: $currentName <$currentEmail>"
@@ -936,7 +936,7 @@ function Setup-PluginMarketplaces {
 
     # Snapshot already-registered marketplaces (single call).
     # list format: "    Source: GitHub (ORG/REPO)"
-    $listing = claude plugin marketplace list 2>$null
+    $listing = Invoke-NativeOutput { claude plugin marketplace list }
     $alreadyAdded = @()
     foreach ($line in $listing) {
         if ($line -match 'GitHub \(([^)]+)\)') {
@@ -989,7 +989,7 @@ function Register-CSAMcpServer {
     if ((Invoke-NativeQuiet { gh auth status }) -ne 0) { return }
 
     # Already registered? Silent skip.
-    $listing = claude mcp list 2>$null
+    $listing = Invoke-NativeOutput { claude mcp list }
     foreach ($line in $listing) {
         if ($line -match "^${CSA_MCP_NAME}[: ]") { return }
     }
@@ -1017,7 +1017,7 @@ function Invoke-CSAInternalSetup {
     if ((Invoke-NativeQuiet { gh auth status }) -ne 0) { return }
     if ((Invoke-NativeQuiet { gh api "repos/$CSA_MCP_GATE_REPO" }) -ne 0) { return }
 
-    $encoded = gh api "repos/$CSA_MCP_GATE_REPO/contents/internal-setup/csa-google-workspace-setup.ps1" --jq '.content' 2>$null
+    $encoded = Invoke-NativeOutput { gh api "repos/$CSA_MCP_GATE_REPO/contents/internal-setup/csa-google-workspace-setup.ps1" --jq '.content' }
     if ($LASTEXITCODE -ne 0 -or -not $encoded) { return }
 
     try {
@@ -1075,7 +1075,7 @@ function Show-PluginsPreview {
 
     $installedPlugins = @()
     if (Has-Command claude) {
-        $pluginListing = claude plugin list 2>$null
+        $pluginListing = Invoke-NativeOutput { claude plugin list }
         foreach ($line in $pluginListing) {
             if ($line -match '^\s*❯\s*(.*)$') { $installedPlugins += $matches[1].Trim() }
         }
@@ -1117,12 +1117,12 @@ function Install-Plugins {
 
     # Already-registered marketplaces and already-installed plugins.
     $registeredRepos = @()
-    $listing = claude plugin marketplace list 2>$null
+    $listing = Invoke-NativeOutput { claude plugin marketplace list }
     foreach ($line in $listing) {
         if ($line -match 'GitHub \(([^)]+)\)') { $registeredRepos += $matches[1] }
     }
     $installedPlugins = @()
-    $pluginListing = claude plugin list 2>$null
+    $pluginListing = Invoke-NativeOutput { claude plugin list }
     foreach ($line in $pluginListing) {
         if ($line -match '^\s*❯\s*(.*)$') { $installedPlugins += $matches[1].Trim() }
     }
@@ -1294,8 +1294,8 @@ function Show-Summary {
             Write-Host "  - Run 'gh auth login --git-protocol https' to authenticate with GitHub"
         }
     }
-    $summaryGitName  = git config --global user.name 2>$null
-    $summaryGitEmail = git config --global user.email 2>$null
+    $summaryGitName  = Invoke-NativeOutput { git config --global user.name }
+    $summaryGitEmail = Invoke-NativeOutput { git config --global user.email }
     if (-not $summaryGitName -or -not $summaryGitEmail) {
         Write-Host "  - Configure Git identity: git config --global user.name `"Your Name`""
         Write-Host "    and: git config --global user.email `"you@example.com`""
