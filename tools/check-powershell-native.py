@@ -1,5 +1,9 @@
 #!/usr/bin/env python3
-"""Flag native commands invoked without a stderr guard in scripts that set ErrorActionPreference.
+"""Flag PowerShell constructs that fail on Windows PowerShell 5.1 — the runtime these target.
+
+Two checks, both encoding something that reached a real machine before it reached a test.
+
+**1. Native commands without a stderr guard.**
 
 The lesson this encodes, learned the hard way on a colleague's machine:
 
@@ -60,6 +64,29 @@ def unguarded(path: pathlib.Path) -> list[tuple[int, str]]:
     return problems
 
 
+# Cmdlet forms that do not exist in Windows PowerShell 5.1. PSScriptAnalyzer does not catch
+# these: PSUseCompatibleCmdlets checks whether a cmdlet *exists*, not whether a parameter set
+# does, and PSUseCompatibleSyntax checks language syntax rather than cmdlet binding. Both were
+# tried on the known-bad line and reported nothing.
+INCOMPATIBLE = [
+    (re.compile(r"\bJoin-Path\s+(?:[^\s|;()]+\s+){2,}[^\s|;()]+"),
+     "Join-Path with three or more paths needs -AdditionalChildPath (PowerShell 6+). "
+     "On 5.1: \"a positional parameter cannot be found\". Nest the calls instead."),
+]
+
+
+def incompatible(path: pathlib.Path) -> list[tuple[int, str, str]]:
+    found = []
+    for i, line in enumerate(path.read_text(errors="replace").split("\n"), start=1):
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#"):
+            continue
+        for pattern, why in INCOMPATIBLE:
+            if pattern.search(stripped):
+                found.append((i, stripped[:88], why))
+    return found
+
+
 def main() -> int:
     total = 0
     for path in sorted(SCRIPTS.glob("*.ps1")):
@@ -71,12 +98,22 @@ def main() -> int:
             print(f"    {path.name}:{number}: {text}")
         total += len(found)
     print()
+    incompat = 0
+    for path in sorted(SCRIPTS.glob("*.ps1")):
+        for number, text, why in incompatible(path):
+            print(f"    {path.name}:{number}: {text}\n        {why}")
+            incompat += 1
+
     if total:
         print(f"{total} native call(s) can raise NativeCommandError on a successful command.")
         print("Wrap them in Invoke-Native* (or try/catch). `2>$null` does NOT prevent this.")
-        return 1
-    print("all native calls are guarded.")
-    return 0
+    else:
+        print("all native calls are guarded.")
+    if incompat:
+        print(f"{incompat} construct(s) fail on Windows PowerShell 5.1.")
+    elif not total:
+        print("no 5.1 incompatibilities found.")
+    return 1 if (total or incompat) else 0
 
 
 if __name__ == "__main__":

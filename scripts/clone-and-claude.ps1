@@ -93,7 +93,10 @@ if ($RepoSlug -notmatch '/') {
 
 $Org = $RepoSlug.Split('/')[0]
 $Repo = $RepoSlug.Split('/')[1]
-$DefaultBase = Join-Path $HOME "GitHub" $Org
+# Nested rather than `Join-Path $HOME "GitHub" $Org`: the three-argument form needs
+# -AdditionalChildPath, added in PowerShell 6, and fails on Windows PowerShell 5.1 —
+# which is the runtime this script targets.
+$DefaultBase = Join-Path (Join-Path $HOME "GitHub") $Org
 
 Write-Info "Cloud Security Alliance - Clone & Claude"
 Write-Host ""

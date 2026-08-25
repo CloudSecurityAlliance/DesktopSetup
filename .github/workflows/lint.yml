@@ -113,5 +113,5 @@ jobs:
       - name: Shared functions must not have drifted
         run: python3 tools/check-duplication.py --diff
 
-      - name: Native commands must be shielded from NativeCommandError
+      - name: Windows PowerShell 5.1 hazards
         run: python3 tools/check-powershell-native.py

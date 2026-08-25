@@ -29,7 +29,10 @@ BeforeAll {
     # code" (Pester #2669) — while passing on pwsh 7. The AST has no loop to escape from, is
     # available on both runtimes, and cannot mis-parse a brace inside a string or comment,
     # which the text walker could.
-    $script:source = Join-Path $PSScriptRoot '..' 'scripts' 'windows-ai-tools.ps1'
+    # Not `Join-Path a b c d` — that form needs -AdditionalChildPath, which arrived in
+    # PowerShell 6. Under Windows PowerShell 5.1 it fails with "a positional parameter cannot
+    # be found that accepts argument 'scripts'". Forward slashes are fine on Windows.
+    $script:source = "$PSScriptRoot/../scripts/windows-ai-tools.ps1"
     $errors = $null
     $ast = [System.Management.Automation.Language.Parser]::ParseFile(
         $script:source, [ref]$null, [ref]$errors)
