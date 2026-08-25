@@ -68,7 +68,13 @@ jobs:
       - name: Pester
         shell: pwsh
         run: |
-          Install-Module Pester -Force -Scope CurrentUser -SkipPublisherCheck
+          # Pinned, and pinned to 5.x specifically. Pester 6.1.0's manifest claims PowerShell
+          # 5.1 support, but under real 5.1 it aborts the whole run with "a 'break' or
+          # 'continue' statement … escaped from your code" — its own message references
+          # pester/Pester#2669 — with no `break` anywhere in the suite. 5.7.1 runs the same
+          # tests cleanly on both runtimes. Same version in both jobs so the test framework
+          # is not itself a source of divergence.
+          Install-Module Pester -RequiredVersion 5.7.1 -Force -Scope CurrentUser -SkipPublisherCheck
           $config = New-PesterConfiguration
           $config.Run.Path = 'tests'
           $config.Run.Exit = $true
@@ -81,7 +87,8 @@ jobs:
           # The runtime the scripts actually target. pwsh 7 and 5.1 differ on native stderr
           # handling — the exact behaviour the Invoke-Native* wrappers exist for — so running
           # the suite here as well is the only place that difference is exercised at all.
-          Install-Module Pester -Force -Scope CurrentUser -SkipPublisherCheck
+          Install-Module Pester -RequiredVersion 5.7.1 -Force -Scope CurrentUser -SkipPublisherCheck
+          Import-Module Pester -RequiredVersion 5.7.1
           $config = New-PesterConfiguration
           $config.Run.Path = 'tests'
           $config.Run.Exit = $true

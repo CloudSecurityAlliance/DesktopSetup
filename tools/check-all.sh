@@ -56,7 +56,12 @@ if command -v pwsh >/dev/null; then
 
   step "Pester"
   check pwsh -NoProfile -c '
-    if (-not (Get-Module -ListAvailable Pester)) { Write-Host "    skipped (Install-Module Pester -Scope CurrentUser)"; exit 0 }
+    # 5.7.1 specifically — see the note in .github/workflows/lint.yml. Matching CI matters
+    # more than being current: Pester 6 aborts the whole run under Windows PowerShell 5.1.
+    if (-not (Get-Module -ListAvailable Pester | Where-Object Version -eq 5.7.1)) {
+      Write-Host "    skipped (Install-Module Pester -RequiredVersion 5.7.1 -Scope CurrentUser)"; exit 0 }
+    Remove-Module Pester -Force -ErrorAction SilentlyContinue
+    Import-Module Pester -RequiredVersion 5.7.1
     $c = New-PesterConfiguration
     $c.Run.Path = "tests"; $c.Run.Exit = $true; $c.Output.Verbosity = "Normal"
     Invoke-Pester -Configuration $c'
