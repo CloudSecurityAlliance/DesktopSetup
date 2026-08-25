@@ -157,6 +157,30 @@ function Invoke-NativeQuiet {
     }
 }
 
+# Run a native command with its output VISIBLE, shielded against NativeCommandError,
+# returning the exit code. The fourth member of this family, for the case the other
+# three cannot serve: an installer or download whose progress the user should see.
+#
+# Why it is needed at all: a bare native call is unsafe under
+# $ErrorActionPreference='Stop'. npm prints deprecation warnings to stderr as a matter
+# of routine and winget occasionally does too, and either terminates the script BEFORE
+# the caller's `if ($LASTEXITCODE -ne 0)` can run — so the script's own error handling
+# becomes unreachable exactly when it is needed. Setting 'Continue' for the duration
+# suppresses the promotion without hiding anything.
+#
+# Callers keep using `if ($LASTEXITCODE -ne 0)` after this: $LASTEXITCODE is global and
+# is still the native command's, because nothing between it and the caller runs another
+# native command. Assign the result to $null rather than letting it fall out, or the
+# exit code prints into the transcript.
+function Invoke-NativeShow {
+    param([scriptblock]$Call)
+    $prev = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+    try { & $Call; return $LASTEXITCODE }
+    catch { return 1 }
+    finally { $ErrorActionPreference = $prev }
+}
+
 # Run a native command, shield against NativeCommandError, and return both
 # the merged stdout+stderr output (as a trimmed string) and the exit code.
 # Used when a caller needs to surface the command's error text on failure
@@ -272,13 +296,13 @@ function Detect-Migrations {
             }
         }
     }
-    $wingetCheck = winget list --id Anthropic.ClaudeCode --accept-source-agreements 2>$null
+    $wingetCheck = Invoke-NativeOutput { winget list --id Anthropic.ClaudeCode --accept-source-agreements }
     if ($wingetCheck -and ($wingetCheck | Select-String 'Anthropic.ClaudeCode')) {
         $script:claudeMigration += "winget"
     }
 
     # Codex: should be npm, not winget
-    $codexWinget = winget list --id OpenAI.Codex --accept-source-agreements 2>$null
+    $codexWinget = Invoke-NativeOutput { winget list --id OpenAI.Codex --accept-source-agreements }
     if ($codexWinget -and ($codexWinget | Select-String 'OpenAI.Codex')) {
         $script:codexMigration = "winget"
     }
@@ -363,7 +387,7 @@ function Show-Preflight {
 
     # 1Password (GUI app — needed for biometric CLI unlock)
     # --exact: avoid matching AgileBits.1Password.CLI
-    $onePwGui = winget list --exact --id AgileBits.1Password --accept-source-agreements 2>$null
+    $onePwGui = Invoke-NativeOutput { winget list --exact --id AgileBits.1Password --accept-source-agreements }
     if ($onePwGui -and ($onePwGui | Select-String 'AgileBits.1Password')) {
         $v = Get-WingetVersion 'AgileBits.1Password'
         $suffix = if ($v) { ", v$v" } else { '' }
@@ -381,7 +405,7 @@ function Show-Preflight {
     }
 
     # Claude Desktop
-    $claudeDesktop = winget list --id Anthropic.Claude --accept-source-agreements 2>$null
+    $claudeDesktop = Invoke-NativeOutput { winget list --id Anthropic.Claude --accept-source-agreements }
     if ($claudeDesktop -and ($claudeDesktop | Select-String 'Anthropic.Claude')) {
         $v = Get-WingetVersion 'Anthropic.Claude'
         $suffix = if ($v) { ", v$v" } else { '' }
@@ -391,7 +415,7 @@ function Show-Preflight {
     }
 
     # ChatGPT Desktop
-    $chatgptDesktop = winget list --id OpenAI.ChatGPT --accept-source-agreements 2>$null
+    $chatgptDesktop = Invoke-NativeOutput { winget list --id OpenAI.ChatGPT --accept-source-agreements }
     if ($chatgptDesktop -and ($chatgptDesktop | Select-String 'OpenAI.ChatGPT')) {
         $v = Get-WingetVersion 'OpenAI.ChatGPT'
         $suffix = if ($v) { ", v$v" } else { '' }
@@ -474,10 +498,10 @@ function Migrate-Codex {
 function Install-Git {
     if (Has-Command git) {
         # Check if managed by winget and try to upgrade
-        $wingetGit = winget list --id Git.Git --accept-source-agreements 2>$null
+        $wingetGit = Invoke-NativeOutput { winget list --id Git.Git --accept-source-agreements }
         if ($wingetGit -and ($wingetGit | Select-String 'Git.Git')) {
             Write-Info "Upgrading Git via winget"
-            winget upgrade --id Git.Git --accept-package-agreements --accept-source-agreements
+            $null = Invoke-NativeShow { winget upgrade --id Git.Git --accept-package-agreements --accept-source-agreements }
             # winget upgrade returns non-zero if already up to date — that's fine
         } else {
             $gitVer = Get-ToolVersion git '--version'
@@ -485,7 +509,7 @@ function Install-Git {
         }
     } else {
         Write-Info "Installing Git via winget"
-        winget install Git.Git --accept-package-agreements --accept-source-agreements
+        $null = Invoke-NativeShow { winget install Git.Git --accept-package-agreements --accept-source-agreements }
         if ($LASTEXITCODE -ne 0) { Abort "Failed to install Git." }
     }
     Refresh-Path
@@ -505,7 +529,7 @@ function Set-LongPathSupport {
             Write-Info "Git core.longpaths already enabled"
         } else {
             Write-Info "Enabling Git long-path support (core.longpaths=true)"
-            git config --global core.longpaths true
+            $null = Invoke-NativeShow { git config --global core.longpaths true }
         }
     }
 
@@ -553,17 +577,17 @@ function Set-LongPathSupport {
 function Install-GH {
     if (Has-Command gh) {
         # Check if managed by winget and try to upgrade
-        $wingetGH = winget list --id GitHub.cli --accept-source-agreements 2>$null
+        $wingetGH = Invoke-NativeOutput { winget list --id GitHub.cli --accept-source-agreements }
         if ($wingetGH -and ($wingetGH | Select-String 'GitHub.cli')) {
             Write-Info "Upgrading GitHub CLI via winget"
-            winget upgrade --id GitHub.cli --accept-package-agreements --accept-source-agreements
+            $null = Invoke-NativeShow { winget upgrade --id GitHub.cli --accept-package-agreements --accept-source-agreements }
         } else {
             $ghVer = Get-ToolVersion gh '--version'
             Write-Info "GitHub CLI already installed (non-winget): $ghVer"
         }
     } else {
         Write-Info "Installing GitHub CLI via winget"
-        winget install GitHub.cli --accept-package-agreements --accept-source-agreements
+        $null = Invoke-NativeShow { winget install GitHub.cli --accept-package-agreements --accept-source-agreements }
         if ($LASTEXITCODE -ne 0) { Abort "Failed to install GitHub CLI." }
     }
     Refresh-Path
@@ -588,7 +612,7 @@ function Setup-GHAuth {
         # --scopes user:email: lets Setup-GitIdentity read the user's
         # primary email via `gh api user/emails` when it's not public on
         # the user profile. Without it that endpoint returns HTTP 404.
-        gh auth login --git-protocol https --scopes user:email
+        $null = Invoke-NativeShow { gh auth login --git-protocol https --scopes user:email }
         if ($LASTEXITCODE -ne 0) {
             Write-Warn "gh auth login failed; you can run it manually later"
         }
@@ -659,11 +683,11 @@ function Setup-GitIdentity {
 
     if (Confirm-Step "Set Git identity from your GitHub profile?") {
         if (-not $currentName -and $setName) {
-            git config --global user.name $setName
+            $null = Invoke-NativeShow { git config --global user.name $setName }
             Write-Success "Set user.name to: $setName"
         }
         if (-not $currentEmail -and $setEmail) {
-            git config --global user.email $setEmail
+            $null = Invoke-NativeShow { git config --global user.email $setEmail }
             Write-Success "Set user.email to: $setEmail"
         }
 
@@ -699,7 +723,7 @@ function Install-Python {
     }
 
     Write-Info "Installing Python via winget"
-    winget install Python.Python.3.13 --accept-package-agreements --accept-source-agreements
+    $null = Invoke-NativeShow { winget install Python.Python.3.13 --accept-package-agreements --accept-source-agreements }
     if ($LASTEXITCODE -ne 0) { Abort "Failed to install Python." }
     Refresh-Path
 }
@@ -719,13 +743,13 @@ function Install-DocToolchain {
         @{ Id = 'JohnMacFarlane.Pandoc'; Name = 'pandoc' },
         @{ Id = 'Typst.Typst';          Name = 'typst'  }
     )) {
-        $installed = winget list --exact --id $pkg.Id --accept-source-agreements 2>$null
+        $installed = Invoke-NativeOutput { winget list --exact --id $pkg.Id --accept-source-agreements }
         if ($installed -and ($installed | Select-String $pkg.Id)) {
             Write-Info "$($pkg.Name) already installed; skipping"
             continue
         }
         Write-Info "Installing $($pkg.Name) via winget"
-        winget install --exact --id $pkg.Id --accept-package-agreements --accept-source-agreements
+        $null = Invoke-NativeShow { winget install --exact --id $pkg.Id --accept-package-agreements --accept-source-agreements }
         if ($LASTEXITCODE -ne 0) {
             Write-Warn "Failed to install $($pkg.Name) - document rendering stays broken until it is installed"
         }
@@ -761,10 +785,10 @@ function Install-DocPythonDeps {
 function Install-Node {
     if (Has-Command node) {
         # Check if managed by winget and try to upgrade
-        $wingetNode = winget list --id OpenJS.NodeJS.LTS --accept-source-agreements 2>$null
+        $wingetNode = Invoke-NativeOutput { winget list --id OpenJS.NodeJS.LTS --accept-source-agreements }
         if ($wingetNode -and ($wingetNode | Select-String 'OpenJS.NodeJS.LTS')) {
             Write-Info "Upgrading Node.js via winget"
-            winget upgrade --id OpenJS.NodeJS.LTS --accept-package-agreements --accept-source-agreements
+            $null = Invoke-NativeShow { winget upgrade --id OpenJS.NodeJS.LTS --accept-package-agreements --accept-source-agreements }
             # winget upgrade returns non-zero if already up to date — that's fine
         } else {
             $nodeVer = Get-ToolVersion node '--version'
@@ -772,7 +796,7 @@ function Install-Node {
         }
     } else {
         Write-Info "Installing Node.js LTS via winget"
-        winget install OpenJS.NodeJS.LTS --accept-package-agreements --accept-source-agreements
+        $null = Invoke-NativeShow { winget install OpenJS.NodeJS.LTS --accept-package-agreements --accept-source-agreements }
         if ($LASTEXITCODE -ne 0) { Abort "Failed to install Node.js." }
     }
     Refresh-Path
@@ -780,53 +804,53 @@ function Install-Node {
 
 function Install-1Password {
     # --exact: avoid matching AgileBits.1Password.CLI
-    $wingetCheck = winget list --exact --id AgileBits.1Password --accept-source-agreements 2>$null
+    $wingetCheck = Invoke-NativeOutput { winget list --exact --id AgileBits.1Password --accept-source-agreements }
     if ($wingetCheck -and ($wingetCheck | Select-String 'AgileBits.1Password')) {
         Write-Info "1Password already installed; skipping"
         return
     }
 
     Write-Info "Installing 1Password via winget"
-    winget install --exact --id AgileBits.1Password --accept-package-agreements --accept-source-agreements
+    $null = Invoke-NativeShow { winget install --exact --id AgileBits.1Password --accept-package-agreements --accept-source-agreements }
     if ($LASTEXITCODE -ne 0) { Write-Warn "Failed to install 1Password" }
     Refresh-Path
 }
 
 function Install-1PasswordCLI {
-    $wingetCheck = winget list --id AgileBits.1Password.CLI --accept-source-agreements 2>$null
+    $wingetCheck = Invoke-NativeOutput { winget list --id AgileBits.1Password.CLI --accept-source-agreements }
     if ($wingetCheck -and ($wingetCheck | Select-String 'AgileBits.1Password.CLI')) {
         Write-Info "Upgrading 1Password CLI via winget"
-        winget upgrade --id AgileBits.1Password.CLI --accept-package-agreements --accept-source-agreements
+        $null = Invoke-NativeShow { winget upgrade --id AgileBits.1Password.CLI --accept-package-agreements --accept-source-agreements }
     } else {
         Write-Info "Installing 1Password CLI via winget"
-        winget install --id AgileBits.1Password.CLI --accept-package-agreements --accept-source-agreements
+        $null = Invoke-NativeShow { winget install --id AgileBits.1Password.CLI --accept-package-agreements --accept-source-agreements }
         if ($LASTEXITCODE -ne 0) { Write-Warn "Failed to install 1Password CLI" }
     }
     Refresh-Path
 }
 
 function Install-ClaudeDesktop {
-    $wingetCheck = winget list --id Anthropic.Claude --accept-source-agreements 2>$null
+    $wingetCheck = Invoke-NativeOutput { winget list --id Anthropic.Claude --accept-source-agreements }
     if ($wingetCheck -and ($wingetCheck | Select-String 'Anthropic.Claude')) {
         Write-Info "Claude Desktop already installed; skipping"
         return
     }
 
     Write-Info "Installing Claude Desktop via winget"
-    winget install --id Anthropic.Claude --accept-package-agreements --accept-source-agreements
+    $null = Invoke-NativeShow { winget install --id Anthropic.Claude --accept-package-agreements --accept-source-agreements }
     if ($LASTEXITCODE -ne 0) { Write-Warn "Failed to install Claude Desktop" }
     Refresh-Path
 }
 
 function Install-ChatGPT {
-    $wingetCheck = winget list --id OpenAI.ChatGPT --accept-source-agreements 2>$null
+    $wingetCheck = Invoke-NativeOutput { winget list --id OpenAI.ChatGPT --accept-source-agreements }
     if ($wingetCheck -and ($wingetCheck | Select-String 'OpenAI.ChatGPT')) {
         Write-Info "ChatGPT Desktop already installed; skipping"
         return
     }
 
     Write-Info "Installing ChatGPT Desktop via winget"
-    winget install --id OpenAI.ChatGPT --accept-package-agreements --accept-source-agreements
+    $null = Invoke-NativeShow { winget install --id OpenAI.ChatGPT --accept-package-agreements --accept-source-agreements }
     if ($LASTEXITCODE -ne 0) { Write-Warn "Failed to install ChatGPT Desktop" }
     Refresh-Path
 }
@@ -871,14 +895,14 @@ function Install-Codex {
 
     if (-not $script:codexMigration -and (Has-Command codex)) {
         Write-Info "Updating Codex CLI"
-        npm update -g @openai/codex
+        $null = Invoke-NativeShow { npm update -g @openai/codex }
         if ($LASTEXITCODE -ne 0) {
-            npm install -g @openai/codex
+            $null = Invoke-NativeShow { npm install -g @openai/codex }
             if ($LASTEXITCODE -ne 0) { Write-Warn "Failed to update Codex CLI" }
         }
     } else {
         Write-Info "Installing Codex CLI"
-        npm install -g @openai/codex
+        $null = Invoke-NativeShow { npm install -g @openai/codex }
         if ($LASTEXITCODE -ne 0) { Write-Warn "Failed to install Codex CLI" }
     }
 }
@@ -891,14 +915,14 @@ function Install-Gemini {
 
     if (Has-Command gemini) {
         Write-Info "Updating Gemini CLI"
-        npm update -g @google/gemini-cli
+        $null = Invoke-NativeShow { npm update -g @google/gemini-cli }
         if ($LASTEXITCODE -ne 0) {
-            npm install -g @google/gemini-cli
+            $null = Invoke-NativeShow { npm install -g @google/gemini-cli }
             if ($LASTEXITCODE -ne 0) { Write-Warn "Failed to update Gemini CLI" }
         }
     } else {
         Write-Info "Installing Gemini CLI"
-        npm install -g @google/gemini-cli
+        $null = Invoke-NativeShow { npm install -g @google/gemini-cli }
         if ($LASTEXITCODE -ne 0) { Write-Warn "Failed to install Gemini CLI" }
     }
 }
@@ -1258,7 +1282,7 @@ function Show-Summary {
     if (Has-Command typst) {
         Write-Host "  typst ............. $(Get-ToolVersion typst '--version')"
     }
-    $onePwGuiInstalled = winget list --exact --id AgileBits.1Password --accept-source-agreements 2>$null
+    $onePwGuiInstalled = Invoke-NativeOutput { winget list --exact --id AgileBits.1Password --accept-source-agreements }
     if ($onePwGuiInstalled -and ($onePwGuiInstalled | Select-String 'AgileBits.1Password')) {
         Write-Host "  1Password ......... installed"
     }
@@ -1266,11 +1290,11 @@ function Show-Summary {
         $opVer = Get-ToolVersion op '--version'
         Write-Host "  1Password CLI ..... $opVer"
     }
-    $claudeDesktop = winget list --id Anthropic.Claude --accept-source-agreements 2>$null
+    $claudeDesktop = Invoke-NativeOutput { winget list --id Anthropic.Claude --accept-source-agreements }
     if ($claudeDesktop -and ($claudeDesktop | Select-String 'Anthropic.Claude')) {
         Write-Host "  Claude Desktop .... installed"
     }
-    $chatgptDesktop = winget list --id OpenAI.ChatGPT --accept-source-agreements 2>$null
+    $chatgptDesktop = Invoke-NativeOutput { winget list --id OpenAI.ChatGPT --accept-source-agreements }
     if ($chatgptDesktop -and ($chatgptDesktop | Select-String 'OpenAI.ChatGPT')) {
         Write-Host "  ChatGPT Desktop ... installed"
     }
