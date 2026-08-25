@@ -46,7 +46,8 @@ BeforeAll {
     # about the wrappers' contract, and asserting it holds with logging OFF is asserting it
     # for the path every normal run takes.
     $wanted = 'Invoke-NativeQuiet', 'Invoke-NativeOutput', 'Invoke-NativeShow',
-              'Invoke-NativeCapture', 'Write-CsaLog', 'Write-CsaNativeLog'
+              'Invoke-NativeCapture', 'Write-CsaLog', 'Write-CsaNativeLog',
+              'Expand-CsaCommandText'
     $definitions = $ast.FindAll(
         { $args[0] -is [System.Management.Automation.Language.FunctionDefinitionAst] }, $true)
     foreach ($definition in $definitions) {
@@ -171,5 +172,74 @@ Describe 'Invoke-NativeQuiet' {
     It 'returns the exit code and prints nothing' {
         $out = Invoke-NativeQuiet { sh -c 'echo noisy; echo noisier >&2; exit 0' } 6>&1
         $out | Should -Be 0
+    }
+}
+
+Describe 'Expand-CsaCommandText' {
+    # It annotates rather than substitutes, and these tests are mostly about the cases where it
+    # must stay QUIET. Substituting values into the command text was tried first and produced
+    # log lines that misrepresented what ran - `--id @{Id=Git.Git}.Id`, `echo r()`, and an empty
+    # `echo ` for an undefined variable. A log that says the wrong thing is worse than one that
+    # says a vague thing, so every case below that cannot be resolved cleanly is left bare.
+
+    BeforeAll {
+        $script:pkg  = [pscustomobject]@{ Id = 'Git.Git' }
+        $script:repo = 'CloudSecurityAlliance-Internal/CSA-Plugins'
+        $script:py   = '/usr/bin/python3'
+        $script:deep = [pscustomobject]@{ a = [pscustomobject]@{ b = 'nested' } }
+        $script:tbl  = @{ x = 1 }
+        $script:long = 'x' * 200
+        $script:sideEffects = 0
+        function script:Boom { $script:sideEffects++; 'BOOM' }
+    }
+
+    It 'leaves a command with no variables alone' {
+        Expand-CsaCommandText { winget list --exact --id AgileBits.1Password } |
+            Should -Be 'winget list --exact --id AgileBits.1Password'
+    }
+
+    It 'annotates a plain variable' {
+        # The case that matters most, and the one that silently did not work: `1..($n - 1)` is
+        # {1,0} in PowerShell for a single-element path, not empty, so a bare $py resolved to
+        # nothing and was dropped.
+        Expand-CsaCommandText { & $py -c 'import x' } | Should -Be "& `$py -c 'import x'  [py=/usr/bin/python3]"
+    }
+
+    It 'annotates a variable used inside a string' {
+        Expand-CsaCommandText { gh api "repos/$repo" } |
+            Should -Be 'gh api "repos/$repo"  [repo=CloudSecurityAlliance-Internal/CSA-Plugins]'
+    }
+
+    It 'annotates a property, and a nested property chain' {
+        Expand-CsaCommandText { winget list --id $pkg.Id } | Should -Match '\[pkg\.Id=Git\.Git\]$'
+        Expand-CsaCommandText { echo $deep.a.b }           | Should -Match '\[deep\.a\.b=nested\]$'
+    }
+
+    It 'names each variable once, however often it appears' {
+        Expand-CsaCommandText { echo $py $py } | Should -Be 'echo $py $py  [py=/usr/bin/python3]'
+    }
+
+    It 'lists several different variables' {
+        Expand-CsaCommandText { echo $py $pkg.Id } |
+            Should -Be 'echo $py $pkg.Id  [py=/usr/bin/python3; pkg.Id=Git.Git]'
+    }
+
+    It 'says nothing about a method call, and does not invoke it' {
+        Expand-CsaCommandText { echo $pkg.Id.ToUpper() } | Should -Be 'echo $pkg.Id.ToUpper()'
+    }
+
+    It 'does not evaluate a subexpression' {
+        # The important one. ExpandString would have RUN Boom to produce a log line.
+        Expand-CsaCommandText { echo "$(Boom)" } | Should -Be 'echo "$(Boom)"'
+        $script:sideEffects | Should -Be 0
+    }
+
+    It 'says nothing about an undefined variable, rather than rendering it empty' {
+        Expand-CsaCommandText { echo $doesNotExist.Thing } | Should -Be 'echo $doesNotExist.Thing'
+    }
+
+    It 'skips a collection and an over-long value, which are noise on a command line' {
+        Expand-CsaCommandText { echo $tbl }  | Should -Be 'echo $tbl'
+        Expand-CsaCommandText { echo $long } | Should -Be 'echo $long'
     }
 }

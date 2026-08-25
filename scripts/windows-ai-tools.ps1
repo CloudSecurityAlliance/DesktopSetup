@@ -174,7 +174,7 @@ function Write-CsaLog {
     }
     try {
         if (-not (Test-Path $CsaLog)) {
-            "=== DesktopSetup $(Get-Date -Format o) ===" | Set-Content $CsaLog
+            "=== DesktopSetup $(Get-Date -Format o) ===" | Set-Content $CsaLog -Encoding UTF8
             "This log is REDACTED for known credential shapes, but review it before sharing." |
                 Add-Content $CsaLog
             "PowerShell $($PSVersionTable.PSVersion) $($PSVersionTable.PSEdition) on $env:COMPUTERNAME" |
@@ -183,7 +183,7 @@ function Write-CsaLog {
             # THIS, and the recursion would be unbounded.
             icacls $CsaLog /inheritance:r /grant:r "$($env:USERNAME):(R,W)" | Out-Null
         }
-        "{0:HH:mm:ss} [{1}] {2}" -f (Get-Date), $Kind, $redacted | Add-Content $CsaLog
+        "{0:HH:mm:ss} [{1}] {2}" -f (Get-Date), $Kind, $redacted | Add-Content $CsaLog -Encoding UTF8
     } catch { }   # a log that cannot be written must never stop the install
 }
 
@@ -201,10 +201,65 @@ function Show-CsaDebugHint {
     }
 }
 
+# A scriptblock's source text, plus the values of any variables in it.
+#
+# $Call.ToString() is the SOURCE, so a real log said `winget list --exact --id $pkg.Id` and
+# `gh api "repos/$CSA_MCP_GATE_REPO"` - true, and useless for answering "which package?" or
+# "which repo?". The values are reachable, because PowerShell resolves variables dynamically:
+# a wrapper called from a loop can see that loop's $pkg.
+#
+# It ANNOTATES rather than substitutes, and that is the whole design. Rewriting the command
+# with values filled in was tried first, via ExpandString, and every version of it produced
+# log lines that misrepresented what ran:
+#
+#   $pkg.Id                 ->  --id @{Id=Git.Git}.Id   (object stringified, `.Id` left as text)
+#   $pkg.Id.ToUpper()       ->  echo r()                (the regex ate a prefix of the chain)
+#   $doesNotExist.Thing     ->  echo                    (reads as "ran with no argument")
+#
+# A log that says the wrong thing is worse than one that says a vague thing, and each guard
+# added revealed another hole. Appending cannot have that failure mode: the command is
+# reproduced verbatim, and a value that cannot be resolved is simply not mentioned. Nothing is
+# ever executed to produce it either - properties are walked through psobject, so a method
+# call in the source is data, not something to run.
+function Expand-CsaCommandText {
+    param([scriptblock]$Call)
+    $text = $Call.ToString().Trim() -replace '\s+', ' '
+    $seen = @{}
+    $parts = @()
+    foreach ($match in [regex]::Matches($text, '\$(\w+(?:\.\w+)*)')) {
+        $path = $match.Groups[1].Value
+        if ($seen.ContainsKey($path)) { continue }
+        $seen[$path] = $true
+        $names = $path -split '\.'
+        $value = Get-Variable -Name $names[0] -ValueOnly -ErrorAction SilentlyContinue
+        # `1..($names.Count - 1)` is NOT empty for a single-element path: 1..0 counts DOWN in
+        # PowerShell, giving {1, 0}. So a plain `$py` walked to $names[1] (null) and then back
+        # to $names[0], resolved to nothing, and was silently dropped - which is why the plain
+        # variables, the most useful ones, were the only ones not annotated.
+        $rest = @()
+        if ($names.Count -gt 1) { $rest = $names[1..($names.Count - 1)] }
+        foreach ($name in $rest) {
+            if ($null -eq $value) { break }
+            $property = $value.psobject.Properties[$name]
+            if (-not $property) { $value = $null; break }
+            $value = $property.Value
+        }
+        # Scalars only, and short ones. A hashtable or an object renders as @{...} or a type
+        # name, which is noise, and a long value belongs in the output lines rather than in
+        # the command line.
+        if ($null -eq $value -or $value -is [System.Collections.IEnumerable] -and $value -isnot [string]) { continue }
+        $rendered = "$value"
+        if (-not $rendered -or $rendered.Length -gt 120) { continue }
+        $parts += "$path=$rendered"
+    }
+    if ($parts.Count) { return "$text  [" + ($parts -join '; ') + "]" }
+    return $text
+}
+
 function Write-CsaNativeLog {
     param([scriptblock]$Call, [int]$Code, [string]$Output)
     if (-not $CsaLog) { return }
-    Write-CsaLog ("{0} -> exit {1}" -f $Call.ToString().Trim(), $Code) 'run'
+    Write-CsaLog ("{0} -> exit {1}" -f (Expand-CsaCommandText $Call), $Code) 'run'
     if ($Output) { foreach ($line in ($Output -split "`r?`n")) { Write-CsaLog $line 'out' } }
 }
 
@@ -215,6 +270,15 @@ function Write-CsaNativeLog {
 # load each function on its own. It took a run on a real Windows machine.
 if ($CsaDebug -and $CsaLog) {
     Write-Info "debug logging to $CsaLog"
+    # Decode native output as UTF-8 while logging. [Console]::OutputEncoding was measured at
+    # cp437 (IBM437) on a real machine, and PowerShell decodes a native command's stdout with
+    # it - so gh's UTF-8 checkmark arrived as three cp437 characters and reached the log as the
+    # bytes 47 A3 F4. The corruption happens at DECODE, so writing the file as UTF-8 alone
+    # would faithfully record the wrong characters.
+    #
+    # Only under CSA_DEBUG, and deliberately not restored: a normal run is untouched, so this
+    # cannot affect anybody who did not ask for a log, and the process is about to end anyway.
+    try { [Console]::OutputEncoding = New-Object System.Text.UTF8Encoding $false } catch { }
     # Create the file NOW rather than on the first command that gets logged. A script can
     # abort before running anything - the Administrator guard and the preconditions both do -
     # and then the path announced above names a file that does not exist. "Send me the log"
