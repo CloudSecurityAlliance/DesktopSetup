@@ -211,32 +211,73 @@ disable any individual plugin locally with `claude plugin disable <name>`.
 
 ---
 
-## When something goes wrong
+## Debug mode — when something goes wrong
 
-Re-run the same command with `CSA_DEBUG=1`. Everything still prints to the screen, and a full
-transcript — every command, its output and its exit code — is written to a file in your home
-directory:
+Re-run the same command with `CSA_DEBUG` set. Everything still prints to the screen, and a full
+transcript — every command, its output, and its exit code — is written to a file in your home
+directory. It works on **every** script here, not just the two shown.
 
-**macOS**
+### macOS
 
 ```bash
 CSA_DEBUG=1 bash -c "$(curl -fsSL -H 'Cache-Control: no-cache' https://raw.githubusercontent.com/CloudSecurityAlliance/DesktopSetup/HEAD/scripts/macos-ai-tools.sh)"
 ```
 
-**Windows**
+The `CSA_DEBUG=1` goes **before** `bash`, as a prefix on the same line. That is what makes it
+reach the script.
+
+### Windows
+
+Two statements — set the variable, then run. The variable stays set for the rest of that
+PowerShell window, so a second run also logs.
 
 ```powershell
 $env:CSA_DEBUG = '1'
 irm https://raw.githubusercontent.com/CloudSecurityAlliance/DesktopSetup/HEAD/scripts/windows-ai-tools.ps1 -Headers @{'Cache-Control'='no-cache'} | iex
 ```
 
-The path is printed at the start and at the end: `~/desktopsetup-YYYYMMDD-HHMMSS.log`, readable
-only by you. One file covers the whole run, including the CSA-internal setup.
+To stop logging again: `Remove-Item Env:\CSA_DEBUG`
 
-Known credential shapes (tokens, client secrets, bearer headers) are replaced with `<redacted>`
-before anything is written, and the CSA OAuth client is never captured at all. That is a safety
-net, not a guarantee: **read the file before you send it to anyone.** The first line of every
-log says so too.
+**There is no `-Debug` switch, and the two obvious guesses both go wrong:**
+
+| what you might type | what actually happens |
+|---|---|
+| `irm ... --Debug ... \| iex` | fails immediately — *"a positional parameter cannot be found that accepts argument '--Debug'"* |
+| `irm ... -Debug ... \| iex` | **runs, and logs nothing.** `-Debug` is a real parameter *on `irm`*: it applies to the download, not to the script `iex` then executes |
+
+The reason there is no switch: `irm … | iex` fetches text and executes it, so the script never
+receives an argument vector for a flag to arrive in. An environment variable is the only thing
+that crosses that boundary — which is also how `NONINTERACTIVE` works here.
+
+Either spelling is accepted, since `$env:` is easy to forget, and so is any of `1`, `true`,
+`yes` or `on` in any case:
+
+```powershell
+$env:CSA_DEBUG = '1'      # documented
+$CSA_DEBUG = '1'          # also works
+```
+
+### The log
+
+The path is printed at the start and again at the end:
+
+```
+~/desktopsetup-YYYYMMDD-HHMMSS.log        (macOS)
+C:\Users\<you>\desktopsetup-YYYYMMDD-HHMMSS.log   (Windows)
+```
+
+Readable only by you (mode 0600 / an ACL granting just your account). **One file covers the
+whole run**, including the CSA-internal setup that runs as a separate process — so there is only
+ever one file to send.
+
+It exists even if the run stops early. A script that refuses to proceed (wrong platform, running
+as Administrator, a missing prerequisite) still leaves a log saying which check refused, because
+that is exactly when you want one.
+
+Known credential shapes — tokens, client secrets, bearer headers, refresh tokens — are replaced
+with `<redacted>` before anything is written, and the CSA OAuth client is never captured at all.
+That is a safety net, not a guarantee: **read the file before you send it to anyone.** The first
+line of every log says the same.
 
 ## Repository contents
 

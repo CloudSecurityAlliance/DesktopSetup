@@ -106,8 +106,38 @@ function Abort         { param([string]$Message) Write-Err $Message; exit 1 }
 # Nothing needs to be added at the call sites. Every native command in these scripts already
 # goes through Invoke-Native* (check-powershell-native.py enforces it), so the wrappers are
 # the one place that has to know about this.
+# Accepts either spelling, because both are things people actually type:
+#
+#   $env:CSA_DEBUG = '1'      # the documented one
+#   $CSA_DEBUG = '1'          # the one you type when you forget `$env:`
+#
+# The second works because `iex` and `& ([ScriptBlock]::Create(...))` both run this text in a
+# scope that can see the caller's variables (measured, both shapes). Accepting only the first
+# would mean a forgotten `$env:` silently produces no log at all - and the person then reports
+# "I ran it with debug on and there was nothing", which is the worst possible outcome for a
+# switch whose entire job is producing evidence.
+#
+# NOT a -Debug parameter: there is no parameter to pass. `irm ... | iex` fetches text and
+# executes it, so the script never sees an argument vector. Worth knowing what the plausible
+# guesses actually do, since neither is inert in the way you would hope:
+#   irm ... --Debug   fails outright - "a positional parameter cannot be found"
+#   irm ... -Debug    is a real parameter ON IRM: it sets the debug stream for the DOWNLOAD
+#                     and has nothing to do with the script iex then runs. Silent no-op.
+function Test-CsaDebugRequested {
+    $plain = Get-Variable -Name CSA_DEBUG -ValueOnly -ErrorAction SilentlyContinue
+    foreach ($value in @($env:CSA_DEBUG, $plain)) {
+        if ($null -eq $value) { continue }
+        if ($value -is [bool]) { if ($value) { return $true } else { continue } }
+        if ("$value".Trim() -match '^(1|true|yes|on)$') { return $true }
+    }
+    return $false
+}
+
 $SCRIPT_LABEL = 'windows-ai-tools.ps1'
-$CsaDebug = ($env:CSA_DEBUG -eq '1')
+$CsaDebug = Test-CsaDebugRequested
+# Normalise it into the environment, so a child process inherits the setting whichever way it
+# was given. The CSA-internal setup is a separate process and reads $env:CSA_DEBUG only.
+if ($CsaDebug) { $env:CSA_DEBUG = '1' }
 $CsaLog = $null
 if ($CsaDebug) {
     if ($env:CSA_LOG) {

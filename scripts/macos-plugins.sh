@@ -148,8 +148,17 @@ csa_redact() {
     -e 's/ya29\.[A-Za-z0-9._-]{20,}/<redacted>/g'
 }
 
+# Accepts 1, true, yes or on, in any case. Not a --debug flag: the documented invocation is
+# `bash -c "$(curl ...)"`, which passes no argument vector for a flag to arrive in.
+csa_debug_requested() {
+  case "$(printf '%s' "${CSA_DEBUG:-}" | tr '[:upper:]' '[:lower:]')" in
+    1|true|yes|on) return 0 ;;
+    *)             return 1 ;;
+  esac
+}
+
 CSA_LOG_INHERITED=""
-if [[ "${CSA_DEBUG:-}" == "1" ]]; then
+if csa_debug_requested; then
   if [[ -n "${CSA_LOG:-}" ]]; then
     CSA_LOG_INHERITED=1
     printf '\n--- %s ---\n' "${SCRIPT_LABEL:-desktopsetup}" >> "$CSA_LOG"
@@ -162,6 +171,7 @@ if [[ "${CSA_DEBUG:-}" == "1" ]]; then
       echo "$(uname -sr) · bash ${BASH_VERSION} · ${SCRIPT_LABEL:-desktopsetup}"
     } >> "$CSA_LOG"
   fi
+  CSA_DEBUG=1                        # normalised, so a child sees 1 whatever was typed
   export CSA_DEBUG CSA_LOG
   # Verified on bash 3.2.57 (macOS): all output survives, including on `exit N` and on an
   # uncaught failure under `set -e`. The flush race that process substitution is known for
