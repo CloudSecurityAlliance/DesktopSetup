@@ -1003,6 +1003,27 @@ function Register-CSAMcpServer {
     }
 }
 
+# Run CSA-internal setup that cannot live in this public repo (it carries CSA's OAuth
+# client). Gated exactly like Register-CSAMcpServer: probe CloudSecurityAlliance-Internal
+# with gh and silently do nothing without access, so external users of this public repo
+# see no chatter. The fetched script is idempotent and reports for itself.
+function Invoke-CSAInternalSetup {
+    if (-not (Has-Command 'gh')) { return }
+    if ((Invoke-NativeQuiet { gh auth status }) -ne 0) { return }
+    if ((Invoke-NativeQuiet { gh api "repos/$CSA_MCP_GATE_REPO" }) -ne 0) { return }
+
+    $encoded = gh api "repos/$CSA_MCP_GATE_REPO/contents/internal-setup/csa-google-workspace-setup.ps1" --jq '.content' 2>$null
+    if ($LASTEXITCODE -ne 0 -or -not $encoded) { return }
+
+    try {
+        $script = [System.Text.Encoding]::UTF8.GetString(
+            [System.Convert]::FromBase64String(($encoded -replace '\s', '')))
+    } catch { return }
+
+    try { & ([ScriptBlock]::Create($script)) }
+    catch { Write-Warn "CSA internal setup reported a problem: $_" }
+}
+
 # ── Plugin install ──────────────────────────────────────────────────
 # Fetch the public and internal plugin list files from HEAD, register
 # any missing marketplaces (CSA ones are gh-probed first), then
@@ -1335,6 +1356,7 @@ function Main {
     Setup-PluginMarketplaces
     Install-Plugins
     Register-CSAMcpServer
+    Invoke-CSAInternalSetup
     Show-Summary
 }
 

@@ -359,6 +359,23 @@ setup_csa_mcp_server() {
   fi
 }
 
+# Run CSA-internal setup that cannot live in this public repo (it carries CSA's OAuth
+# client). Gated the same way as setup_csa_mcp_server: gh-probe CloudSecurityAlliance-Internal,
+# and silently do nothing for anyone without access — external users of this public repo see
+# no chatter about it. The fetched script is idempotent and handles its own reporting.
+# NOTE: keep in sync with the copies in the other scripts, as with setup_csa_mcp_server.
+setup_csa_internal_tools() {
+  has_command gh || return 0
+  gh auth status >/dev/null 2>&1 || return 0
+  gh api "repos/$CSA_MCP_GATE_REPO" >/dev/null 2>&1 || return 0
+
+  local script
+  script="$(gh api "repos/$CSA_MCP_GATE_REPO/contents/internal-setup/csa-google-workspace-setup.sh" \
+              --jq '.content' 2>/dev/null | base64 --decode 2>/dev/null)" || return 0
+  [[ -n "$script" ]] || return 0
+  bash -c "$script" || warn "CSA internal setup reported a problem (see above)"
+}
+
 # ── Preflight ───────────────────────────────────────────────────────
 
 preflight() {
@@ -392,6 +409,7 @@ main() {
   sync_plugin_marketplaces
   install_plugins
   setup_csa_mcp_server
+  setup_csa_internal_tools
 
   info "Refreshing plugin marketplaces"
   claude plugin marketplace update || warn "marketplace update failed; continuing"
