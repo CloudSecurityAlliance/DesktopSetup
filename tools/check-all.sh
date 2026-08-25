@@ -38,6 +38,9 @@ check python3 tools/check-powershell-native.py
 step "paste safety"
 check python3 tools/check-paste-safety.py
 
+step "debug mode shows prompts"
+check python3 tests/test_prompt_visibility.py
+
 if command -v pwsh >/dev/null; then
   step "powershell parse"
   check pwsh -NoProfile -c '
