@@ -79,6 +79,46 @@ function Has-Command {
     return [bool](Get-Command $Name -ErrorAction SilentlyContinue)
 }
 
+# Run a native command, swallow stderr, return stdout on success or $null
+# on failure. Same NativeCommandError shield as Invoke-NativeQuiet, but
+# preserves stdout so callers can capture values (e.g. `gh api user --jq`).
+# Note: `2>$null` alone does NOT prevent NativeCommandError promotion in
+# Windows PowerShell 5.1 — the try/catch is required.
+function Invoke-NativeOutput {
+    param([scriptblock]$Call)
+    try {
+        $result = & $Call 2>$null
+        if ($LASTEXITCODE -ne 0) { return $null }
+        return $result
+    } catch {
+        return $null
+    }
+}
+
+# Run a native command with its output VISIBLE, shielded against NativeCommandError,
+# returning the exit code. The fourth member of this family, for the case the other
+# three cannot serve: an installer or download whose progress the user should see.
+#
+# Why it is needed at all: a bare native call is unsafe under
+# $ErrorActionPreference='Stop'. npm prints deprecation warnings to stderr as a matter
+# of routine and winget occasionally does too, and either terminates the script BEFORE
+# the caller's `if ($LASTEXITCODE -ne 0)` can run — so the script's own error handling
+# becomes unreachable exactly when it is needed. Setting 'Continue' for the duration
+# suppresses the promotion without hiding anything.
+#
+# Callers keep using `if ($LASTEXITCODE -ne 0)` after this: $LASTEXITCODE is global and
+# is still the native command's, because nothing between it and the caller runs another
+# native command. Assign the result to $null rather than letting it fall out, or the
+# exit code prints into the transcript.
+function Invoke-NativeShow {
+    param([scriptblock]$Call)
+    $prev = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+    try { & $Call; return $LASTEXITCODE }
+    catch { return 1 }
+    finally { $ErrorActionPreference = $prev }
+}
+
 # Run a native command, swallow stdout+stderr, return its exit code.
 # Shields against NativeCommandError promotion under
 # $ErrorActionPreference='Stop'.
@@ -226,7 +266,7 @@ function Install-Plugins {
     if (-not $publicList -and -not $internalList) { return }
 
     $registeredRepos = @()
-    $listing = claude plugin marketplace list 2>$null
+    $listing = Invoke-NativeOutput { claude plugin marketplace list }
     foreach ($line in $listing) {
         if ($line -match 'GitHub \(([^)]+)\)') { $registeredRepos += $matches[1] }
     }
@@ -338,7 +378,7 @@ function Setup-PluginMarketplaces {
 
     if ((Invoke-NativeQuiet { gh auth status }) -ne 0) { return }
 
-    $listing = claude plugin marketplace list 2>$null
+    $listing = Invoke-NativeOutput { claude plugin marketplace list }
     $alreadyAdded = @()
     foreach ($line in $listing) {
         if ($line -match 'GitHub \(([^)]+)\)') {
@@ -386,7 +426,7 @@ function Register-CSAMcpServer {
     if (-not (Has-Command gh))     { return }
     if ((Invoke-NativeQuiet { gh auth status }) -ne 0) { return }
 
-    $listing = claude mcp list 2>$null
+    $listing = Invoke-NativeOutput { claude mcp list }
     foreach ($line in $listing) {
         if ($line -match "^${CSA_MCP_NAME}[: ]") { return }
     }

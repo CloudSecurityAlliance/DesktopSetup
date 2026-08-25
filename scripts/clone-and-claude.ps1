@@ -29,6 +29,44 @@ function Has-Command {
     return [bool](Get-Command $Name -ErrorAction SilentlyContinue)
 }
 
+# Run a native command, shield against NativeCommandError, and return both
+# the merged stdout+stderr output (as a trimmed string) and the exit code.
+# Used when a caller needs to surface the command's error text on failure
+# (e.g. `claude plugin marketplace add` schema-validation errors).
+function Invoke-NativeCapture {
+    param([scriptblock]$Call)
+    try {
+        $output = (& $Call 2>&1 | Out-String).Trim()
+        return [pscustomobject]@{ ExitCode = $LASTEXITCODE; Output = $output }
+    } catch {
+        return [pscustomobject]@{ ExitCode = 1; Output = $_.Exception.Message }
+    }
+}
+
+# Run a native command with its output VISIBLE, shielded against NativeCommandError,
+# returning the exit code. The fourth member of this family, for the case the other
+# three cannot serve: an installer or download whose progress the user should see.
+#
+# Why it is needed at all: a bare native call is unsafe under
+# $ErrorActionPreference='Stop'. npm prints deprecation warnings to stderr as a matter
+# of routine and winget occasionally does too, and either terminates the script BEFORE
+# the caller's `if ($LASTEXITCODE -ne 0)` can run — so the script's own error handling
+# becomes unreachable exactly when it is needed. Setting 'Continue' for the duration
+# suppresses the promotion without hiding anything.
+#
+# Callers keep using `if ($LASTEXITCODE -ne 0)` after this: $LASTEXITCODE is global and
+# is still the native command's, because nothing between it and the caller runs another
+# native command. Assign the result to $null rather than letting it fall out, or the
+# exit code prints into the transcript.
+function Invoke-NativeShow {
+    param([scriptblock]$Call)
+    $prev = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+    try { & $Call; return $LASTEXITCODE }
+    catch { return 1 }
+    finally { $ErrorActionPreference = $prev }
+}
+
 # ── Parse argument ──────────────────────────────────────────────────
 
 $RepoSlug = $env:CSA_REPO
@@ -90,7 +128,7 @@ if ($Missing.Count -gt 0) {
 }
 
 # Check gh authentication
-$authCheck = gh auth status 2>&1
+$authCheck = (Invoke-NativeCapture { gh auth status }).Output
 if ($LASTEXITCODE -ne 0) {
     Write-Err "GitHub CLI is not authenticated."
     Write-Host ""
@@ -195,7 +233,7 @@ if (Test-Path (Join-Path $TargetDir ".git")) {
     if (-not (Test-Path $ParentDir)) {
         New-Item -ItemType Directory -Path $ParentDir -Force | Out-Null
     }
-    gh repo clone $RepoSlug $TargetDir
+    $null = Invoke-NativeShow { gh repo clone $RepoSlug $TargetDir }
     if ($LASTEXITCODE -ne 0) {
         Abort "Clone failed. Check that you have access to $RepoSlug."
     }
