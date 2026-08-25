@@ -740,15 +740,20 @@ function Install-DocPythonDeps {
         return
     }
 
-    & $py -c 'import yaml, fitz' 2>$null
-    if ($LASTEXITCODE -eq 0) {
+    # This probe is SUPPOSED to fail when the deps are absent - that is how it detects
+    # them. But a bare native call cannot use `2>$null` here: under
+    # $ErrorActionPreference='Stop', Python's traceback on stderr is promoted to a
+    # NativeCommandError and terminates the whole script (see the note above
+    # Invoke-NativeOutput). Invoke-NativeQuiet is the shield this file already provides.
+    if ((Invoke-NativeQuiet { & $py -c 'import yaml, fitz' }) -eq 0) {
         Write-Info "Document preflight deps already installed; skipping"
         return
     }
 
     Write-Info "Installing document preflight deps (pyyaml, pymupdf)"
-    & $py -m pip install --quiet --upgrade pyyaml pymupdf
-    if ($LASTEXITCODE -ne 0) {
+    # Same shield: pip writes warnings to stderr, and a failed install must degrade to a
+    # warning rather than abort setup.
+    if ((Invoke-NativeQuiet { & $py -m pip install --quiet --upgrade pyyaml pymupdf }) -ne 0) {
         Write-Warn "Failed to install pyyaml/pymupdf - csa-preflight will print its own install hint"
     }
 }
