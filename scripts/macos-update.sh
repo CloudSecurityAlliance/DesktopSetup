@@ -17,7 +17,7 @@
 
 set -euo pipefail
 
-SCRIPT_VERSION="2026.04271200"
+SCRIPT_VERSION="2026.08241200"
 
 # ── CSA plugin marketplaces ─────────────────────────────────────────
 # Each update run will add any entries from this list that aren't yet
@@ -343,6 +343,16 @@ update_pip() {
     info "  Upgrading $pkg"
     python3 -m pip install --upgrade "$pkg" 2>/dev/null || warn "Failed to upgrade $pkg; continuing"
   done
+
+  # ~/.default_venv is where macos-ai-tools.sh puts the document-pipeline
+  # preflight deps, because brew's python3 is PEP 668 externally-managed.
+  # The generic python3 pass above never looks inside it, so refresh it
+  # explicitly or those deps silently rot.
+  if [[ -x "$HOME/.default_venv/bin/python3" ]]; then
+    info "Updating packages in ~/.default_venv"
+    "$HOME/.default_venv/bin/python3" -m pip install --quiet --upgrade pip pyyaml pymupdf \
+      || warn "Failed to update ~/.default_venv packages; continuing"
+  fi
 }
 
 update_claude_code() {

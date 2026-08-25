@@ -5,20 +5,22 @@
 #   2. GitHub CLI (gh, via winget) + authentication
 #   3. Python (via winget)
 #   4. Node.js LTS (via winget)
-#   5. 1Password (via winget, GUI app — needed for biometric CLI unlock)
-#   6. 1Password CLI (via winget)
-#   7. Claude Desktop (via winget, auto-updates)
-#   8. ChatGPT Desktop (via winget, auto-updates)
-#   9. Claude Code (native installer, auto-updates)
-#  10. OpenAI Codex CLI (via npm)
-#  11. Google Gemini CLI (via npm)
+#   5. Document toolchain: pandoc + typst (via winget), plus pyyaml +
+#      pymupdf (via pip) — required by the document-pipeline plugin
+#   6. 1Password (via winget, GUI app — needed for biometric CLI unlock)
+#   7. 1Password CLI (via winget)
+#   8. Claude Desktop (via winget, auto-updates)
+#   9. ChatGPT Desktop (via winget, auto-updates)
+#  10. Claude Code (native installer, auto-updates)
+#  11. OpenAI Codex CLI (via npm)
+#  12. Google Gemini CLI (via npm)
 #
 # Usage:
 #   irm https://raw.githubusercontent.com/CloudSecurityAlliance/DesktopSetup/HEAD/scripts/windows-ai-tools.ps1 | iex
 
 $ErrorActionPreference = 'Stop'
 
-$ScriptVersion = "2026.06291200"
+$ScriptVersion = "2026.08241200"
 
 # ── CSA plugin marketplaces ─────────────────────────────────────────
 # Plugin marketplaces to register with Claude Code. Each entry is an
@@ -345,6 +347,18 @@ function Show-Preflight {
         Write-Host "  Node.js ........... installed ($nodeVer)"
     } else {
         Write-Host "  Node.js ........... install via winget"
+    }
+
+    # Document toolchain (document-pipeline plugin: Markdown -> tagged PDF)
+    if (Has-Command pandoc) {
+        Write-Host "  pandoc ............ installed ($(Get-ToolVersion pandoc '--version'))"
+    } else {
+        Write-Host "  pandoc ............ install via winget"
+    }
+    if (Has-Command typst) {
+        Write-Host "  typst ............. installed ($(Get-ToolVersion typst '--version'))"
+    } else {
+        Write-Host "  typst ............. install via winget"
     }
 
     # 1Password (GUI app — needed for biometric CLI unlock)
@@ -688,6 +702,55 @@ function Install-Python {
     winget install Python.Python.3.13 --accept-package-agreements --accept-source-agreements
     if ($LASTEXITCODE -ne 0) { Abort "Failed to install Python." }
     Refresh-Path
+}
+
+# ── Document toolchain ──────────────────────────────────────────────
+# pandoc and typst render Markdown into CSA-branded, PDF/UA-1 tagged
+# PDFs; the document-pipeline plugin's build script hard-requires both
+# on PATH. pyyaml + pymupdf back its preflight checks.
+#
+# Unlike macOS, the deps go straight into the winget Python rather than a
+# venv: winget Python is not PEP 668 externally-managed, so pip works,
+# and document-pipeline's bash launcher probes a PATH `python` — it looks
+# for a venv only at the Unix path ~/.default_venv/bin/python3, which
+# does not exist on Windows.
+function Install-DocToolchain {
+    foreach ($pkg in @(
+        @{ Id = 'JohnMacFarlane.Pandoc'; Name = 'pandoc' },
+        @{ Id = 'Typst.Typst';          Name = 'typst'  }
+    )) {
+        $installed = winget list --exact --id $pkg.Id --accept-source-agreements 2>$null
+        if ($installed -and ($installed | Select-String $pkg.Id)) {
+            Write-Info "$($pkg.Name) already installed; skipping"
+            continue
+        }
+        Write-Info "Installing $($pkg.Name) via winget"
+        winget install --exact --id $pkg.Id --accept-package-agreements --accept-source-agreements
+        if ($LASTEXITCODE -ne 0) {
+            Write-Warn "Failed to install $($pkg.Name) - document rendering stays broken until it is installed"
+        }
+    }
+    Refresh-Path
+}
+
+function Install-DocPythonDeps {
+    $py = if (Has-Command python) { 'python' } elseif (Has-Command python3) { 'python3' } else { $null }
+    if (-not $py) {
+        Write-Warn "No Python on PATH - skipping document preflight deps"
+        return
+    }
+
+    & $py -c 'import yaml, fitz' 2>$null
+    if ($LASTEXITCODE -eq 0) {
+        Write-Info "Document preflight deps already installed; skipping"
+        return
+    }
+
+    Write-Info "Installing document preflight deps (pyyaml, pymupdf)"
+    & $py -m pip install --quiet --upgrade pyyaml pymupdf
+    if ($LASTEXITCODE -ne 0) {
+        Write-Warn "Failed to install pyyaml/pymupdf - csa-preflight will print its own install hint"
+    }
 }
 
 function Install-Node {
@@ -1163,6 +1226,12 @@ function Show-Summary {
         Write-Host "  Node.js ........... $nodeVer"
         Write-Host "  npm ............... $npmVer"
     }
+    if (Has-Command pandoc) {
+        Write-Host "  pandoc ............ $(Get-ToolVersion pandoc '--version')"
+    }
+    if (Has-Command typst) {
+        Write-Host "  typst ............. $(Get-ToolVersion typst '--version')"
+    }
     $onePwGuiInstalled = winget list --exact --id AgileBits.1Password --accept-source-agreements 2>$null
     if ($onePwGuiInstalled -and ($onePwGuiInstalled | Select-String 'AgileBits.1Password')) {
         Write-Host "  1Password ......... installed"
@@ -1253,6 +1322,8 @@ function Main {
     Setup-GitIdentity
     Install-Python
     Install-Node
+    Install-DocToolchain
+    Install-DocPythonDeps
     Install-1Password
     Install-1PasswordCLI
     Install-ClaudeDesktop

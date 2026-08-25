@@ -12,7 +12,7 @@ Installs Claude Desktop, ChatGPT Desktop, Claude Code, Codex CLI, Gemini CLI, pl
 bash -c "$(curl -fsSL -H 'Cache-Control: no-cache' https://raw.githubusercontent.com/CloudSecurityAlliance/DesktopSetup/HEAD/scripts/macos-ai-tools.sh)"
 ```
 
-The macOS script shares a base layer (Xcode CLI Tools, Homebrew, Node.js/npm, Python) and installs it if not already present.
+The macOS script shares a base layer (Xcode CLI Tools, Homebrew, Node.js/npm, Python) and installs it if not already present. It also installs the document toolchain — `pandoc` and `typst`, plus `pyyaml` and `pymupdf` in `~/.default_venv` — which the **document-pipeline** plugin needs to render CSA PDFs.
 
 > **Note:** The `-H 'Cache-Control: no-cache'` flag forces a fresh download from GitHub — without it, a stale copy from the CDN edge cache can persist for a few minutes after we ship fixes.
 
@@ -44,7 +44,7 @@ When prompted "Do you want to change the execution policy?", type `Y` and press 
 irm https://raw.githubusercontent.com/CloudSecurityAlliance/DesktopSetup/HEAD/scripts/windows-ai-tools.ps1 -Headers @{'Cache-Control'='no-cache'} | iex
 ```
 
-The Windows AI tools script also installs Git, GitHub CLI, Python, and Node.js (via winget) alongside the AI apps and CLIs. Requires Windows 10/11 and winget.
+The Windows AI tools script also installs Git, GitHub CLI, Python, Node.js, `pandoc`, and `typst` (via winget) alongside the AI apps and CLIs, plus `pyyaml` and `pymupdf` via pip for the **document-pipeline** plugin. Requires Windows 10/11 and winget.
 
 > **Note:** The `-Headers @{'Cache-Control'='no-cache'}` flag forces a fresh download from GitHub — without it, a stale copy from the CDN edge cache can persist for a few minutes after we ship fixes.
 
