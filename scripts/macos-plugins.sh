@@ -409,7 +409,6 @@ main() {
   sync_plugin_marketplaces
   install_plugins
   setup_csa_mcp_server
-  setup_csa_internal_tools
 
   info "Refreshing plugin marketplaces"
   claude plugin marketplace update || warn "marketplace update failed; continuing"
@@ -424,6 +423,10 @@ main() {
   echo "    claude plugin enable <name>"
   echo "    claude plugin disable <name>"
   echo ""
+  # Runs LAST, after the summary, so the internal setup's own output — including the
+  # "you still need to log in" banner — is the final thing on screen instead of being
+  # buried under a wall of install output the user has stopped reading.
+  setup_csa_internal_tools
 }
 
 main "$@"
