@@ -22,23 +22,27 @@
 
 BeforeAll {
     # Load the wrapper definitions out of the real script, so the tests cannot drift from it.
+    #
+    # Uses PowerShell's own parser rather than hand-rolled brace matching. The first version
+    # walked the text counting braces, and it aborted the entire run under Windows PowerShell
+    # 5.1 — every test failing with "a 'break' or 'continue' statement … escaped from your
+    # code" (Pester #2669) — while passing on pwsh 7. The AST has no loop to escape from, is
+    # available on both runtimes, and cannot mis-parse a brace inside a string or comment,
+    # which the text walker could.
     $script:source = Join-Path $PSScriptRoot '..' 'scripts' 'windows-ai-tools.ps1'
-    $text = Get-Content $script:source -Raw
-    foreach ($name in 'Invoke-NativeQuiet','Invoke-NativeOutput','Invoke-NativeShow','Invoke-NativeCapture') {
-        $m = [regex]::Match($text, "(?m)^function $name \{")
-        $depth = 0; $i = $m.Index + $m.Length - 1; $closed = $false
-        # No `break` here, deliberately. Under Windows PowerShell 5.1 a `break` inside a
-        # `while` nested in a `foreach` inside a Pester block escapes the loop entirely and
-        # aborts the run — every test in the file failed with "a 'break' or 'continue'
-        # statement with a label that does not match any enclosing loop escaped from your
-        # code" (Pester #2669). pwsh 7 runs it happily, which is precisely why the suite is
-        # also run under 5.1 in CI: that job found this on its first execution.
-        while (-not $closed -and $i -lt $text.Length) {
-            if ($text[$i] -eq '{') { $depth++ }
-            elseif ($text[$i] -eq '}') { $depth--; if ($depth -eq 0) { $closed = $true } }
-            if (-not $closed) { $i++ }
+    $errors = $null
+    $ast = [System.Management.Automation.Language.Parser]::ParseFile(
+        $script:source, [ref]$null, [ref]$errors)
+    if ($errors) { throw "cannot parse $($script:source): $($errors.Count) error(s)" }
+
+    $wanted = 'Invoke-NativeQuiet', 'Invoke-NativeOutput', 'Invoke-NativeShow',
+              'Invoke-NativeCapture'
+    $definitions = $ast.FindAll(
+        { $args[0] -is [System.Management.Automation.Language.FunctionDefinitionAst] }, $true)
+    foreach ($definition in $definitions) {
+        if ($wanted -contains $definition.Name) {
+            . ([scriptblock]::Create($definition.Extent.Text))
         }
-        . ([scriptblock]::Create($text.Substring($m.Index, $i - $m.Index + 1)))
     }
 }
 
