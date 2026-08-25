@@ -134,9 +134,13 @@ def main() -> int:
                 problems.append("the known-broken pipeline no longer hides the prompt, so this "
                                 "test can no longer detect the regression. Check the harness "
                                 "before trusting a pass.")
-            if not answered:
-                problems.append(f"{name}: the script did not complete after the prompt was "
-                                f"answered.")
+            # Only for the shipping pipeline. The broken one is expected to behave badly,
+            # and on Linux it also holds its FINAL line past this window - which is a symptom
+            # of the same buffering, not a separate fact worth asserting. Requiring it made
+            # the test fail in CI for the wrong reason.
+            if name == "new" and not answered:
+                problems.append("the shipping pipeline did not complete after the prompt was "
+                                "answered.")
             print(f"  {name:4} prompt visible before answering: "
                   f"{'yes' if visible else 'no'};  completed: {'yes' if answered else 'no'}")
 
