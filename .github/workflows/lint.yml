@@ -118,3 +118,6 @@ jobs:
 
       - name: README must not ask for a multi-line paste
         run: python3 tools/check-paste-safety.py
+
+      - name: Debug mode must not swallow interactive prompts
+        run: python3 tests/test_prompt_visibility.py

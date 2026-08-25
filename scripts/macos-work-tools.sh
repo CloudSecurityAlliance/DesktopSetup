@@ -75,10 +75,10 @@ SCRIPT_LABEL="macos-work-tools.sh"
 # failed, `<redacted>` does not. The first expression tolerates the JSON shape
 # ("client_secret": "…"), because the quote between key and colon otherwise breaks the match
 # - and that is exactly how a credentials file is written.
-# Line-buffered if this sed can be. Without it the parent's output sits in the pipe while a
-# child process writing straight to the same file gets there first, so the log reads with the
-# CSA-internal section ahead of the banner that preceded it by seconds. BSD sed spells it -l,
-# GNU sed -u, and some have neither - so ask, once, rather than assume.
+# Line-buffered if this sed can be. This feeds the FILE only (see the exec below), so it is
+# not what decides whether a prompt appears - but without it the log lags, and a child
+# process writing straight to the same file lands ahead of the parent's own lines. BSD sed
+# spells it -l, GNU sed -u, and some have neither - so ask, once, rather than assume.
 CSA_SED_UNBUF=""
 if sed -l -E 's/a/a/' </dev/null >/dev/null 2>&1; then
   CSA_SED_UNBUF="-l"
@@ -123,10 +123,28 @@ if csa_debug_requested; then
   fi
   CSA_DEBUG=1                        # normalised, so a child sees 1 whatever was typed
   export CSA_DEBUG CSA_LOG
-  # Verified on bash 3.2.57 (macOS): all output survives, including on `exit N` and on an
-  # uncaught failure under `set -e`. The flush race that process substitution is known for
-  # did not appear in 500-line bursts through either exit path.
-  exec > >(csa_redact | tee -a "$CSA_LOG") 2>&1
+  # The terminal is fed by `tee` DIRECTLY, and the redactor sits on a branch that only writes
+  # the file. That ordering is the whole point, and it is not cosmetic:
+  #
+  # With the redactor in front of the terminal - `csa_redact | tee -a "$CSA_LOG"` - sed holds
+  # anything not yet terminated by a newline. Every prompt in these scripts is exactly that:
+  # `read -r -p "Continue? [Y/n] "` writes no newline, so the question never appeared, the
+  # script sat waiting on stdin, and it looked like a hang. Pressing Ctrl-C flushed the pipe
+  # and revealed the prompt on the way out. There are eleven `read -p` sites and roughly
+  # fifteen partial-line `printf`s (progress markers like "Testing... "), so fixing this at
+  # the call sites would mean touching all of them and hoping the next one remembers.
+  #
+  # `tee` writes what it reads, when it reads it, so a partial line reaches the terminal
+  # immediately. Line-buffering only has to be good enough for the FILE now, which it is.
+  # Measured: with the redactor first, a partial line was still invisible three seconds later;
+  # with tee first it appeared at once, and the log came out identical either way.
+  #
+  # A side benefit: the terminal keeps its colour, since ANSI is now stripped only on the
+  # branch heading for the file.
+  #
+  # Verified on bash 3.2.57 (macOS): all 400 lines survive a clean exit, an `exit N`, and an
+  # uncaught failure under `set -e`.
+  exec > >(tee -a >(csa_redact >> "$CSA_LOG")) 2>&1
   [[ -z "$CSA_LOG_INHERITED" ]] && info "debug logging to $CSA_LOG"
 fi
 
