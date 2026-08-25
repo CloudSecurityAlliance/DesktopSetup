@@ -94,7 +94,33 @@ All scripts declare a version string near the top — `SCRIPT_VERSION="YYYY.MMDD
 - **`check-duplication.py`** — a function duplicated across scripts must be byte-identical in behaviour (comments and whitespace ignored). Names that are *meant* to differ live in its `PER_SCRIPT` map with a reason, so allowing a difference is a deliberate act. This turns the instruction below from a discipline into a check; when it was first run, twelve functions had already drifted.
 - **`check-powershell-native.py`** — a native command (`winget`, `npm`, `gh`, `claude`, `git`, …) invoked in a script that sets `$ErrorActionPreference = 'Stop'` must go through `Invoke-Native*` or a `try/catch`. **`2>$null` does not prevent `NativeCommandError` promotion** — it hides the text, not the termination. When first run this found 14 unguarded calls, 13 of them in `windows-work-tools.ps1`, including every `winget install/upgrade` and `npm install -g`; npm writes deprecation warnings to stderr routinely, so that script terminated on a *successful* run.
 
-Run both locally before pushing: `python3 tools/check-duplication.py --diff && python3 tools/check-powershell-native.py`.
+**Run everything locally with `./tools/check-all.sh`** — it mirrors CI exactly.
+
+### What local `pwsh` proves, and what it does not
+
+`brew install powershell` gives PowerShell **7**; the Windows scripts run under **Windows
+PowerShell 5.1**. They differ on precisely the behaviour the `Invoke-Native*` wrappers exist
+for. Measured, not assumed:
+
+| | stderr on a **successful** command | non-zero exit |
+|---|---|---|
+| **Windows PowerShell 5.1** | **terminates** ← the bug | terminates |
+| pwsh 7, `$PSNativeCommandUseErrorActionPreference=$false` *(default)* | survives | survives |
+| pwsh 7, same flag `$true` | **survives** | terminates |
+
+In 5.1, *stderr output* becomes a terminating `NativeCommandError` under
+`$ErrorActionPreference='Stop'` whatever the exit code. In pwsh 7 that is not an error condition
+under **any** setting — the flag only makes a non-zero *exit code* respect the preference.
+
+**So local pwsh will tell you the wrappers are unnecessary, and it will be wrong.** Do not
+remove them on the strength of a green run on macOS. `tests/NativeWrappers.Tests.ps1` records
+this table and tests what *is* testable everywhere: the wrappers' return values, `$LASTEXITCODE`
+preservation, and that they restore `$ErrorActionPreference`. CI additionally runs the suite
+under real 5.1 on `windows-latest`, which is the only place the difference is exercised.
+
+Local pwsh is genuinely useful for: instant parse checking, PSScriptAnalyzer, and Pester tests of
+pure logic. It is not a substitute for running the installers on Windows, which has still never
+been done.
 
 All scripts (both platforms) duplicate their output helpers, precondition checks, and utility functions. macOS uses `has_command`, `confirm`, `ensure_brew_in_path`; Windows uses `Has-Command`. The two macOS install scripts additionally share `install_xcode_cli_tools`, `install_homebrew`, `install_node`, `setup_gh_auth`, and `setup_git_identity`. The `CSA_MARKETPLACES` array (list of plugin marketplace `ORG/REPO` strings) is duplicated across **five** scripts: `macos-ai-tools.sh`, `windows-ai-tools.ps1`, `macos-update.sh`, `macos-plugins.sh`, `windows-plugins.ps1` — update all five when adding a new marketplace, and bump each file's `SCRIPT_VERSION`. **When changing shared logic, update all files that use it.** The marketplace-name → repo mapping is similarly duplicated across all five scripts: as a `plugin_marketplace_repo` bash function in the three `.sh` files (function-based because macOS ships bash 3.2, which doesn't support `declare -A` associative arrays), and as a `$PluginMarketplaceRepos` hashtable in the two `.ps1` files. The same five files also share the CSA MCP server registration logic (`setup_csa_mcp_server` / `Register-CSAMcpServer`) and the constants `CSA_MCP_NAME`, `CSA_MCP_URL`, `CSA_MCP_GATE_REPO` — keep these in sync too. The actual plugin lists, however, are single-source: `scripts/csa-plugins.txt` and `scripts/csa-plugins-internal.txt` are fetched from HEAD at runtime, so list-only changes do **not** require a script edit or `SCRIPT_VERSION` bump.
 
