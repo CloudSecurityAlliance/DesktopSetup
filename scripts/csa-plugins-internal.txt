@@ -45,6 +45,5 @@ audience-lens@csa-research-plugins
 research-initiative-tracker@csa-research-plugins
 writing-style-forge@csa-research-plugins
 
-csa-certification-development@csa-training-plugins
 csa-training-content-development@csa-training-plugins
 csa-training-design-system@csa-training-plugins
