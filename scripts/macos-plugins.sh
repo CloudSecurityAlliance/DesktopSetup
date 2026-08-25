@@ -55,15 +55,17 @@ CSA_MARKETPLACES=(
 #   scripts/windows-plugins.ps1
 plugin_marketplace_repo() {
   case "$1" in
+    # Public
     claude-plugins-official) echo "anthropics/claude-plugins-official" ;;
     anthropic-agent-skills)  echo "anthropics/skills" ;;
+    # CSA-internal
     accounting-plugins)      echo "CloudSecurityAlliance-Internal/Accounting-Plugins" ;;
     csa-cino-plugins)        echo "CloudSecurityAlliance-Internal/CINO-Plugins" ;;
     csa-plugins)             echo "CloudSecurityAlliance-Internal/CSA-Plugins" ;;
     csa-research-plugins)    echo "CloudSecurityAlliance-Internal/Research-Plugins" ;;
     csa-training-plugins)    echo "CloudSecurityAlliance-Internal/Training-Plugins" ;;
     csa-plugins-official)    echo "CloudSecurityAlliance/csa-plugins-official" ;;
-    *) ;;
+    *) ;;  # unknown — print nothing
   esac
 }
 

@@ -265,12 +265,21 @@ function Install-Plugins {
 
     if (-not $publicList -and -not $internalList) { return }
 
+    # Already-registered marketplaces and already-installed plugins.
     $registeredRepos = @()
     $listing = Invoke-NativeOutput { claude plugin marketplace list }
     foreach ($line in $listing) {
         if ($line -match 'GitHub \(([^)]+)\)') { $registeredRepos += $matches[1] }
     }
     $installedPlugins = @()
+            # Parse name@marketplace tokens rather than anchoring on the leading '❯'
+            # glyph. Windows consoles routinely misdecode non-ASCII from `claude` (the
+            # same mangling that shows '×' as '├ù' in transcripts), so a glyph-anchored
+            # match silently finds nothing — every plugin then looks uninstalled and all
+            # 43 are reinstalled on every run. Token matching is ASCII and survives
+            # bullets, colour codes and format changes.
+    # Capture regardless of exit code: a chatty-but-working `claude plugin list` must
+    # not be read as "nothing is installed".
     $pluginListing = (Invoke-NativeCapture { claude plugin list }).Output
     foreach ($m in [regex]::Matches([string]$pluginListing, '[A-Za-z0-9._-]+@[A-Za-z0-9._-]+')) {
         $installedPlugins += $m.Value
@@ -287,8 +296,9 @@ function Install-Plugins {
 
     $seenMarkets   = @{}
     $marketUsable  = @{}
-    $seenPlugins   = @{}
+    $seenPlugins   = @{}   # dedup guard across list files
 
+    # Pass 1: ensure each referenced marketplace is registered.
     foreach ($entry in $allEntries) {
         $parts = $entry -split '@', 2
         if ($parts.Count -ne 2) { continue }
@@ -299,6 +309,7 @@ function Install-Plugins {
 
         $repo = $PluginMarketplaceRepos[$market]
         if (-not $repo) {
+            # Unknown marketplace in list file -- developer mistake.
             Write-Warn "Plugin list references unknown marketplace '$market' -- update `$PluginMarketplaceRepos"
             continue
         }
@@ -330,6 +341,8 @@ function Install-Plugins {
         $added | ForEach-Object { Write-Host "  + $_" }
     }
 
+    # Pass 2: collect plugins to install (in usable marketplace, not already
+    # installed, deduped across list files).
     $pendingInstalls = @()
     foreach ($entry in $allEntries) {
         $parts = $entry -split '@', 2
@@ -347,6 +360,8 @@ function Install-Plugins {
         $pendingInstalls += $key
     }
 
+    # Pass 3: announce, then install each pending plugin with per-item
+    # progress so the user sees forward motion instead of a silent wait.
     if ($pendingInstalls.Count -gt 0) {
         Write-Info "Installing $($pendingInstalls.Count) plugin(s):"
         foreach ($plugin in $pendingInstalls) {
@@ -378,6 +393,8 @@ function Setup-PluginMarketplaces {
 
     if ((Invoke-NativeQuiet { gh auth status }) -ne 0) { return }
 
+    # Snapshot already-registered marketplaces (single call).
+    # list format: "    Source: GitHub (ORG/REPO)"
     $listing = Invoke-NativeOutput { claude plugin marketplace list }
     $alreadyAdded = @()
     foreach ($line in $listing) {
@@ -390,9 +407,12 @@ function Setup-PluginMarketplaces {
     $failed = @()
 
     foreach ($repo in $CSA_MARKETPLACES) {
+        # Already registered, or not accessible to this account -- silently skip.
         if ($alreadyAdded -contains $repo) { continue }
         if ((Invoke-NativeQuiet { gh api "repos/$repo" }) -ne 0) { continue }
 
+        # Capture stderr so a real failure (e.g. schema-invalid manifest)
+        # surfaces its reason instead of a generic "Failed to register".
         $result = Invoke-NativeCapture { claude plugin marketplace add $repo }
         if ($result.ExitCode -eq 0) {
             $added += $repo
@@ -405,7 +425,7 @@ function Setup-PluginMarketplaces {
     }
 
     if ($added.Count -gt 0) {
-        Write-Success "Registered new CSA plugin marketplaces:"
+        Write-Success "Registered Claude Code plugin marketplaces:"
         $added | ForEach-Object { Write-Host "  + $_" }
     }
     if ($failed.Count -gt 0) {

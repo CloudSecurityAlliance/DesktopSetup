@@ -40,6 +40,9 @@ PER_SCRIPT = {
     "summary": "each script summarises what it did",
     "Show-Summary": "each script summarises what it did",
     "Test-Preconditions": "the plugin-only script needs fewer preconditions than the full one",
+    "sync_plugin_marketplaces": "macos-update.sh additionally runs `claude plugin marketplace "
+                                "update`, which is that script's whole purpose; the installers "
+                                "only register what is missing",
 }
 
 FUNC_SH = re.compile(r"^([a-z_][a-z0-9_]*)\(\)\s*\{", re.M)

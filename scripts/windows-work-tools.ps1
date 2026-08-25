@@ -467,8 +467,7 @@ function Install-Dev {
 function Setup-GHAuth {
     if (-not (Has-Command gh)) { return }
 
-    $authStatus = (Invoke-NativeCapture { gh auth status }).Output
-    if ($LASTEXITCODE -eq 0) {
+    if ((Invoke-NativeQuiet { gh auth status }) -eq 0) {
         Write-Info "GitHub CLI already authenticated"
         return
     }
@@ -481,7 +480,10 @@ function Setup-GHAuth {
     Write-Host ""
     Write-Info "GitHub CLI is installed but not authenticated."
     if (Confirm-Step "Run 'gh auth login' now?") {
-        $null = Invoke-NativeShow { gh auth login --git-protocol https }
+        # --scopes user:email: lets Setup-GitIdentity read the user's
+        # primary email via `gh api user/emails` when it's not public on
+        # the user profile. Without it that endpoint returns HTTP 404.
+        $null = Invoke-NativeShow { gh auth login --git-protocol https --scopes user:email }
         if ($LASTEXITCODE -ne 0) {
             Write-Warn "gh auth login failed; you can run it manually later"
         }
