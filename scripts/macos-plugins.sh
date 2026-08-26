@@ -95,6 +95,7 @@ warn()    { printf "${YELLOW}Warning:${RESET} %s\n" "$*" >&2; }
 error()   { printf "${RED}Error:${RESET} %s\n" "$*" >&2; }
 abort()   { error "$@"; exit 1; }
 SCRIPT_LABEL="macos-plugins.sh"
+CSA_RAW_BASE="https://raw.githubusercontent.com/CloudSecurityAlliance/DesktopSetup/HEAD/scripts"
 
 # ── Debug logging ───────────────────────────────────────────────────
 #
@@ -204,8 +205,11 @@ csa_debug_hint() {
   if [[ -n "${CSA_LOG:-}" && -z "${CSA_LOG_INHERITED:-}" ]]; then
     info "debug log: $CSA_LOG  (redacted, but review before sharing)"
   elif [[ -z "${CSA_LOG:-}" ]]; then
-    printf '  if anything above went wrong, re-run with logging on:\n'
-    printf '    CSA_DEBUG=1 <the same command>\n'
+    # The exact command, not "the same command". Somebody reading this has just watched
+    # something go wrong; asking them to reconstruct what they typed is asking them to give up.
+    printf '  if anything above went wrong, re-run with logging on and send the log:\n'
+    printf '    CSA_DEBUG=1 bash -c "$(curl -fsSL -H '"'"'Cache-Control: no-cache'"'"' %s/%s)"\n' \
+      "$CSA_RAW_BASE" "$SCRIPT_LABEL"
   fi
 }
 
