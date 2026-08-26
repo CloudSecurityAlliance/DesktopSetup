@@ -70,7 +70,7 @@ def extract(text: str, name: str) -> str:
     return match.group(0)
 
 
-def build(pipeline: str, log: str) -> str:
+def build(pipeline: str, log: str, done: str) -> str:
     text = SOURCE.read_text()
     return "\n".join([
         "#!/usr/bin/env bash",
@@ -82,6 +82,13 @@ def build(pipeline: str, log: str) -> str:
         pipeline,
         'echo "banner line"',
         f'if confirm "{PROMPT}?"; then echo ANSWERED-yes; else echo ANSWERED-no; fi',
+        # The answer is recorded in a FILE, not read back off the pty. Reading it from the pty
+        # is a race: when the child exits the master side can raise EIO before the last chunk
+        # has been handed over, so "did it finish?" came back no on a Linux runner one run and
+        # yes the next, while the behaviour under test - whether the prompt was visible - was
+        # correct both times. A flaky assertion attached to a real check is worse than no
+        # assertion, because it teaches people to re-run until it passes.
+        f'printf done > {done}',
     ]) + "\n"
 
 
@@ -122,10 +129,11 @@ def main() -> int:
     with tempfile.TemporaryDirectory() as work:
         for name, pipeline in PIPELINES.items():
             script = pathlib.Path(work, f"{name}.sh")
-            script.write_text(build(pipeline, f"{work}/{name}.log"))
-            before, everything = run_under_pty(str(script))
+            done = pathlib.Path(work, f"{name}.done")
+            script.write_text(build(pipeline, f"{work}/{name}.log", str(done)))
+            before, _ = run_under_pty(str(script))
             visible = PROMPT in before
-            answered = "ANSWERED-yes" in everything
+            answered = done.exists()
 
             if name == "new" and not visible:
                 problems.append("the shipping pipeline hides the prompt: debug mode looks like "
