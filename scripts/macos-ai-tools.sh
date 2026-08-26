@@ -742,15 +742,48 @@ install_1password() {
   brew install --cask 1password || warn "Failed to install 1Password"
 }
 
+# Does the 1Password CLI still need its desktop-app integration turned on?
+#
+# Read from op's config rather than by running `op`: a real command can trigger a biometric
+# prompt, and a setup script should never make somebody's laptop ask for a fingerprint. Once
+# the app integration has been used, `system_auth_latest_signin` in ~/.config/op/config holds
+# a token id; before that it is absent or empty.
+#
+# Defaults to SAYING SOMETHING when it cannot tell. A hint shown unnecessarily is mildly
+# annoying; a hint withheld leaves `op` unusable for somebody who does not know why.
+needs_1password_integration() {
+  has_command op || return 1
+  local config="${HOME}/.config/op/config"
+  [[ -f "$config" ]] || return 0
+  python3 -c '
+import json, sys
+try:
+    with open(sys.argv[1]) as handle:
+        signed_in = json.load(handle).get("system_auth_latest_signin") or ""
+except Exception:
+    sys.exit(0)          # unreadable: say something rather than assume it is set up
+sys.exit(0 if not signed_in else 1)
+' "$config"
+}
+
 install_1password_cli() {
   ensure_brew_in_path
 
-  if brew list --formula 1password-cli >/dev/null 2>&1; then
-    info "Upgrading 1Password CLI"
-    brew upgrade 1password-cli 2>/dev/null || true
+  # `--cask`, not `--formula`. 1password-cli is a CASK, so the formula check never matched -
+  # every run announced "Installing 1Password CLI" and then brew replied "Not upgrading, the
+  # latest version is already installed". Two lines of output saying opposite things, on every
+  # run, for something that had been installed for months.
+  if brew list --cask 1password-cli >/dev/null 2>&1; then
+    # Silent when there is nothing to do, like the rest of this script. `brew upgrade` on a
+    # current cask writes its "Not upgrading" notice to stderr, which is not news.
+    local before after
+    before="$(brew list --cask --versions 1password-cli 2>/dev/null)"
+    brew upgrade --cask 1password-cli >/dev/null 2>&1 || true
+    after="$(brew list --cask --versions 1password-cli 2>/dev/null)"
+    [[ "$before" != "$after" ]] && success "1Password CLI upgraded: ${after#* }"
   else
     info "Installing 1Password CLI"
-    brew install 1password-cli || warn "Failed to install 1Password CLI"
+    brew install --cask 1password-cli || warn "Failed to install 1Password CLI"
   fi
 }
 
@@ -1307,6 +1340,10 @@ summary() {
 
   echo ""
   info "Next steps:"
+  # Only what somebody has to DO, and only when they have to do it. Three lines telling
+  # people to run a command named after the tool ("Run 'claude' to start Claude Code") are
+  # not next steps, and the npm-update advice competed with the answer that actually
+  # matters: re-run this script, which updates everything it installed.
   if has_command gh && ! gh auth status >/dev/null 2>&1; then
     echo "  - Run 'gh auth login' to authenticate with GitHub"
   fi
@@ -1314,13 +1351,11 @@ summary() {
     echo "  - Configure Git identity: git config --global user.name \"Your Name\""
     echo "    and: git config --global user.email \"you@example.com\""
   fi
-  echo "  - Enable 1Password CLI integration: 1Password app → Settings → Developer → \"Integrate with 1Password CLI\", then restart 1Password"
-  echo "  - Run 'claude' to start Claude Code"
-  echo "  - Run 'codex' to start Codex CLI"
-  echo "  - Run 'gemini' to start Gemini CLI"
-  echo ""
-  echo "  To update npm-installed tools later:"
-  echo "    npm update -g @openai/codex @google/gemini-cli"
+  if needs_1password_integration; then
+    echo "  - Turn on the 1Password CLI integration: 1Password -> Settings -> Developer ->"
+    echo "    \"Integrate with 1Password CLI\", then restart 1Password"
+  fi
+  echo "  - Re-run this script any time to update everything it installed"
   echo ""
   echo "  To refresh plugin marketplaces:"
   echo "    claude plugin marketplace update"
