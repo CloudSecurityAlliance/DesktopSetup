@@ -74,6 +74,7 @@ function Test-CsaDebugRequested {
 }
 
 $SCRIPT_LABEL = 'windows-work-tools.ps1'
+$CsaRawBase = 'https://raw.githubusercontent.com/CloudSecurityAlliance/DesktopSetup/HEAD/scripts'
 $CsaDebug = Test-CsaDebugRequested
 # Normalise it into the environment, so a child process inherits the setting whichever way it
 # was given. The CSA-internal setup is a separate process and reads $env:CSA_DEBUG only.
@@ -136,8 +137,12 @@ function Show-CsaDebugHint {
     if ($CsaLog) {
         Write-Info "debug log: $CsaLog  (redacted, but review before sharing)"
     } else {
-        Write-Host "  if anything above went wrong, re-run with logging on:" -ForegroundColor DarkGray
-        Write-Host "    `$env:CSA_DEBUG = '1'" -ForegroundColor DarkGray
+        # The exact command, on ONE line joined with ';'. Not "the same command": somebody
+        # reading this has just watched something go wrong, and asking them to reconstruct
+        # what they typed is asking them to give up. One line because pasting two at once
+        # has been observed to close the console - see the README.
+        Write-Host "  if anything above went wrong, re-run with logging on and send the log:" -ForegroundColor DarkGray
+        Write-Host "    `$env:CSA_DEBUG = '1'; irm $CsaRawBase/$SCRIPT_LABEL -Headers @{'Cache-Control'='no-cache'} | iex" -ForegroundColor DarkGray
     }
 }
 
