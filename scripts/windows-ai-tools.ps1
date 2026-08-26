@@ -1315,8 +1315,14 @@ function Invoke-CSAInternalSetup {
             [System.Convert]::FromBase64String(($encoded -replace '\s', '')))
     } catch { return }
 
+    # CSA_NESTED tells the fetched script that it is running inside another CSA installer, so
+    # it should leave the closing summary to this one. Without it both printed "if anything
+    # above went wrong, re-run with logging on", one after the other.
+    $prevNested = $env:CSA_NESTED
+    $env:CSA_NESTED = '1'
     try { & ([ScriptBlock]::Create($script)) }
     catch { Write-Warn "CSA internal setup reported a problem: $_" }
+    finally { $env:CSA_NESTED = $prevNested }
 }
 
 # ── Plugin install ──────────────────────────────────────────────────
