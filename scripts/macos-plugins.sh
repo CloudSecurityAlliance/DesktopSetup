@@ -490,7 +490,11 @@ setup_csa_internal_tools() {
   script="$(gh api "repos/$CSA_MCP_GATE_REPO/contents/internal-setup/csa-google-workspace-setup.sh" \
               --jq '.content' 2>/dev/null | base64 --decode 2>/dev/null)" || return 0
   [[ -n "$script" ]] || return 0
-  bash -c "$script" || warn "CSA internal setup reported a problem (see above)"
+  # CSA_NESTED tells the fetched script that it is running inside another CSA installer, so it
+  # should leave the closing summary to this one. Without it both printed "if anything above
+  # went wrong, re-run with logging on", one after the other, which reads like a stutter and
+  # gives two different instructions for the same thing ("<this script>" vs "the same command").
+  CSA_NESTED=1 bash -c "$script" || warn "CSA internal setup reported a problem (see above)"
 }
 
 # ── Preflight ───────────────────────────────────────────────────────
