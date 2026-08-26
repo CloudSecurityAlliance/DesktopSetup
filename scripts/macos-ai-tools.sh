@@ -219,7 +219,7 @@ if csa_debug_requested; then
   # Verified on bash 3.2.57 (macOS): all 400 lines survive a clean exit, an `exit N`, and an
   # uncaught failure under `set -e`.
   exec > >(tee -a >(csa_redact >> "$CSA_LOG")) 2>&1
-  [[ -z "$CSA_LOG_INHERITED" ]] && info "debug logging to $CSA_LOG"
+  [[ -z "$CSA_LOG_INHERITED" ]] && info "debug logging to $CSA_LOG" || true
 fi
 
 # Printed at the end of every run, either way: the moment somebody needs the logging
@@ -235,6 +235,25 @@ csa_debug_hint() {
       "$CSA_RAW_BASE" "$SCRIPT_LABEL"
   fi
 }
+
+# Runs on EVERY exit path, which is the point. Until now `csa_debug_hint` was called after
+# `main "$@"`, so under `set -euo pipefail` a failure exited before reaching it — and the debug
+# log exists precisely so somebody can report a failure. The one moment you need to know where
+# the log is, the script did not tell you. It also said nothing at all about having stopped: a
+# real run died mid-way and printed no error, no status, no pointer, and simply looked finished.
+csa_on_exit() {
+  local status=$?
+  if [[ $status -ne 0 ]]; then
+    printf '\n'
+    warn "stopped early (exit $status). The last line above is where it got to."
+    if [[ -z "${CSA_LOG:-}" ]]; then
+      warn "no debug log was written — re-run with CSA_DEBUG=1 to get one."
+    fi
+  fi
+  csa_debug_hint
+  return $status
+}
+trap csa_on_exit EXIT
 
 
 # ── Preconditions ───────────────────────────────────────────────────
@@ -319,6 +338,24 @@ ensure_brew_in_path() {
     eval "$(/opt/homebrew/bin/brew shellenv)"
   elif [[ -x /usr/local/bin/brew ]]; then
     eval "$(/usr/local/bin/brew shellenv)"
+  fi
+}
+
+# Upgrade a Homebrew package and say what actually happened.
+#
+# `info "Upgrading Git"` printed on EVERY run whether or not anything was upgraded, then
+# `brew upgrade` was silenced - so the script announced work it usually did not do, and never
+# said what version resulted. The plan above already lists the version you HAVE; this is the
+# missing half. Quiet when there is nothing to do, like the rest of this script.
+#
+# $1 formula|cask   $2 package   $3 human label
+csa_brew_upgrade() {
+  local kind="$1" pkg="$2" label="$3" before after
+  before="$(brew list --"$kind" --versions "$pkg" 2>/dev/null || true)"
+  brew upgrade --"$kind" "$pkg" >/dev/null 2>&1 || true
+  after="$(brew list --"$kind" --versions "$pkg" 2>/dev/null || true)"
+  if [[ "$before" != "$after" ]]; then
+    success "$label upgraded: ${before#* } -> ${after#* }"
   fi
 }
 
@@ -522,6 +559,11 @@ preflight() {
   echo "  Plugin marketplaces  probe ${#CSA_MARKETPLACES[@]} CSA repos, add any your GitHub account can access"
   install_plugins_preview
   echo "  CSA MCP server       register $CSA_MCP_NAME if your GitHub account has CSA-Internal access"
+  # Announced, because it was not: setup_csa_internal_tools installs and upgrades
+  # csa-google-workspace, and a plan that does not mention it means somebody reading the plan
+  # cannot tell whether their Google Workspace server was touched. Same gh-probe gate as the
+  # line above, so it says "if ... access" for the same reason.
+  echo "  Google Workspace     install/upgrade csa-google-workspace if your GitHub account has CSA-Internal access"
 
   echo ""
 }
@@ -684,8 +726,7 @@ install_git() {
   ensure_brew_in_path
 
   if brew list --formula git >/dev/null 2>&1; then
-    info "Upgrading Git"
-    brew upgrade git 2>/dev/null || true
+    csa_brew_upgrade formula git "Git"
   else
     info "Installing Git via Homebrew"
     brew install git || abort "Failed to install Git"
@@ -696,8 +737,7 @@ install_gh() {
   ensure_brew_in_path
 
   if brew list --formula gh >/dev/null 2>&1; then
-    info "Upgrading GitHub CLI"
-    brew upgrade gh 2>/dev/null || true
+    csa_brew_upgrade formula gh "GitHub CLI"
   else
     info "Installing GitHub CLI"
     brew install gh || abort "Failed to install GitHub CLI"
@@ -776,11 +816,7 @@ install_1password_cli() {
   if brew list --cask 1password-cli >/dev/null 2>&1; then
     # Silent when there is nothing to do, like the rest of this script. `brew upgrade` on a
     # current cask writes its "Not upgrading" notice to stderr, which is not news.
-    local before after
-    before="$(brew list --cask --versions 1password-cli 2>/dev/null)"
-    brew upgrade --cask 1password-cli >/dev/null 2>&1 || true
-    after="$(brew list --cask --versions 1password-cli 2>/dev/null)"
-    [[ "$before" != "$after" ]] && success "1Password CLI upgraded: ${after#* }"
+    csa_brew_upgrade cask 1password-cli "1Password CLI"
   else
     info "Installing 1Password CLI"
     brew install --cask 1password-cli || warn "Failed to install 1Password CLI"
@@ -836,7 +872,7 @@ setup_git_identity() {
     if [[ -z "$current_name" || -z "$current_email" ]]; then
       warn "Git identity not configured. Run these after authenticating with GitHub:"
       [[ -z "$current_name" ]]  && echo "  git config --global user.name \"Your Name\""
-      [[ -z "$current_email" ]] && echo "  git config --global user.email \"you@example.com\""
+      [[ -z "$current_email" ]] && echo "  git config --global user.email \"you@example.com\"" || true
     fi
     return 0
   fi
@@ -871,7 +907,7 @@ setup_git_identity() {
     else
       warn "Git identity partially configured from GitHub profile. Still missing:"
       [[ -z "$set_name" ]]  && echo "  user.name  (run: git config --global user.name \"Your Name\")"
-      [[ -z "$set_email" ]] && echo "  user.email (run: git config --global user.email \"you@example.com\")"
+      [[ -z "$set_email" ]] && echo "  user.email (run: git config --global user.email \"you@example.com\")" || true
     fi
     return 0
   fi
@@ -903,7 +939,7 @@ setup_git_identity() {
   else
     warn "Skipped. Set manually with:"
     [[ -z "$current_name" ]]  && echo "  git config --global user.name \"Your Name\""
-    [[ -z "$current_email" ]] && echo "  git config --global user.email \"you@example.com\""
+    [[ -z "$current_email" ]] && echo "  git config --global user.email \"you@example.com\"" || true
   fi
 }
 
@@ -1430,5 +1466,3 @@ main() {
 }
 
 main "$@"
-
-csa_debug_hint
