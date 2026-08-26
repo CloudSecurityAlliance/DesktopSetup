@@ -213,6 +213,25 @@ csa_debug_hint() {
   fi
 }
 
+# Runs on EVERY exit path, which is the point. Until now `csa_debug_hint` was called after
+# `main "$@"`, so under `set -euo pipefail` a failure exited before reaching it — and the debug
+# log exists precisely so somebody can report a failure. The one moment you need to know where
+# the log is, the script did not tell you. It also said nothing at all about having stopped: a
+# real run died mid-way and printed no error, no status, no pointer, and simply looked finished.
+csa_on_exit() {
+  local status=$?
+  if [[ $status -ne 0 ]]; then
+    printf '\n'
+    warn "stopped early (exit $status). The last line above is where it got to."
+    if [[ -z "${CSA_LOG:-}" ]]; then
+      warn "no debug log was written — re-run with CSA_DEBUG=1 to get one."
+    fi
+  fi
+  csa_debug_hint
+  return $status
+}
+trap csa_on_exit EXIT
+
 
 # ── Preconditions ───────────────────────────────────────────────────
 
@@ -555,5 +574,3 @@ main() {
 }
 
 main "$@"
-
-csa_debug_hint

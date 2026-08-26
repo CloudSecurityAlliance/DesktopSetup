@@ -236,6 +236,25 @@ csa_debug_hint() {
   fi
 }
 
+# Runs on EVERY exit path, which is the point. Until now `csa_debug_hint` was called after
+# `main "$@"`, so under `set -euo pipefail` a failure exited before reaching it — and the debug
+# log exists precisely so somebody can report a failure. The one moment you need to know where
+# the log is, the script did not tell you. It also said nothing at all about having stopped: a
+# real run died mid-way and printed no error, no status, no pointer, and simply looked finished.
+csa_on_exit() {
+  local status=$?
+  if [[ $status -ne 0 ]]; then
+    printf '\n'
+    warn "stopped early (exit $status). The last line above is where it got to."
+    if [[ -z "${CSA_LOG:-}" ]]; then
+      warn "no debug log was written — re-run with CSA_DEBUG=1 to get one."
+    fi
+  fi
+  csa_debug_hint
+  return $status
+}
+trap csa_on_exit EXIT
+
 
 # ── Preconditions ───────────────────────────────────────────────────
 
@@ -319,6 +338,24 @@ ensure_brew_in_path() {
     eval "$(/opt/homebrew/bin/brew shellenv)"
   elif [[ -x /usr/local/bin/brew ]]; then
     eval "$(/usr/local/bin/brew shellenv)"
+  fi
+}
+
+# Upgrade a Homebrew package and say what actually happened.
+#
+# `info "Upgrading Git"` printed on EVERY run whether or not anything was upgraded, then
+# `brew upgrade` was silenced - so the script announced work it usually did not do, and never
+# said what version resulted. The plan above already lists the version you HAVE; this is the
+# missing half. Quiet when there is nothing to do, like the rest of this script.
+#
+# $1 formula|cask   $2 package   $3 human label
+csa_brew_upgrade() {
+  local kind="$1" pkg="$2" label="$3" before after
+  before="$(brew list --"$kind" --versions "$pkg" 2>/dev/null || true)"
+  brew upgrade --"$kind" "$pkg" >/dev/null 2>&1 || true
+  after="$(brew list --"$kind" --versions "$pkg" 2>/dev/null || true)"
+  if [[ "$before" != "$after" ]]; then
+    success "$label upgraded: ${before#* } -> ${after#* }"
   fi
 }
 
@@ -689,8 +726,7 @@ install_git() {
   ensure_brew_in_path
 
   if brew list --formula git >/dev/null 2>&1; then
-    info "Upgrading Git"
-    brew upgrade git 2>/dev/null || true
+    csa_brew_upgrade formula git "Git"
   else
     info "Installing Git via Homebrew"
     brew install git || abort "Failed to install Git"
@@ -701,8 +737,7 @@ install_gh() {
   ensure_brew_in_path
 
   if brew list --formula gh >/dev/null 2>&1; then
-    info "Upgrading GitHub CLI"
-    brew upgrade gh 2>/dev/null || true
+    csa_brew_upgrade formula gh "GitHub CLI"
   else
     info "Installing GitHub CLI"
     brew install gh || abort "Failed to install GitHub CLI"
@@ -781,11 +816,7 @@ install_1password_cli() {
   if brew list --cask 1password-cli >/dev/null 2>&1; then
     # Silent when there is nothing to do, like the rest of this script. `brew upgrade` on a
     # current cask writes its "Not upgrading" notice to stderr, which is not news.
-    local before after
-    before="$(brew list --cask --versions 1password-cli 2>/dev/null)"
-    brew upgrade --cask 1password-cli >/dev/null 2>&1 || true
-    after="$(brew list --cask --versions 1password-cli 2>/dev/null)"
-    [[ "$before" != "$after" ]] && success "1Password CLI upgraded: ${after#* }" || true
+    csa_brew_upgrade cask 1password-cli "1Password CLI"
   else
     info "Installing 1Password CLI"
     brew install --cask 1password-cli || warn "Failed to install 1Password CLI"
@@ -1435,5 +1466,3 @@ main() {
 }
 
 main "$@"
-
-csa_debug_hint

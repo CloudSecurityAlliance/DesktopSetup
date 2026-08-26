@@ -163,6 +163,25 @@ csa_debug_hint() {
   fi
 }
 
+# Runs on EVERY exit path, which is the point. Until now `csa_debug_hint` was called after
+# `main "$@"`, so under `set -euo pipefail` a failure exited before reaching it — and the debug
+# log exists precisely so somebody can report a failure. The one moment you need to know where
+# the log is, the script did not tell you. It also said nothing at all about having stopped: a
+# real run died mid-way and printed no error, no status, no pointer, and simply looked finished.
+csa_on_exit() {
+  local status=$?
+  if [[ $status -ne 0 ]]; then
+    printf '\n'
+    warn "stopped early (exit $status). The last line above is where it got to."
+    if [[ -z "${CSA_LOG:-}" ]]; then
+      warn "no debug log was written — re-run with CSA_DEBUG=1 to get one."
+    fi
+  fi
+  csa_debug_hint
+  return $status
+}
+trap csa_on_exit EXIT
+
 
 # ── Preconditions ───────────────────────────────────────────────────
 
@@ -219,6 +238,24 @@ ensure_brew_in_path() {
     eval "$(/opt/homebrew/bin/brew shellenv)"
   elif [[ -x /usr/local/bin/brew ]]; then
     eval "$(/usr/local/bin/brew shellenv)"
+  fi
+}
+
+# Upgrade a Homebrew package and say what actually happened.
+#
+# `info "Upgrading Git"` printed on EVERY run whether or not anything was upgraded, then
+# `brew upgrade` was silenced - so the script announced work it usually did not do, and never
+# said what version resulted. The plan above already lists the version you HAVE; this is the
+# missing half. Quiet when there is nothing to do, like the rest of this script.
+#
+# $1 formula|cask   $2 package   $3 human label
+csa_brew_upgrade() {
+  local kind="$1" pkg="$2" label="$3" before after
+  before="$(brew list --"$kind" --versions "$pkg" 2>/dev/null || true)"
+  brew upgrade --"$kind" "$pkg" >/dev/null 2>&1 || true
+  after="$(brew list --"$kind" --versions "$pkg" 2>/dev/null || true)"
+  if [[ "$before" != "$after" ]]; then
+    success "$label upgraded: ${before#* } -> ${after#* }"
   fi
 }
 
@@ -405,8 +442,7 @@ install_formula() {
   # Usage: install_formula <label> <formula>
   local label="$1" formula="$2"
   if brew list --formula "$formula" >/dev/null 2>&1; then
-    info "Upgrading $label"
-    brew upgrade "$formula" 2>/dev/null || true
+    csa_brew_upgrade formula "$formula" "$label"
   else
     info "Installing $label"
     brew install "$formula" || warn "Failed to install $label"
@@ -418,8 +454,7 @@ install_cask() {
   local label="$1" cask="$2" app_name="$3"
 
   if has_cask "$cask"; then
-    info "Upgrading $label"
-    brew upgrade --cask "$cask" 2>/dev/null || true
+    csa_brew_upgrade cask "$cask" "$label"
   elif has_app "$app_name"; then
     info "$label already installed (non-Homebrew); skipping"
   else
@@ -683,5 +718,3 @@ main() {
 }
 
 main "$@"
-
-csa_debug_hint
