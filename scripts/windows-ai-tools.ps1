@@ -1030,7 +1030,12 @@ function Install-DocPythonDeps {
     # $ErrorActionPreference='Stop', Python's traceback on stderr is promoted to a
     # NativeCommandError and terminates the whole script (see the note above
     # Invoke-NativeOutput). Invoke-NativeQuiet is the shield this file already provides.
-    if ((Invoke-NativeQuiet { & $py -c 'import yaml, fitz' }) -eq 0) {
+    # `pymupdf`, not `fitz`. Same package - `fitz` is the legacy import alias, and PyMuPDF now
+    # prints "The `fitz` API is deprecated and will be removed in future" on every use. It showed
+    # up in a real debug log. When it is finally removed this probe starts failing, and a failing
+    # probe here means the script reinstalls the dependency on every single run, forever, while
+    # reporting success. Probing the name we actually install avoids both.
+    if ((Invoke-NativeQuiet { & $py -c 'import yaml, pymupdf' }) -eq 0) {
         Write-Info "Document preflight deps already installed; skipping"
         return
     }

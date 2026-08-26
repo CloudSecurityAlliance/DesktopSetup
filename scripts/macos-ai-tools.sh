@@ -400,7 +400,12 @@ preflight() {
   else
     echo "  typst ............. install via Homebrew"
   fi
-  if python3 -c 'import yaml, fitz' >/dev/null 2>&1; then
+  # `pymupdf`, not `fitz`. Same package - `fitz` is the legacy import alias, and PyMuPDF now
+  # prints "The `fitz` API is deprecated and will be removed in future" on every use. It showed
+  # up in a real debug log. When it is finally removed this probe starts failing, and a failing
+  # probe here means the script reinstalls the dependency on every single run, forever, while
+  # reporting success. Probing the name we actually install avoids both.
+  if python3 -c 'import yaml, pymupdf' >/dev/null 2>&1; then
     echo "  Preflight deps .... installed (pyyaml, pymupdf)"
   else
     echo "  Preflight deps .... install pyyaml + pymupdf into ~/.default_venv"
@@ -652,7 +657,7 @@ install_doc_python_deps() {
   fi
 
   # Some other python3 on PATH may already satisfy them. Leave it alone.
-  if python3 -c 'import yaml, fitz' >/dev/null 2>&1; then
+  if python3 -c 'import yaml, pymupdf' >/dev/null 2>&1; then
     info "Document preflight deps already available to python3"
     return 0
   fi
