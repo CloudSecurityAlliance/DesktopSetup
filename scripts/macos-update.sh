@@ -195,7 +195,7 @@ if csa_debug_requested; then
   # Verified on bash 3.2.57 (macOS): all 400 lines survive a clean exit, an `exit N`, and an
   # uncaught failure under `set -e`.
   exec > >(tee -a >(csa_redact >> "$CSA_LOG")) 2>&1
-  [[ -z "$CSA_LOG_INHERITED" ]] && info "debug logging to $CSA_LOG"
+  [[ -z "$CSA_LOG_INHERITED" ]] && info "debug logging to $CSA_LOG" || true
 fi
 
 # Printed at the end of every run, either way: the moment somebody needs the logging

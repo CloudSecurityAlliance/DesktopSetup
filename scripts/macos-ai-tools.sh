@@ -219,7 +219,7 @@ if csa_debug_requested; then
   # Verified on bash 3.2.57 (macOS): all 400 lines survive a clean exit, an `exit N`, and an
   # uncaught failure under `set -e`.
   exec > >(tee -a >(csa_redact >> "$CSA_LOG")) 2>&1
-  [[ -z "$CSA_LOG_INHERITED" ]] && info "debug logging to $CSA_LOG"
+  [[ -z "$CSA_LOG_INHERITED" ]] && info "debug logging to $CSA_LOG" || true
 fi
 
 # Printed at the end of every run, either way: the moment somebody needs the logging
@@ -522,6 +522,11 @@ preflight() {
   echo "  Plugin marketplaces  probe ${#CSA_MARKETPLACES[@]} CSA repos, add any your GitHub account can access"
   install_plugins_preview
   echo "  CSA MCP server       register $CSA_MCP_NAME if your GitHub account has CSA-Internal access"
+  # Announced, because it was not: setup_csa_internal_tools installs and upgrades
+  # csa-google-workspace, and a plan that does not mention it means somebody reading the plan
+  # cannot tell whether their Google Workspace server was touched. Same gh-probe gate as the
+  # line above, so it says "if ... access" for the same reason.
+  echo "  Google Workspace     install/upgrade csa-google-workspace if your GitHub account has CSA-Internal access"
 
   echo ""
 }
@@ -780,7 +785,7 @@ install_1password_cli() {
     before="$(brew list --cask --versions 1password-cli 2>/dev/null)"
     brew upgrade --cask 1password-cli >/dev/null 2>&1 || true
     after="$(brew list --cask --versions 1password-cli 2>/dev/null)"
-    [[ "$before" != "$after" ]] && success "1Password CLI upgraded: ${after#* }"
+    [[ "$before" != "$after" ]] && success "1Password CLI upgraded: ${after#* }" || true
   else
     info "Installing 1Password CLI"
     brew install --cask 1password-cli || warn "Failed to install 1Password CLI"
@@ -836,7 +841,7 @@ setup_git_identity() {
     if [[ -z "$current_name" || -z "$current_email" ]]; then
       warn "Git identity not configured. Run these after authenticating with GitHub:"
       [[ -z "$current_name" ]]  && echo "  git config --global user.name \"Your Name\""
-      [[ -z "$current_email" ]] && echo "  git config --global user.email \"you@example.com\""
+      [[ -z "$current_email" ]] && echo "  git config --global user.email \"you@example.com\"" || true
     fi
     return 0
   fi
@@ -871,7 +876,7 @@ setup_git_identity() {
     else
       warn "Git identity partially configured from GitHub profile. Still missing:"
       [[ -z "$set_name" ]]  && echo "  user.name  (run: git config --global user.name \"Your Name\")"
-      [[ -z "$set_email" ]] && echo "  user.email (run: git config --global user.email \"you@example.com\")"
+      [[ -z "$set_email" ]] && echo "  user.email (run: git config --global user.email \"you@example.com\")" || true
     fi
     return 0
   fi
@@ -903,7 +908,7 @@ setup_git_identity() {
   else
     warn "Skipped. Set manually with:"
     [[ -z "$current_name" ]]  && echo "  git config --global user.name \"Your Name\""
-    [[ -z "$current_email" ]] && echo "  git config --global user.email \"you@example.com\""
+    [[ -z "$current_email" ]] && echo "  git config --global user.email \"you@example.com\"" || true
   fi
 }
 

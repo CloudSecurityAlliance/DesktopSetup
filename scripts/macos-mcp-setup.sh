@@ -139,7 +139,7 @@ if csa_debug_requested; then
   # Verified on bash 3.2.57 (macOS): all 400 lines survive a clean exit, an `exit N`, and an
   # uncaught failure under `set -e`.
   exec > >(tee -a >(csa_redact >> "$CSA_LOG")) 2>&1
-  [[ -z "$CSA_LOG_INHERITED" ]] && info "debug logging to $CSA_LOG"
+  [[ -z "$CSA_LOG_INHERITED" ]] && info "debug logging to $CSA_LOG" || true
 fi
 
 # Printed at the end of every run, either way: the moment somebody needs the logging
@@ -446,7 +446,7 @@ catalog_label_for_value() {
   [[ -z "$val" ]] && return
   local i
   for i in "${!CATALOG_VALUES[@]}"; do
-    [[ "${CATALOG_VALUES[$i]}" == "$val" ]] && { echo "${CATALOG_LABELS[$i]}"; return; }
+    [[ "${CATALOG_VALUES[$i]}" == "$val" ]] && { echo "${CATALOG_LABELS[$i]}"; return; } || true
   done
 }
 
@@ -496,7 +496,7 @@ show_current_config() {
       printf "    %-12s  %s  %s\n" "$tool_name" "$lbl" "$(mask_token "$current_val")"
     fi
   done
-  [[ $any -eq 1 ]] && echo ""
+  [[ $any -eq 1 ]] && echo "" || true
 }
 
 # ── MCP config writers ────────────────────────────────────────────────
@@ -699,7 +699,7 @@ _prompt_tool_choice() {
   # Build valid-label list for the prompt hint
   local valid_opts="" i
   for i in "${!CATALOG_VALID[@]}"; do
-    [[ "${CATALOG_VALID[i]}" == "1" ]] && valid_opts="${valid_opts}${CATALOG_LABELS[$i]}/"
+    [[ "${CATALOG_VALID[i]}" == "1" ]] && valid_opts="${valid_opts}${CATALOG_LABELS[$i]}/" || true
   done
   local opts_hint="${valid_opts}+/keep/skip"
 
@@ -793,7 +793,7 @@ handle_service() {
   # Build the prompt options line
   local valid_labels=() i
   for i in "${!CATALOG_VALID[@]}"; do
-    [[ "${CATALOG_VALID[i]}" == "1" ]] && valid_labels+=("${CATALOG_LABELS[$i]}")
+    [[ "${CATALOG_VALID[i]}" == "1" ]] && valid_labels+=("${CATALOG_LABELS[$i]}") || true
   done
 
   echo "  Options:"
