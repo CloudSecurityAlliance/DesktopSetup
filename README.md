@@ -56,14 +56,6 @@ Set-ExecutionPolicy Restricted
 
 Replace `Restricted` with the value from Step 1. If you plan to run PowerShell scripts regularly, you can leave it as `RemoteSigned`.
 
-## MCP servers (macOS)
-
-Connect your AI coding CLIs to Airtable, GitHub, and Gmail. Scans your existing config files and environment for tokens, validates each against the service's API, deduplicates them into a labeled catalog (A, B, C…), and writes the right token to each tool. Also detects and removes old npm/stdio-based MCP entries that no longer work.
-
-```bash
-bash -c "$(curl -fsSL -H 'Cache-Control: no-cache' https://raw.githubusercontent.com/CloudSecurityAlliance/DesktopSetup/HEAD/scripts/macos-mcp-setup.sh)"
-```
-
 ## Clone a repo & start Claude
 
 Once AI tools are installed, use these one-liners to clone any CSA repo and launch Claude Code. Replace `ORG/REPO` with the actual org and repo name.
@@ -304,6 +296,18 @@ with `<redacted>` before anything is written, and the CSA OAuth client is never 
 That is a safety net, not a guarantee: **read the file before you send it to anyone.** The first
 line of every log says the same.
 
+## Retired: MCP token setup (macOS)
+
+`macos-mcp-setup.sh` discovered Airtable and GitHub personal access tokens and wrote them
+into the Claude Code, Codex, and Gemini configs. It is **retired** — those services are now
+reachable as hosted connectors over OAuth, with no long-lived token stored on disk. The
+script is kept in [`archives/`](archives/) for reference.
+
+**If you ran it, you may still have tokens on disk.** Check for `airtable` or `github` MCP
+entries carrying a bearer token in `~/.claude.json`, `~/.codex/config.toml`, and
+`~/.gemini/settings.json`, and remove any you no longer use — then revoke the token at the
+service. Nothing removes them for you.
+
 ## Repository contents
 
 ### `scripts/`
@@ -311,7 +315,6 @@ line of every log says the same.
 Each script is self-contained and idempotent (safe to re-run):
 
 - **`macos-ai-tools.sh`** — AI desktop apps and coding assistants with migration support (macOS)
-- **`macos-mcp-setup.sh`** — Discover, validate, and write MCP server tokens (Airtable, GitHub, Gmail) for Claude Code, Codex, and Gemini; cleans up legacy npm/stdio entries (macOS)
 - **`macos-update.sh`** — Update all installed tools with version snapshots (macOS)
 - **`macos-plugins.sh`** — Standalone Claude Code plugin install/update (macOS)
 - **`windows-plugins.ps1`** — Standalone Claude Code plugin install/update (Windows)

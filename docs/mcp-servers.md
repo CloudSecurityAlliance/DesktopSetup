@@ -1,6 +1,11 @@
 # MCP Server Configuration Reference
 
-This document covers how to configure MCP servers for the three AI coding CLIs: Claude Code, Codex CLI, and Gemini CLI. It is the research basis for `macos-mcp-setup.sh`.
+> **Historical.** This was the research basis for `macos-mcp-setup.sh`, which is
+> retired (see [`archives/`](../archives/)). The per-CLI config formats and add
+> commands below are still accurate and useful; the static-bearer-token approach it
+> was written to support has been replaced by hosted OAuth connectors.
+
+This document covers how to configure MCP servers for the three AI coding CLIs: Claude Code, Codex CLI, and Gemini CLI.
 
 ## How each tool handles MCP
 
