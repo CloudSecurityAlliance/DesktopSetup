@@ -11,7 +11,6 @@ DesktopSetup is the Cloud Security Alliance's machine bootstrap. Scripts manage 
 - `macos-ai-tools.sh` — AI desktop apps (Claude Desktop, ChatGPT) + Git, GitHub CLI + auth + Git identity from GitHub profile, AI coding CLIs (Claude Code, Codex, Gemini) with migration from wrong install methods. Registers accessible CSA plugin marketplaces with Claude Code (via `gh`-probed access check) and the CSA MCP server (`csa-mcp`) for users with CSA-Internal access
 - `macos-update.sh` — Updates everything: Homebrew formulas/casks, npm globals, pip packages, Claude Code (`claude update`), plus syncs CSA plugin marketplaces (adds missing accessible ones, refreshes all registered) and registers the CSA MCP server if missing. Snapshots all versions before updating for rollback.
 - `macos-plugins.sh` — Standalone plugin install/update. Just the plugin-related work from `macos-update.sh` (register CSA marketplaces, install default plugins, refresh marketplaces, register CSA MCP server) without the Homebrew/npm/pip steps. Use when you just want to get current on plugins without the full update cycle.
-- `macos-mcp-setup.sh` — Configures MCP servers (Airtable, GitHub, Gmail) for Claude Code, Codex, and Gemini. Discovers tokens from existing config files and environment, validates them against each service's API, and writes to each tool's config.
 
 **Windows (PowerShell):**
 - `windows-work-tools.ps1` — Same tool set as macOS work tools, using winget instead of Homebrew
@@ -31,7 +30,6 @@ scripts/
   macos-ai-tools.sh         # AI desktop apps + coding CLIs (macOS)
   macos-update.sh           # Update everything + snapshot for rollback (macOS)
   macos-plugins.sh          # Standalone plugin install/update (macOS)
-  macos-mcp-setup.sh        # Configure MCP servers for AI CLIs (macOS)
   windows-work-tools.ps1    # Work apps + optional dev tools (Windows)
   windows-ai-tools.ps1      # AI desktop apps + coding CLIs (Windows)
   windows-plugins.ps1       # Standalone plugin install/update (Windows)
@@ -74,16 +72,6 @@ TODO.md                     # Audit findings, priority-grouped with file:line ci
 - `windows-ai-tools.ps1` base layer: winget → Git, GitHub CLI, Node.js, Python (installed if missing); `windows-work-tools.ps1` does not install Python or Node.js
 - Both scripts support migration from wrong install methods (same concept as macOS)
 - `windows-work-tools.ps1` does **not** include Microsoft Office (unlike the macOS equivalent); core set is Git, GitHub CLI, 1Password, Slack, Zoom, Chrome — same core + dev profile selection as the macOS equivalent (dev adds VS Code, AWS CLI, Wrangler)
-
-### macos-mcp-setup.sh token pipeline
-Unique to this script — token handling follows a strict pipeline:
-1. **Discover**: reads tokens from existing CLI configs (`~/.claude.json`, `~/.codex/config.toml`, `~/.gemini/settings.json`) and environment variables, using embedded Python 3 snippets
-2. **Deduplicate**: parallel arrays (`FOUND_TOKEN_NAMES`, `FOUND_TOKEN_VALUES`) track seen values; duplicates by value are suppressed
-3. **Catalog**: surviving tokens are labeled A, B, C… and displayed with `mask_token()` (shows first 8 + `...` + last 4 chars)
-4. **Validate**: each token is tested against the service's live API before being written
-5. **Write**: validated tokens are written to each CLI's config file
-
-Requires Python 3 (the script calls `abort` if `python3` is not found). Gmail is handled as a special case — no token can be auto-discovered, so the script prints manual OAuth/GCP setup instructions instead.
 
 ### Script versioning
 All scripts declare a version string near the top — `SCRIPT_VERSION="YYYY.MMDDHHSS"` in the bash scripts, `$ScriptVersion = "YYYY.MMDDHHSS"` in the PowerShell scripts. Update this value when making changes — use the current date/time in that format.
@@ -197,7 +185,6 @@ The plugin-install contract is shared across all five scripts — `macos-ai-tool
 3. Otherwise, `gh api repos/CloudSecurityAlliance-Internal/CSA-Plugins` is called as the gate. Non-zero exit → silent skip. Zero exit → run `claude mcp add --transport http --scope user csa-mcp https://cloudsecurityalliance.org/mcp`.
 4. **Output is silent unless registration actually happened.** On success, print a `Registered Claude Code MCP server: csa-mcp` line followed by `Run /mcp inside Claude Code to authenticate with the CSA MCP server.` (the OAuth flow is browser-driven and must be initiated by the user). On `add` failure, print a warn line with the captured stderr indented underneath, matching the marketplace-add error format.
 5. Currently Claude Code only. Codex and Gemini support OAuth-HTTP MCP transports too but their config formats differ; adding them is future work.
-6. **The CSA MCP server is *not* a token-discovery target for `macos-mcp-setup.sh`.** That script's pipeline is built around static bearer tokens (Airtable, GitHub, Gmail) — it discovers, validates, and writes them to each CLI's config. OAuth flows have no token to pre-discover, so `csa-mcp` belongs in the install/update scripts, not in `macos-mcp-setup.sh`.
 
 ### Script execution flow
 All macOS scripts follow the same pattern: `main` → preconditions → preflight (show plan) → confirm → action steps → summary. `macos-ai-tools.sh` adds a migration layer: `detect_migrations()` runs during preflight, then `migrate_*()` runs before each tool's install to remove wrong-method installs. `macos-update.sh` takes a pre-update snapshot (to `~/Library/Logs/CSA-DesktopSetup/`) before showing the plan, enabling version rollback if updates break something.
@@ -210,7 +197,6 @@ bash -n scripts/macos-work-tools.sh
 bash -n scripts/macos-ai-tools.sh
 bash -n scripts/macos-update.sh
 bash -n scripts/macos-plugins.sh
-bash -n scripts/macos-mcp-setup.sh
 bash -n scripts/clone-and-claude.sh
 
 # macOS — static analysis (install: brew install shellcheck)
@@ -218,7 +204,6 @@ shellcheck scripts/macos-work-tools.sh
 shellcheck scripts/macos-ai-tools.sh
 shellcheck scripts/macos-update.sh
 shellcheck scripts/macos-plugins.sh
-shellcheck scripts/macos-mcp-setup.sh
 shellcheck scripts/clone-and-claude.sh
 ```
 
@@ -239,9 +224,6 @@ bash -c "$(curl -fsSL -H 'Cache-Control: no-cache' https://raw.githubusercontent
 
 # macOS — Plugin install/update only (no brew/npm/pip)
 bash -c "$(curl -fsSL -H 'Cache-Control: no-cache' https://raw.githubusercontent.com/CloudSecurityAlliance/DesktopSetup/HEAD/scripts/macos-plugins.sh)"
-
-# macOS — Configure MCP servers
-bash -c "$(curl -fsSL -H 'Cache-Control: no-cache' https://raw.githubusercontent.com/CloudSecurityAlliance/DesktopSetup/HEAD/scripts/macos-mcp-setup.sh)"
 
 # macOS — Clone repo & start Claude
 bash -c "$(curl -fsSL -H 'Cache-Control: no-cache' https://raw.githubusercontent.com/CloudSecurityAlliance/DesktopSetup/HEAD/scripts/clone-and-claude.sh)" -- ORG/REPO
