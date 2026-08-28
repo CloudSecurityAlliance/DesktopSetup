@@ -67,6 +67,18 @@ Audit performed 2026-02-24.
 - **SEC-H2 — `~/.local/bin` prepended to PATH before directory integrity is verified** (`macos-ai-tools.sh:290–294`) — WONT FIX
   If a malicious binary is already in the user's home directory, the machine is already compromised.
 
+### Open work
+
+- **`csa-skilljar-setup.ps1` does not exist** — Windows machines get `csa-skilljar`
+  through `Invoke-CSAInternalSetup`, which already lists it, but the gate repo carries
+  only the `.sh`. The loop skips a missing script rather than failing, so Windows simply
+  does not get the Skilljar server today and will pick it up automatically the day the
+  `.ps1` lands in `CloudSecurityAlliance-Internal/CSA-Plugins/internal-setup/`.
+  Recorded here rather than left silent: a skip that is correct behaviour still looks
+  identical to a skip that is a bug.
+  Model it on `csa-google-workspace-setup.ps1`; the `.sh` is simpler than that one
+  because Skilljar needs no browser login and no token file.
+
 ### Medium (Security)
 
 - **SEC-M1 — Bootstrap commands fetch from `HEAD`** (all three script headers) — DOCUMENTED CONCERN

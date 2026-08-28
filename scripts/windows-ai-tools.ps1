@@ -1312,22 +1312,39 @@ function Invoke-CSAInternalSetup {
     if ((Invoke-NativeQuiet { gh auth status }) -ne 0) { return }
     if ((Invoke-NativeQuiet { gh api "repos/$CSA_MCP_GATE_REPO" }) -ne 0) { return }
 
-    $encoded = Invoke-NativeOutput { gh api "repos/$CSA_MCP_GATE_REPO/contents/internal-setup/csa-google-workspace-setup.ps1" --jq '.content' }
-    if ($LASTEXITCODE -ne 0 -or -not $encoded) { return }
+    # One entry per internal MCP server, mirroring setup_csa_internal_tools() in the bash
+    # scripts. A list rather than a copied block, so a third server is one line.
+    #
+    # csa-skilljar-setup.ps1 does NOT exist yet - only the .sh does. It is listed here on
+    # purpose: `continue` skips a script the gate repo does not carry, so Windows machines
+    # pick Skilljar up automatically the day the .ps1 lands, with no change here. The gap
+    # is tracked in TODO.md rather than left to be noticed.
+    $setups = @(
+        'csa-google-workspace-setup.ps1',
+        'csa-skilljar-setup.ps1'
+    )
 
-    try {
-        $script = [System.Text.Encoding]::UTF8.GetString(
-            [System.Convert]::FromBase64String(($encoded -replace '\s', '')))
-    } catch { return }
+    foreach ($name in $setups) {
+        $encoded = Invoke-NativeOutput { gh api "repos/$CSA_MCP_GATE_REPO/contents/internal-setup/$name" --jq '.content' }
+        # `continue`, not `return`: a setup script that is absent - not merged yet, or
+        # renamed - must not stop the ones after it. The earlier single-script form
+        # returned, so a rename would have silently disabled every server that followed.
+        if ($LASTEXITCODE -ne 0 -or -not $encoded) { continue }
 
-    # CSA_NESTED tells the fetched script that it is running inside another CSA installer, so
-    # it should leave the closing summary to this one. Without it both printed "if anything
-    # above went wrong, re-run with logging on", one after the other.
-    $prevNested = $env:CSA_NESTED
-    $env:CSA_NESTED = '1'
-    try { & ([ScriptBlock]::Create($script)) }
-    catch { Write-Warn "CSA internal setup reported a problem: $_" }
-    finally { $env:CSA_NESTED = $prevNested }
+        try {
+            $script = [System.Text.Encoding]::UTF8.GetString(
+                [System.Convert]::FromBase64String(($encoded -replace '\s', '')))
+        } catch { continue }
+
+        # CSA_NESTED tells the fetched script that it is running inside another CSA installer, so
+        # it should leave the closing summary to this one. Without it both printed "if anything
+        # above went wrong, re-run with logging on", one after the other.
+        $prevNested = $env:CSA_NESTED
+        $env:CSA_NESTED = '1'
+        try { & ([ScriptBlock]::Create($script)) }
+        catch { Write-Warn "CSA internal setup ($name) reported a problem: $_" }
+        finally { $env:CSA_NESTED = $prevNested }
+    }
 }
 
 # ── Plugin install ──────────────────────────────────────────────────
