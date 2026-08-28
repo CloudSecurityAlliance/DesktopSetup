@@ -587,15 +587,29 @@ setup_csa_internal_tools() {
   gh auth status >/dev/null 2>&1 || return 0
   gh api "repos/$CSA_MCP_GATE_REPO" >/dev/null 2>&1 || return 0
 
-  local script
-  script="$(gh api "repos/$CSA_MCP_GATE_REPO/contents/internal-setup/csa-google-workspace-setup.sh" \
-              --jq '.content' 2>/dev/null | base64 --decode 2>/dev/null)" || return 0
-  [[ -n "$script" ]] || return 0
-  # CSA_NESTED tells the fetched script that it is running inside another CSA installer, so it
-  # should leave the closing summary to this one. Without it both printed "if anything above
-  # went wrong, re-run with logging on", one after the other, which reads like a stutter and
-  # gives two different instructions for the same thing ("<this script>" vs "the same command").
-  CSA_NESTED=1 bash -c "$script" || warn "CSA internal setup reported a problem (see above)"
+  # One entry per internal MCP server. A list rather than a copied block: the second
+  # server was added by appending a name here, and the third should be too.
+  local setups=(
+    csa-google-workspace-setup.sh
+    csa-skilljar-setup.sh
+  )
+
+  local name script
+  for name in "${setups[@]}"; do
+    script="$(gh api "repos/$CSA_MCP_GATE_REPO/contents/internal-setup/$name" \
+                --jq '.content' 2>/dev/null | base64 --decode 2>/dev/null)" || continue
+    [[ -n "$script" ]] || continue
+    # `continue`, not `return`: a setup script that is absent from the gate repo - because
+    # it has not been merged yet, or was renamed - must not stop the ones after it. The
+    # earlier single-script form returned, so a rename would have silently disabled every
+    # server that followed.
+    #
+    # CSA_NESTED tells the fetched script that it is running inside another CSA installer, so it
+    # should leave the closing summary to this one. Without it both printed "if anything above
+    # went wrong, re-run with logging on", one after the other, which reads like a stutter and
+    # gives two different instructions for the same thing ("<this script>" vs "the same command").
+    CSA_NESTED=1 bash -c "$script" || warn "CSA internal setup ($name) reported a problem (see above)"
+  done
 }
 
 # ── Plugin install ──────────────────────────────────────────────────
