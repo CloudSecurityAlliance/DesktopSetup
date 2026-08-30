@@ -1315,10 +1315,10 @@ function Invoke-CSAInternalSetup {
     # One entry per internal MCP server, mirroring setup_csa_internal_tools() in the bash
     # scripts. A list rather than a copied block, so a third server is one line.
     #
-    # csa-skilljar-setup.ps1 does NOT exist yet - only the .sh does. It is listed here on
-    # purpose: `continue` skips a script the gate repo does not carry, so Windows machines
-    # pick Skilljar up automatically the day the .ps1 lands, with no change here. The gap
-    # is tracked in TODO.md rather than left to be noticed.
+    # Both scripts exist in the gate repo. The list is still the right shape for a script
+    # that is absent - `continue` below skips one the repo does not carry - which is how
+    # csa-skilljar was carried between the day it was listed here and the day its .ps1
+    # landed, with no change needed in this file.
     $setups = @(
         'csa-google-workspace-setup.ps1',
         'csa-skilljar-setup.ps1'
