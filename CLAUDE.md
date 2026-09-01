@@ -37,8 +37,13 @@ scripts/
   clone-and-claude.ps1      # Clone repo & launch Claude (Windows)
   csa-plugins.txt           # Public default plugin list (fetched from HEAD at runtime)
   csa-plugins-internal.txt  # CSA-internal default plugin list (fetched from HEAD at runtime)
+tools/
+  check-all.sh              # Everything CI runs, locally, in one command
+  sweep-csa-sources.sh      # Weekly drift sweep (network + gh, NOT in check-all.sh)
 archives/                   # Previous script versions for reference
-docs/                       # Design documents (e.g., Windows AI tools design/process)
+docs/
+  periodic-sweep.md         # Weekly sweep runbook — what drifts and where to fix it
+  mcp-servers.md            # Historical MCP config reference (third-party servers)
 TODO.md                     # Audit findings, priority-grouped with file:line citations
 .github/
   ISSUE_TEMPLATE/           # Issue templates for contributions
@@ -185,6 +190,16 @@ The plugin-install contract is shared across all five scripts — `macos-ai-tool
 3. Otherwise, `gh api repos/CloudSecurityAlliance-Internal/CSA-Plugins` is called as the gate. Non-zero exit → silent skip. Zero exit → run `claude mcp add --transport http --scope user csa-mcp https://cloudsecurityalliance.org/mcp`.
 4. **Output is silent unless registration actually happened.** On success, print a `Registered Claude Code MCP server: csa-mcp` line followed by `Run /mcp inside Claude Code to authenticate with the CSA MCP server.` (the OAuth flow is browser-driven and must be initiated by the user). On `add` failure, print a warn line with the captured stderr indented underneath, matching the marketplace-add error format.
 5. Currently Claude Code only. Codex and Gemini support OAuth-HTTP MCP transports too but their config formats differ; adding them is future work.
+
+### Local CSA MCP servers (`setup_csa_internal_tools`)
+Separate mechanism from the hosted `csa-mcp` above, and a **third** place the lists drift. The same five scripts run `setup_csa_internal_tools`, which `gh`-probes the gate repo and then fetches one setup script per server from `CloudSecurityAlliance-Internal/CSA-Plugins/internal-setup/`, executing each with `CSA_NESTED=1`. The servers live in their own public repos (`csa-google-workspace`, `csa-skilljar`, and `csa-zendesk` when it is ready); the setup scripts live in the private gate repo because they carry CSA's OAuth client. A server is wired up by appending its `<name>-setup.sh` to the `setups=()` array — in all five scripts, with a `SCRIPT_VERSION` bump each. The loop uses `continue`, not `return`, so a setup script that is absent (unmerged, renamed) cannot silently disable the servers listed after it.
+
+### Periodic source sweep (weekly)
+Nothing in CSA notifies this repo when new tooling appears, so **run `./tools/sweep-csa-sources.sh` weekly**. It probes the CSA orgs and reports three kinds of drift against three different extension points: unregistered plugin **marketplaces** (`CSA_MARKETPLACES`, 5 scripts), published **plugins** nobody installs (`scripts/csa-plugins*.txt`, list-only change), and **MCP servers** that are ready to wire (`setups=()`, 5 scripts). Exit `0` no drift, `1` drift, `2` could not complete — `2` means "I learned nothing", never "no drift".
+
+Deliberately **not** in `check-all.sh`: it needs the network and a `gh` token with CSA-Internal access, and a check that cannot pass in CI is a check that gets deleted.
+
+**Do not make its probing parallel.** An early version used `xargs -P 12` and reported three repos as having no `marketplace.json` when all three do — a probe that fails under load is indistinguishable from a repo that genuinely lacks the file, so the sweep under-reports and the failure looks exactly like success. It probes sequentially and separates 404 from other errors for that reason. Full rationale, the MCP-description heuristic's known blind spot, and what to do with each finding: [`docs/periodic-sweep.md`](docs/periodic-sweep.md).
 
 ### Script execution flow
 All macOS scripts follow the same pattern: `main` → preconditions → preflight (show plan) → confirm → action steps → summary. `macos-ai-tools.sh` adds a migration layer: `detect_migrations()` runs during preflight, then `migrate_*()` runs before each tool's install to remove wrong-method installs. `macos-update.sh` takes a pre-update snapshot (to `~/Library/Logs/CSA-DesktopSetup/`) before showing the plan, enabling version rollback if updates break something.
