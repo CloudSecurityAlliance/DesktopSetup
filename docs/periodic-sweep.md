@@ -87,6 +87,41 @@ Also worth knowing: **GitHub code search does not work for this.** Querying
 `total_count: 0` despite seven manifests existing — code search does not reliably index
 dotfile directories or private repos. The contents API is the only trustworthy probe.
 
+## Running this as a scheduled routine
+
+A cloud routine runs the sweep weekly — **Mondays 15:04 UTC** (9am MDT / 8am MST; the cron
+is fixed UTC, so it shifts an hour across DST). Routine
+`trig_01TQh4GMWKRnt4L4QpM5mhJc`, managed at <https://claude.ai/code/routines>.
+
+**This section is the routine's spec.** Its prompt is deliberately short and defers here, so
+changing the job means editing this file rather than the routine. Steps:
+
+1. `ls -l tools/sweep-csa-sources.sh`. If it is missing, the checkout predates the sweep —
+   say so and stop. Do not improvise a replacement.
+2. Verify access: `gh api repos/CloudSecurityAlliance-Internal/CSA-Plugins --jq .full_name`.
+   If it fails, the cloud token lacks CSA-Internal read access. **Stop and report exactly
+   that.** Never report "no drift" from a run that could not see the private orgs.
+3. Run `./tools/sweep-csa-sources.sh`, capturing output and exit code. Expect one to two
+   minutes; it probes ~200 repos sequentially on purpose.
+4. Act on the exit code:
+   - **2** — could not complete. Report the failure and what caused it.
+   - **0** — no drift. Say so and stop. Do not open anything.
+   - **1** — drift found. Go to step 5.
+5. Report drift as a GitHub issue in `CloudSecurityAlliance/DesktopSetup`, but **do not
+   create a duplicate**: `gh issue list --repo CloudSecurityAlliance/DesktopSetup --state open
+   --search "Weekly source sweep" --json number,title` first. If an open issue exists, add a
+   comment with this week's findings. Otherwise create one titled
+   `Weekly source sweep: drift found` containing the sweep output verbatim, the date, and
+   which of the three categories each finding belongs to.
+
+Silent when clean, by design — the same contract the installers follow. A weekly issue that
+says "nothing to do" is a weekly issue nobody reads.
+
+**Known constraint:** the cloud environment's GitHub token may not carry CSA-Internal read
+access. If it does not, step 2 stops the run every week and the routine is useless until the
+token is fixed. That is the intended failure — a loud, honest "could not check" beats a
+false all-clear. Verify this on the routine's first real run.
+
 ## Acting on findings
 
 For category 2 (the common case), the whole change is an edit to
