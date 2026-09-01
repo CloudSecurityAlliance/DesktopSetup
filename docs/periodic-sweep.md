@@ -1,6 +1,8 @@
 # Periodic source sweep
 
-**Cadence: weekly.** Run `./tools/sweep-csa-sources.sh`.
+**Cadence: weekly. Currently run manually** — `./tools/sweep-csa-sources.sh`, on a machine
+whose `gh` has CSA-Internal read access. Nothing runs it automatically yet; see
+[How this gets run](#how-this-gets-run) for why, and for the Operations360 plan.
 
 ## Why this exists
 
@@ -87,20 +89,46 @@ Also worth knowing: **GitHub code search does not work for this.** Querying
 `total_count: 0` despite seven manifests existing — code search does not reliably index
 dotfile directories or private repos. The contents API is the only trustworthy probe.
 
-## Running this as a scheduled routine
+## How this gets run
 
-A cloud routine runs the sweep weekly — **Mondays 15:04 UTC** (9am MDT / 8am MST; the cron
-is fixed UTC, so it shifts an hour across DST). Routine
-`trig_01TQh4GMWKRnt4L4QpM5mhJc`, managed at <https://claude.ai/code/routines>.
+**Today: by hand.** Run `./tools/sweep-csa-sources.sh` on a machine whose `gh` is
+authenticated with CSA-Internal read access. Weekly is the intended cadence.
 
-**This section is the routine's spec.** Its prompt is deliberately short and defers here, so
-changing the job means editing this file rather than the routine. Steps:
+**Long term: Operations360.** Periodic jobs like this one belong on the planned
+Operations360 platform — the operations sibling to the existing `*360` family
+(`CINO-Customer-360`, `Work360-Backend`/`-Frontend`/`-Product`). It does not exist yet as of
+2026-09-01; there is no repo and no schedule. When it does, this sweep is a candidate to move
+there, and the spec below is what it should implement. Until then, do not assume this runs
+itself.
+
+**Attempted and parked: a Claude cloud routine.** Routine
+`trig_01TQh4GMWKRnt4L4QpM5mhJc` (Mondays 15:04 UTC) exists but is **disabled**, at
+<https://claude.ai/code/routines>. It cannot work as written: the cloud sandbox has no `gh`
+binary at all — not a token-scope problem, `gh` is simply absent (`exit 127: gh: command not
+found`; nothing at `/usr/bin/gh`, `/usr/local/bin/gh`, or `/opt/homebrew/bin/gh`), and the
+entire sweep is built on `gh api`. Making it work needs both an environment setup step to
+install `gh` *and* a PAT carrying CSA-Internal read access stored in the routine config. That
+second part is a credential decision, which is why it is parked rather than fixed: the sweep's
+whole purpose is reading private orgs, and a local run already has exactly that access without
+minting a new org-scoped token. Left disabled rather than deleted so the wiring is there if
+Operations360 ends up using the same mechanism.
+
+The first test run did prove two things worth keeping: the runbook-as-spec indirection works
+(the agent read this file and followed it), and the guard held — it refused to proceed rather
+than reporting a false all-clear.
+
+### The job spec
+
+**This section is the spec for whatever ends up running the sweep** — Operations360, a
+routine, or a launchd timer. Keeping it here rather than in a scheduler's config means the job
+is reviewable and diffable in the repo. Steps:
 
 1. `ls -l tools/sweep-csa-sources.sh`. If it is missing, the checkout predates the sweep —
    say so and stop. Do not improvise a replacement.
 2. Verify access: `gh api repos/CloudSecurityAlliance-Internal/CSA-Plugins --jq .full_name`.
-   If it fails, the cloud token lacks CSA-Internal read access. **Stop and report exactly
-   that.** Never report "no drift" from a run that could not see the private orgs.
+   If `gh` is absent or that call fails, the runner lacks CSA-Internal read access. **Stop and
+   report exactly that.** Never report "no drift" from a run that could not see the private
+   orgs. This is the step the cloud routine dies on today.
 3. Run `./tools/sweep-csa-sources.sh`, capturing output and exit code. Expect one to two
    minutes; it probes ~200 repos sequentially on purpose.
 4. Act on the exit code:
@@ -117,10 +145,11 @@ changing the job means editing this file rather than the routine. Steps:
 Silent when clean, by design — the same contract the installers follow. A weekly issue that
 says "nothing to do" is a weekly issue nobody reads.
 
-**Known constraint:** the cloud environment's GitHub token may not carry CSA-Internal read
-access. If it does not, step 2 stops the run every week and the routine is useless until the
-token is fixed. That is the intended failure — a loud, honest "could not check" beats a
-false all-clear. Verify this on the routine's first real run.
+**The non-negotiable part of the spec:** a runner that cannot reach the private orgs must say
+so. "Could not check" and "nothing to check" are different answers, and collapsing them is the
+one failure that makes this whole exercise worse than not having it — a green light nobody
+earned is more dangerous than no light at all. Whatever runs this must preserve exit code 2 as
+distinct from 0.
 
 ## Acting on findings
 
