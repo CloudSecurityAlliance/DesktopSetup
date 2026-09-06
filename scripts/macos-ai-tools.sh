@@ -25,7 +25,7 @@
 
 set -euo pipefail
 
-SCRIPT_VERSION="2026.09061240"
+SCRIPT_VERSION="2026.09061330"
 
 # ── CSA plugin marketplaces ─────────────────────────────────────────
 # Plugin marketplaces to register with Claude Code. Each entry is an
@@ -456,6 +456,13 @@ preflight() {
     echo "  Node.js ........... install via Homebrew"
   fi
 
+  # uv
+  if has_command uv; then
+    echo "  uv ................ installed ($(get_version uv --version))"
+  else
+    echo "  uv ................ install via Homebrew"
+  fi
+
   # Python
   # Reporting "installed" for any python3 is what made #53 invisible: on a stock Mac this
   # printed a green line for Apple's 3.9.6 and the run carried on.
@@ -719,6 +726,10 @@ install_node() {
 # requires-python = ">=3.10", and csa-google-workspace - which document-pipeline's register
 # tools import - refuses to install below it.
 CSA_PYTHON_MIN="3.10"
+# The version uv provisions when nothing usable is present. A floor says what breaks; this says
+# what a fresh machine actually gets, and pinning it is what stops macOS and Windows drifting
+# apart the way brew's python (3.14) and winget's Python.Python.3.13 already had.
+CSA_PYTHON_PREFERRED="3.13"
 
 # Presence is not usability. macOS ALWAYS ships /usr/bin/python3, and it is 3.9.6, so
 # `has_command python3` is satisfied on every stock Mac by an interpreter nothing here can
@@ -742,7 +753,37 @@ find_usable_python() {
       return 0
     fi
   done
+
+  # Then ask uv. Measured on uv 0.12.10: `uv python install` creates NO PATH shims - an
+  # interpreter it manages lives under ~/.local/share/uv/python/... and `command -v python3.13`
+  # does not find it. So PATH probing alone would miss a perfectly good uv-provisioned Python
+  # and reinstall one. That is fine for our purposes: install_doc_python_deps builds
+  # ~/.default_venv from whatever interpreter it is handed, and document-pipeline's launchers
+  # probe that venv - so uv can provide the interpreter without owning PATH.
+  if has_command uv; then
+    path="$(uv python find ">=$CSA_PYTHON_MIN" 2>/dev/null)" || return 1
+    if [[ -n "$path" ]] && python_meets_floor "$path"; then
+      printf '%s\n' "$path"
+      return 0
+    fi
+  fi
   return 1
+}
+
+# uv is the CSA Python toolchain standard (CINO-Platform-Engineering DEC-012). Installed here
+# for two jobs: provisioning interpreters (below), and later `uv tool install` for CSA's own
+# Python CLIs once they are packaged. Chosen over pipx because it also provisions the
+# interpreter - pipx needs a working Python first, which is the bootstrap problem one layer up.
+install_uv() {
+  ensure_brew_in_path
+
+  if has_command uv; then
+    info "uv already installed: $(get_version uv --version)"
+    return 0
+  fi
+
+  info "Installing uv"
+  brew install uv || warn "Failed to install uv - falling back to Homebrew Python"
 }
 
 install_python() {
@@ -755,10 +796,24 @@ install_python() {
   fi
 
   if has_command python3; then
-    info "Python is $(get_version python3 --version), below the ${CSA_PYTHON_MIN} floor - installing Homebrew Python"
-  else
-    info "Installing Python"
+    info "Python is $(get_version python3 --version), below the ${CSA_PYTHON_MIN} floor"
   fi
+
+  # Prefer uv: one provider, one pinned version, identical on macOS, Windows and a tier-2
+  # Linux VM. Homebrew stays as the fallback so a uv failure cannot leave the machine with no
+  # Python at all.
+  if has_command uv; then
+    info "Installing Python ${CSA_PYTHON_PREFERRED} via uv"
+    if uv python install "$CSA_PYTHON_PREFERRED"; then
+      if found="$(find_usable_python)"; then
+        info "Python ready: $(get_version "$found" --version) ($found)"
+        return 0
+      fi
+    fi
+    warn "uv could not provide Python ${CSA_PYTHON_PREFERRED} - falling back to Homebrew"
+  fi
+
+  info "Installing Python via Homebrew"
   brew install python || abort "Failed to install Python"
 
   # brew puts python3 in the Homebrew prefix, which may not be resolvable in this shell yet.
@@ -1576,6 +1631,7 @@ main() {
   install_xcode_cli_tools
   install_homebrew
   install_node
+  install_uv
   install_python
   install_doc_toolchain
   install_doc_python_deps

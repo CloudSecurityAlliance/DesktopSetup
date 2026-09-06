@@ -20,7 +20,7 @@
 
 $ErrorActionPreference = 'Stop'
 
-$ScriptVersion = "2026.09052335"
+$ScriptVersion = "2026.09061330"
 
 # ── CSA plugin marketplaces ─────────────────────────────────────────
 # Plugin marketplaces to register with Claude Code. Each entry is an
@@ -1014,17 +1014,79 @@ function Setup-GitIdentity {
     }
 }
 
-function Install-Python {
-    # Check for real Python (not the Store stub)
-    if ((Has-Command python) -and -not (Test-PythonStoreStub)) {
-        $pyVer = Get-ToolVersion python '--version'
-        Write-Info "Python already installed ($pyVer); skipping"
+# The floor is not ours to choose: CSA-Document-Pipeline's pyproject.toml declares
+# requires-python = ">=3.10", and csa-google-workspace refuses to install below it.
+# $CsaPythonPreferred is what a fresh machine gets when nothing usable is present - pinned so
+# Windows and macOS stop drifting apart the way winget's 3.13 and brew's 3.14 already had.
+$CsaPythonMin = '3.10'
+$CsaPythonPreferred = '3.13'
+
+# Presence is not usability. This is the Windows half of DesktopSetup#53: the macOS script
+# accepted Apple's 3.9.6 because `has_command python3` was satisfied, and this one had the same
+# defect - `Has-Command python3` with no version check at all. Windows ships no python3 by
+# default so the blast radius is smaller, but an older Python already on the machine was
+# accepted exactly the same way.
+function Test-PythonMeetsFloor {
+    param([string]$Exe)
+    $code = "import sys; sys.exit(0 if sys.version_info >= tuple(map(int, '$CsaPythonMin'.split('.'))) else 1)"
+    $null = Invoke-NativeQuiet { & $Exe -c $code }
+    return ($LASTEXITCODE -eq 0)
+}
+
+# Probe newest-first for an interpreter that clears the floor, then ask uv. As on macOS, uv
+# creates no PATH shims for the interpreters it manages, so it has to be asked directly.
+function Find-UsablePython {
+    foreach ($cand in @('python', 'python3', 'python3.14', 'python3.13', 'python3.12', 'python3.11', 'python3.10')) {
+        if (-not (Has-Command $cand)) { continue }
+        if ($cand -eq 'python' -and (Test-PythonStoreStub)) { continue }
+        if (Test-PythonMeetsFloor $cand) { return (Get-Command $cand).Source }
+    }
+    if (Has-Command uv) {
+        $found = Invoke-NativeCapture { uv python find ">=$CsaPythonMin" }
+        if ($found.ExitCode -eq 0 -and $found.Output) {
+            $exe = $found.Output.Trim()
+            if ($exe -and (Test-Path $exe) -and (Test-PythonMeetsFloor $exe)) { return $exe }
+        }
+    }
+    return $null
+}
+
+# uv is the CSA Python toolchain standard (CINO-Platform-Engineering DEC-012). Installed for
+# two jobs: provisioning interpreters, and later `uv tool install` for CSA's own Python CLIs.
+function Install-Uv {
+    if (Has-Command uv) {
+        $uvVer = Get-ToolVersion uv '--version'
+        Write-Info "uv already installed ($uvVer); skipping"
         return
     }
-    if (Has-Command python3) {
-        $pyVer = Get-ToolVersion python3 '--version'
-        Write-Info "Python already installed ($pyVer); skipping"
+    Write-Info "Installing uv via winget"
+    $null = Invoke-NativeShow { winget install --id astral-sh.uv --accept-package-agreements --accept-source-agreements }
+    if ($LASTEXITCODE -ne 0) { Write-Warn "Failed to install uv - falling back to winget Python" }
+    Refresh-Path
+}
+
+function Install-Python {
+    $found = Find-UsablePython
+    if ($found) {
+        $pyVer = Get-ToolVersion $found '--version'
+        Write-Info "Python already installed ($pyVer at $found); skipping"
         return
+    }
+
+    # Prefer uv: one provider, one pinned version, identical on macOS, Windows and a tier-2
+    # Linux VM. winget stays the fallback so a uv failure cannot leave the machine with none.
+    if (Has-Command uv) {
+        Write-Info "Installing Python $CsaPythonPreferred via uv"
+        $null = Invoke-NativeShow { uv python install $CsaPythonPreferred }
+        if ($LASTEXITCODE -eq 0) {
+            Refresh-Path
+            $found = Find-UsablePython
+            if ($found) {
+                Write-Info "Python ready: $(Get-ToolVersion $found '--version') ($found)"
+                return
+            }
+        }
+        Write-Warn "uv could not provide Python $CsaPythonPreferred - falling back to winget"
     }
 
     Write-Info "Installing Python via winget"
@@ -1711,6 +1773,7 @@ function Main {
     Install-GH
     Setup-GHAuth
     Setup-GitIdentity
+    Install-Uv
     Install-Python
     Install-Node
     Install-DocToolchain
