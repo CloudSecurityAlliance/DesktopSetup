@@ -24,7 +24,7 @@
 
 set -euo pipefail
 
-SCRIPT_VERSION="2026.09052335"
+SCRIPT_VERSION="2026.09060015"
 
 # ── Output helpers ──────────────────────────────────────────────────
 
@@ -453,6 +453,19 @@ install_homebrew() {
   ensure_brew_in_path
 }
 
+# Same class of bug as install_python, narrower blast radius: a stock Mac has no node at
+# all, so the `else` branch below installs one and it is fine. This only bites a machine that
+# already had an old node - an abandoned nvm install, say - which `has_command node` would
+# otherwise accept. Gemini CLI declares engines.node >= 20; Codex >= 16. Take the higher.
+node_meets_floor() {
+  local min=20 major
+  major="$(node --version 2>/dev/null | sed 's/^v//; s/\..*//')"
+  if [[ ! "$major" =~ ^[0-9]+$ ]]; then
+    return 1
+  fi
+  (( major >= min ))
+}
+
 install_node() {
   ensure_brew_in_path
 
@@ -463,9 +476,12 @@ install_node() {
     else
       info "Node.js already current: $(get_version node --version)"
     fi
-  elif has_command node; then
+  elif has_command node && node_meets_floor; then
     info "Node.js already installed (non-Homebrew): $(get_version node --version)"
   else
+    if has_command node; then
+      info "Node.js is $(get_version node --version), below the v20 the Gemini CLI needs - installing Homebrew Node.js"
+    fi
     info "Installing Node.js"
     brew install node || abort "Failed to install Node.js"
   fi

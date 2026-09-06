@@ -44,6 +44,9 @@ check python3 tests/test_prompt_visibility.py
 step "npm output filter"
 check python3 tests/test_npm_output_filter.py
 
+step "version floors"
+check python3 tests/test_version_floors.py
+
 if command -v pwsh >/dev/null; then
   step "powershell parse"
   check pwsh -NoProfile -c '

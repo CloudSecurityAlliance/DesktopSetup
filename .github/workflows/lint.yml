@@ -127,3 +127,6 @@ jobs:
 
       - name: npm noise filtered without hiding npm failures
         run: python3 tests/test_npm_output_filter.py
+
+      - name: Interpreter/runtime floors reject what the OS ships
+        run: python3 tests/test_version_floors.py
