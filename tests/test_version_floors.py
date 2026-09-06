@@ -48,7 +48,10 @@ def extract(source: pathlib.Path, name: str) -> str:
     if name == "CSA_PYTHON_MIN":
         m = re.search(r'^CSA_PYTHON_MIN="[^"]*"$', text, re.M)
     else:
-        m = re.search(rf"^{re.escape(name)}\(\) \{{.*?^\}}", text, re.S | re.M)
+        # Multi-line form first; then the one-liner form (`has_command() { ...; }`), which the
+        # multi-line pattern cannot match because there is no `}` in column 0.
+        m = (re.search(rf"^{re.escape(name)}\(\) \{{.*?^\}}", text, re.S | re.M)
+             or re.search(rf"^{re.escape(name)}\(\) \{{.*\}}$", text, re.M))
     if not m:
         raise SystemExit(f"could not find {name} in {source.name}")
     return m.group(0)
@@ -131,7 +134,8 @@ def main() -> int:
 
     # ---- find_usable_python selection, with stubs ----
     print("\nfind_usable_python selection")
-    sel = body + "\n" + extract(AI, "find_usable_python")
+    sel = (body + "\n" + extract(AI, "has_command") + "\n"
+           + extract(AI, "find_usable_python"))
     with tempfile.TemporaryDirectory() as td:
         base = pathlib.Path(td)
 
@@ -156,6 +160,28 @@ def main() -> int:
         p = stub_dir(base / "empty", good=set(), present=[])
         out, rc = bash(f"{sel}\nfind_usable_python", path=p)
         check(rc != 0, "no python at all -> reports nothing usable")
+
+        # uv fallback. Measured on uv 0.12.10: `uv python install` creates no PATH shims, so an
+        # interpreter uv manages is invisible to `command -v` and has to be asked for directly.
+        # Without this branch a machine with a perfectly good uv-provisioned Python would be
+        # told it had none, and would install a second one.
+        uvdir = base / "uvonly"
+        p = stub_dir(uvdir, good=set())                      # every PATH python too old
+        managed = uvdir / "uv-managed-python3.13"
+        managed.write_text("#!/bin/sh\nexit 0\n"); managed.chmod(0o755)
+        uv = uvdir / "uv"
+        uv.write_text(f"#!/bin/sh\n# only answers `python find`\n"
+                      f'[ "$1" = python ] && [ "$2" = find ] && echo "{managed}" && exit 0\n'
+                      f"exit 1\n")
+        uv.chmod(0o755)
+        out, rc = bash(f"{sel}\nfind_usable_python", path=str(uvdir))
+        check(rc == 0 and out.endswith("uv-managed-python3.13"),
+              f"no usable python on PATH but uv has one -> uses uv's (got {out!r})")
+
+        # And uv must not be *required*: a machine without it still works.
+        p = stub_dir(base / "nouv", good={"python3.12"})
+        out, rc = bash(f"{sel}\nfind_usable_python", path=p)
+        check(rc == 0 and out.endswith("python3.12"), "uv absent -> PATH probing still works")
 
     # ---- node_meets_floor ----
     print("\nnode_meets_floor")

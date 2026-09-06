@@ -55,7 +55,8 @@ TODO.md                     # Audit findings, priority-grouped with file:line ci
 ### macOS Scripts (Bash)
 - Target macOS only (checks `uname -s` at startup)
 - `macos-work-tools.sh` base layer: Xcode CLI Tools → Homebrew → Node.js/npm
-- `macos-ai-tools.sh` base layer: Xcode CLI Tools → Homebrew → Node.js/npm → Python
+- `macos-ai-tools.sh` base layer: Xcode CLI Tools → Homebrew → Node.js/npm → uv → Python
+- **Python comes from uv, with Homebrew as the fallback** (CINO-Platform-Engineering DEC-012). `install_uv` runs before `install_python`; `install_python` provisions `CSA_PYTHON_PREFERRED` via `uv python install` and only falls back to `brew install python` if uv is missing or fails. Both floors are taken from the consumer that asks for most, never picked: `CSA_PYTHON_MIN=3.10` from CSA-Document-Pipeline's `requires-python`, and the Node floor of 22 from Wrangler's `engines.node`. **uv creates no PATH shims for interpreters it manages** (measured, uv 0.12.10), so `find_usable_python` / `Find-UsablePython` probe PATH first and then ask `uv python find` directly — PATH probing alone would miss a good uv Python and install a second one.
 - Must be idempotent — safe to run multiple times
 - Must be interactive by default (show plan, ask for confirmation)
 - Support `NONINTERACTIVE=1` for CI/automation — also auto-detected when `$CI` is set or stdin is not a TTY
