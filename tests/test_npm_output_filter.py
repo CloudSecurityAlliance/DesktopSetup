@@ -36,6 +36,7 @@ cannot drift from what actually runs.
 """
 from __future__ import annotations
 
+import os
 import pathlib
 import re
 import subprocess
@@ -132,7 +133,13 @@ echo "CSA_TEST_EXIT=$status"
     with tempfile.NamedTemporaryFile("w", suffix=".sh", delete=False) as fh:
         fh.write(harness)
         path = fh.name
-    env = {"PATH": "/usr/bin:/bin:/usr/sbin:/sbin", "HOME": "/tmp"}
+    # The ambient PATH on purpose, not a pinned one: `sed` is the whole point of this test and
+    # BSD and GNU sed differ on the flag csa_npm must not use (see the note in csa_npm). CI runs
+    # this on Linux, so GNU sed is exercised there; locally you can force it with
+    # `PATH=/path/to/gnu/sed/first python3 tests/test_npm_output_filter.py`.
+    # CSA_DEBUG is set from `debug` alone, never inherited, or a debugging shell would flip
+    # every default-mode case to the branch it is not testing.
+    env = {"PATH": os.environ.get("PATH", "/usr/bin:/bin"), "HOME": "/tmp"}
     if debug:
         env["CSA_DEBUG"] = "1"
     proc = subprocess.run(["bash", path], capture_output=True, text=True, env=env)

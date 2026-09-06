@@ -278,8 +278,13 @@ csa_npm() {
   if csa_debug_requested; then
     npm "$@"
   else
-    # shellcheck disable=SC2086
-    npm "$@" 2>&1 | sed ${CSA_SED_UNBUF} \
+    # Deliberately NOT $CSA_SED_UNBUF. BSD sed spells line-buffering -l as a bare flag; GNU
+    # sed spells -l N and takes an argument, so on GNU it swallows the first -e and treats
+    # '/^npm warn install-scripts/d' as an input FILENAME: stdin is never read, npm's summary
+    # vanishes, and the "no such file" error quotes the pattern back. csa_redact gets away
+    # with the same variable only because -E follows it and absorbs the argument. Buffering
+    # buys nothing here anyway - npm prints its summary once, at the end.
+    npm "$@" 2>&1 | sed \
       -e '/^npm warn install-scripts/d' \
       -e '/looking for funding$/d' \
       -e '/run `npm fund` for details$/d'
