@@ -74,7 +74,7 @@ TODO.md                     # Audit findings, priority-grouped with file:line ci
 - Same output helper pattern: `Write-Info`, `Write-Success`, `Write-Warn`, `Write-Err`, `Abort`
 - Same utility function pattern: `Has-Command` instead of `has_command`
 - Installation strategy: winget for system tools and desktop apps, npm for AI CLIs
-- `windows-ai-tools.ps1` base layer: winget → Git, GitHub CLI, Node.js, Python (installed if missing); `windows-work-tools.ps1` does not install Python or Node.js
+- `windows-ai-tools.ps1` base layer: winget → Git, GitHub CLI, Node.js, Python (installed if missing); `windows-work-tools.ps1` installs Node.js (core, via `OpenJS.NodeJS.LTS`) but not Python
 - Both scripts support migration from wrong install methods (same concept as macOS)
 - `windows-work-tools.ps1` does **not** include Microsoft Office (unlike the macOS equivalent); core set is Git, GitHub CLI, 1Password, Slack, Zoom, Chrome — same core + dev profile selection as the macOS equivalent (dev adds VS Code, AWS CLI, Wrangler)
 
