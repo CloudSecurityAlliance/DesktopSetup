@@ -163,7 +163,10 @@ def main() -> int:
     check(nf == extract(WORK, "node_meets_floor"),
           "node_meets_floor is identical in both scripts")
     with tempfile.TemporaryDirectory() as td:
-        for version, expected in [("v18.20.4", False), ("v20.0.0", True), ("v24.1.0", True),
+        # v20 and v21 now FAIL: wrangler needs >= 22, and Node is the Workers/TypeScript
+        # runtime here, not only an AI-CLI dependency. v26 is Current, v24 is LTS; both pass.
+        for version, expected in [("v18.20.4", False), ("v20.0.0", False), ("v21.7.3", False),
+                                  ("v22.0.0", True), ("v24.1.0", True), ("v26.8.1", True),
                                   ("v16.20.0", False), ("", False), ("garbage", False)]:
             d = pathlib.Path(td) / f"n{version or 'empty'}".replace(".", "_")
             d.mkdir(parents=True, exist_ok=True)

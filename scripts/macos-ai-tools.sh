@@ -25,7 +25,7 @@
 
 set -euo pipefail
 
-SCRIPT_VERSION="2026.09060015"
+SCRIPT_VERSION="2026.09061240"
 
 # ── CSA plugin marketplaces ─────────────────────────────────────────
 # Plugin marketplaces to register with Claude Code. Each entry is an
@@ -679,9 +679,14 @@ install_homebrew() {
 # Same class of bug as install_python, narrower blast radius: a stock Mac has no node at
 # all, so the `else` branch below installs one and it is fine. This only bites a machine that
 # already had an old node - an abandoned nvm install, say - which `has_command node` would
-# otherwise accept. Gemini CLI declares engines.node >= 20; Codex >= 16. Take the higher.
+# otherwise accept.
+#
+# The floor comes from the consumer that asks for most, not from a number we picked - the same
+# rule as CSA_PYTHON_MIN. Measured 2026-09-06: wrangler >= 22.0.0, gemini-cli >= 20, typescript
+# >= 16.20, codex >= 16. Wrangler binds, because Node here is not just an AI-CLI dependency:
+# it is the runtime for building Cloudflare Workers and TypeScript.
 node_meets_floor() {
-  local min=20 major
+  local min=22 major
   major="$(node --version 2>/dev/null | sed 's/^v//; s/\..*//')"
   if [[ ! "$major" =~ ^[0-9]+$ ]]; then
     return 1
@@ -703,7 +708,7 @@ install_node() {
     info "Node.js already installed (non-Homebrew): $(get_version node --version)"
   else
     if has_command node; then
-      info "Node.js is $(get_version node --version), below the v20 the Gemini CLI needs - installing Homebrew Node.js"
+      info "Node.js is $(get_version node --version), below the v22 Wrangler needs - installing Homebrew Node.js"
     fi
     info "Installing Node.js"
     brew install node || abort "Failed to install Node.js"
