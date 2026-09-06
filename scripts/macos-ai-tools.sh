@@ -25,7 +25,7 @@
 
 set -euo pipefail
 
-SCRIPT_VERSION="2026.09052335"
+SCRIPT_VERSION="2026.09060015"
 
 # ── CSA plugin marketplaces ─────────────────────────────────────────
 # Plugin marketplaces to register with Claude Code. Each entry is an
@@ -457,8 +457,13 @@ preflight() {
   fi
 
   # Python
-  if has_command python3; then
-    echo "  Python ............ installed ($(get_version python3 --version))"
+  # Reporting "installed" for any python3 is what made #53 invisible: on a stock Mac this
+  # printed a green line for Apple's 3.9.6 and the run carried on.
+  local py_found
+  if py_found="$(find_usable_python)"; then
+    echo "  Python ............ installed ($(get_version "$py_found" --version))"
+  elif has_command python3; then
+    echo "  Python ............ $(get_version python3 --version) is below ${CSA_PYTHON_MIN} — install via Homebrew"
   else
     echo "  Python ............ install via Homebrew"
   fi
@@ -671,6 +676,19 @@ install_homebrew() {
   ensure_brew_in_path
 }
 
+# Same class of bug as install_python, narrower blast radius: a stock Mac has no node at
+# all, so the `else` branch below installs one and it is fine. This only bites a machine that
+# already had an old node - an abandoned nvm install, say - which `has_command node` would
+# otherwise accept. Gemini CLI declares engines.node >= 20; Codex >= 16. Take the higher.
+node_meets_floor() {
+  local min=20 major
+  major="$(node --version 2>/dev/null | sed 's/^v//; s/\..*//')"
+  if [[ ! "$major" =~ ^[0-9]+$ ]]; then
+    return 1
+  fi
+  (( major >= min ))
+}
+
 install_node() {
   ensure_brew_in_path
 
@@ -681,24 +699,69 @@ install_node() {
     else
       info "Node.js already current: $(get_version node --version)"
     fi
-  elif has_command node; then
+  elif has_command node && node_meets_floor; then
     info "Node.js already installed (non-Homebrew): $(get_version node --version)"
   else
+    if has_command node; then
+      info "Node.js is $(get_version node --version), below the v20 the Gemini CLI needs - installing Homebrew Node.js"
+    fi
     info "Installing Node.js"
     brew install node || abort "Failed to install Node.js"
   fi
 }
 
+# The floor is not ours to choose. CSA-Document-Pipeline's pyproject.toml declares
+# requires-python = ">=3.10", and csa-google-workspace - which document-pipeline's register
+# tools import - refuses to install below it.
+CSA_PYTHON_MIN="3.10"
+
+# Presence is not usability. macOS ALWAYS ships /usr/bin/python3, and it is 3.9.6, so
+# `has_command python3` is satisfied on every stock Mac by an interpreter nothing here can
+# use. That is issue #53: the installer reported success, never installed Homebrew Python,
+# and the failure surfaced hundreds of lines into a pip resolver much later. The floor is
+# interpolated rather than hard-coded so it lives in exactly one place.
+python_meets_floor() {
+  "$1" -c "import sys; sys.exit(0 if sys.version_info >= tuple(map(int, '$CSA_PYTHON_MIN'.split('.'))) else 1)" >/dev/null 2>&1
+}
+
+# A usable interpreter is often already present as python3.13 without being first on PATH -
+# Homebrew installs it exactly that way. Probe newest-first before concluding anything is
+# missing: installing a second copy of what the machine already has is how a bootstrap earns
+# a reputation. Prints the resolved path; non-zero when nothing on PATH clears the floor.
+find_usable_python() {
+  local cand path
+  for cand in python3 python3.14 python3.13 python3.12 python3.11 python3.10; do
+    path="$(command -v "$cand" 2>/dev/null)" || continue
+    if python_meets_floor "$path"; then
+      printf '%s\n' "$path"
+      return 0
+    fi
+  done
+  return 1
+}
+
 install_python() {
   ensure_brew_in_path
 
-  if has_command python3; then
-    info "Python already installed: $(get_version python3 --version)"
+  local found
+  if found="$(find_usable_python)"; then
+    info "Python already installed: $(get_version "$found" --version) ($found)"
     return 0
   fi
 
-  info "Installing Python"
+  if has_command python3; then
+    info "Python is $(get_version python3 --version), below the ${CSA_PYTHON_MIN} floor - installing Homebrew Python"
+  else
+    info "Installing Python"
+  fi
   brew install python || abort "Failed to install Python"
+
+  # brew puts python3 in the Homebrew prefix, which may not be resolvable in this shell yet.
+  # Say so rather than let the next step report a confusing miss.
+  ensure_brew_in_path
+  if ! find_usable_python >/dev/null 2>&1; then
+    warn "Installed Homebrew Python but no python3 >= ${CSA_PYTHON_MIN} is on PATH yet - a new shell may be needed"
+  fi
 }
 
 # ── Document toolchain ──────────────────────────────────────────────
@@ -713,7 +776,11 @@ install_python() {
 # it (after $CSA_PYTHON and any PATH python3 that already has the deps),
 # so no PATH or env wiring is needed on our side.
 CSA_VENV="$HOME/.default_venv"
-CSA_DOC_PY_DEPS=(pyyaml pymupdf)
+# csa-google-workspace is what document-pipeline's csa-register-{format,merge,verify}
+# probe for; it pulls google-api-python-client transitively, so one entry covers both.
+# Without it those three launchers fail their own dep probe and exit 2 naming a package
+# nothing installed. It requires >= 3.10, which is why CSA_PYTHON_MIN exists.
+CSA_DOC_PY_DEPS=(pyyaml pymupdf csa-google-workspace)
 
 install_doc_toolchain() {
   ensure_brew_in_path
@@ -731,20 +798,36 @@ install_doc_toolchain() {
 }
 
 install_doc_python_deps() {
-  if ! has_command python3; then
-    warn "No python3 — skipping document preflight deps"
+  local py
+  if ! py="$(find_usable_python)"; then
+    warn "No python3 >= ${CSA_PYTHON_MIN} — skipping document preflight deps"
     return 0
   fi
 
   # Some other python3 on PATH may already satisfy them. Leave it alone.
-  if python3 -c 'import yaml, pymupdf' >/dev/null 2>&1; then
-    info "Document preflight deps already available to python3"
+  if "$py" -c 'import yaml, pymupdf, csa_google_workspace' >/dev/null 2>&1; then
+    info "Document preflight deps already available to $py"
     return 0
+  fi
+
+  # A venv created before this floor existed is a 3.9 venv and STAYS one - `python3 -m venv`
+  # does not upgrade a directory in place, so every later run would reuse it and reinstall
+  # into an interpreter csa-google-workspace refuses. Moved aside rather than deleted: other
+  # CSA repos install into this venv too, and a rename is something a person can undo.
+  if [[ -x "$CSA_VENV/bin/python3" ]] && ! python_meets_floor "$CSA_VENV/bin/python3"; then
+    local stale
+    stale="${CSA_VENV}.pre-${CSA_PYTHON_MIN}-$(date +%Y%m%d%H%M%S)"
+    warn "$CSA_VENV is $(get_version "$CSA_VENV/bin/python3" --version), below ${CSA_PYTHON_MIN}"
+    warn "  moving it to $stale and rebuilding"
+    mv "$CSA_VENV" "$stale" || {
+      warn "Could not move $CSA_VENV — skipping document preflight deps"
+      return 0
+    }
   fi
 
   if [[ ! -x "$CSA_VENV/bin/python3" ]]; then
     info "Creating Python venv at $CSA_VENV"
-    python3 -m venv "$CSA_VENV" || {
+    "$py" -m venv "$CSA_VENV" || {
       warn "Could not create $CSA_VENV — skipping document preflight deps"
       return 0
     }
