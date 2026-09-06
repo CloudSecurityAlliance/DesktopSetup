@@ -41,6 +41,9 @@ check python3 tools/check-paste-safety.py
 step "debug mode shows prompts"
 check python3 tests/test_prompt_visibility.py
 
+step "npm output filter"
+check python3 tests/test_npm_output_filter.py
+
 if command -v pwsh >/dev/null; then
   step "powershell parse"
   check pwsh -NoProfile -c '

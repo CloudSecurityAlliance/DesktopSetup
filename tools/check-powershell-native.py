@@ -34,7 +34,8 @@ callee ends the entire call in the caller. Measure it the way it is deployed or 
 
 So the only reliable guards are a `try/catch` around the call, or a wrapper that sets
 `$ErrorActionPreference` to `Continue` for the duration — `Invoke-NativeShow` /
-`Invoke-NativeOutput` / `Invoke-NativeQuiet` / `Invoke-NativeCapture` here, `Invoke-CsaNative`
+`Invoke-NativeOutput` / `Invoke-NativeQuiet` / `Invoke-NativeCapture` / `Invoke-NativeNpm`
+here, `Invoke-CsaNative`
 in CSA-Plugins. Wrappers are detected by what they DO (a function that sets `Continue`), not by
 name, so a new one in a new repo counts without editing this file.
 
@@ -61,7 +62,7 @@ NATIVE = ("winget", "npm", "npx", "node", "gh", "git", "claude", "python", "py",
 # define their own are handled by wrappers_in() below, so a new repo with a differently named
 # wrapper needs no edit here.
 WRAPPERS = ("Invoke-NativeShow", "Invoke-NativeOutput", "Invoke-NativeQuiet",
-            "Invoke-NativeCapture", "Invoke-CsaNative")
+            "Invoke-NativeCapture", "Invoke-NativeNpm", "Invoke-CsaNative")
 
 
 def wrappers_in(text: str) -> set[str]:

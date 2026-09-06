@@ -19,7 +19,7 @@
 
 $ErrorActionPreference = 'Stop'
 
-$ScriptVersion = "2026.04201930"
+$ScriptVersion = "2026.09052335"
 
 # ── Output helpers ──────────────────────────────────────────────────
 
@@ -340,6 +340,45 @@ function Invoke-NativeShow {
     finally { $ErrorActionPreference = $prev }
 }
 
+# Run npm with its output visible but its install-scripts noise removed — the PowerShell half
+# of the bash `csa_npm`, and the same reasoning (see macos-ai-tools.sh). npm 11.19+ ends every
+# global install with five lines of `npm warn install-scripts`, announcing that a FUTURE npm
+# will run native packages' install scripts only from an allowlist. They still run today; the
+# block is a pre-announcement. The people running this installer do not use npm and cannot tell
+# that from a failure, which is what issue #51 was.
+#
+# The $CsaLog branch deliberately does NOT filter: the moment anyone is actually debugging an
+# npm problem, those are the lines that diagnose it.
+#
+# Where the bash side has to choose `sed` over `grep -v` to keep npm's exit status, the hazard
+# on this side is the one this whole family exists for. Filtering means piping, and a pipe is
+# no safer than a bare call under $ErrorActionPreference='Stop' — a SUCCESSFUL npm that wrote
+# to stderr still terminates the caller on 5.1. 'Continue' goes on first, as in the siblings.
+# $LASTEXITCODE survives the pipeline because ForEach-Object and Where-Object are cmdlets, not
+# native commands, so nothing between npm and the caller resets it.
+function Invoke-NativeNpm {
+    param([scriptblock]$Call)
+    $noise = '^npm warn install-scripts|looking for funding$|run `npm fund` for details$'
+    $prev = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+    try {
+        if ($CsaLog) {
+            $captured = & $Call 2>&1 | ForEach-Object {
+                if ($_ -is [System.Management.Automation.ErrorRecord]) { $_.Exception.Message } else { $_ }
+            } | Tee-Object -Variable teed | Out-String
+            $code = $LASTEXITCODE
+            Write-CsaNativeLog $Call $code $captured
+            return $code
+        }
+        & $Call 2>&1 | ForEach-Object {
+            if ($_ -is [System.Management.Automation.ErrorRecord]) { $_.Exception.Message } else { $_ }
+        } | Where-Object { $_ -notmatch $noise }
+        return $LASTEXITCODE
+    }
+    catch { Write-CsaNativeLog $Call 1 $_.Exception.Message; return 1 }
+    finally { $ErrorActionPreference = $prev }
+}
+
 # Run a native command, shield against NativeCommandError, and return both
 # the merged stdout+stderr output (as a trimmed string) and the exit code.
 # Used when a caller needs to surface the command's error text on failure
@@ -579,14 +618,14 @@ function Install-NpmPackage {
 
     if (Has-Command $Bin) {
         Write-Info "Updating $Label"
-        $null = Invoke-NativeShow { npm update -g $Package }
+        $null = Invoke-NativeNpm { npm update -g $Package }
         if ($LASTEXITCODE -ne 0) {
-            $null = Invoke-NativeShow { npm install -g $Package }
+            $null = Invoke-NativeNpm { npm install -g $Package }
             if ($LASTEXITCODE -ne 0) { Write-Warn "Failed to update $Label" }
         }
     } else {
         Write-Info "Installing $Label"
-        $null = Invoke-NativeShow { npm install -g $Package }
+        $null = Invoke-NativeNpm { npm install -g $Package }
         if ($LASTEXITCODE -ne 0) { Write-Warn "Failed to install $Label" }
     }
 }

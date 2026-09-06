@@ -25,7 +25,7 @@
 
 set -euo pipefail
 
-SCRIPT_VERSION="2026.08241200"
+SCRIPT_VERSION="2026.09052335"
 
 # ── CSA plugin marketplaces ─────────────────────────────────────────
 # Plugin marketplaces to register with Claude Code. Each entry is an
@@ -300,6 +300,34 @@ check_running_tools() {
 # ── Helpers ─────────────────────────────────────────────────────────
 
 has_command() { command -v "$1" >/dev/null 2>&1; }
+
+# npm 11.19+ ends a global install with an `npm warn install-scripts` block: native dependencies
+# (node-pty and @github/keytar, under the Gemini CLI) declare install scripts that a future npm
+# will run only from an allowlist. Measured on npm 11.19.0 / node 26.8.1 — what Homebrew ships,
+# so what a clean machine gets — the scripts still RUN: `node-pty/build/` holds the node-gyp
+# Makefiles afterwards and both modules load. It is a pre-announcement, not a failure.
+#
+# It does not read like one (issue #51). This installer is run by people who do not use npm, on
+# a machine they were handed an hour ago, and five lines of `npm warn` under "Updating Gemini
+# CLI" is indistinguishable from something breaking. The funding footer goes for the same
+# reason. Both are kept verbatim under CSA_DEBUG=1, where anyone debugging npm needs them.
+#
+# sed, not `grep -v`: `set -o pipefail` is on and a grep matching nothing exits 1, so on the day
+# npm stops printing this block a clean run would start reporting failure — `npm update -g X ||
+# npm install -g X` taking its fallback for nothing, and macos-update.sh warning about an update
+# that worked. sed exits 0 whatever it matches, so npm's own status propagates.
+# tests/test_npm_output_filter.py holds that case, and the `grep -v` control proving it is real.
+csa_npm() {
+  if csa_debug_requested; then
+    npm "$@"
+  else
+    # shellcheck disable=SC2086
+    npm "$@" 2>&1 | sed ${CSA_SED_UNBUF} \
+      -e '/^npm warn install-scripts/d' \
+      -e '/looking for funding$/d' \
+      -e '/run `npm fund` for details$/d'
+  fi
+}
 
 get_version() {
   local cmd="$1"; shift
@@ -986,10 +1014,10 @@ install_codex() {
 
   if [[ -z "$codex_needs_migration" ]] && has_command codex; then
     info "Updating Codex CLI"
-    npm update -g @openai/codex || npm install -g @openai/codex || warn "Failed to update Codex CLI"
+    csa_npm update -g @openai/codex || csa_npm install -g @openai/codex || warn "Failed to update Codex CLI"
   else
     info "Installing Codex CLI"
-    npm install -g @openai/codex || warn "Failed to install Codex CLI"
+    csa_npm install -g @openai/codex || warn "Failed to install Codex CLI"
   fi
 }
 
@@ -1005,10 +1033,10 @@ install_gemini() {
 
   if [[ -z "$gemini_needs_migration" ]] && has_command gemini; then
     info "Updating Gemini CLI"
-    npm update -g @google/gemini-cli || npm install -g @google/gemini-cli || warn "Failed to update Gemini CLI"
+    csa_npm update -g @google/gemini-cli || csa_npm install -g @google/gemini-cli || warn "Failed to update Gemini CLI"
   else
     info "Installing Gemini CLI"
-    npm install -g @google/gemini-cli || warn "Failed to install Gemini CLI"
+    csa_npm install -g @google/gemini-cli || warn "Failed to install Gemini CLI"
   fi
 }
 
