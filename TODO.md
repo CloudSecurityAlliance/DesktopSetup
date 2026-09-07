@@ -47,6 +47,34 @@ Audit performed 2026-02-24. Issues grouped by priority.
 
 ---
 
+## Tier-2 (Ubuntu) — deferred, decide later
+
+Both of these are credential-policy questions more than engineering ones, so they are parked
+rather than half-built. Scope and package traps are settled (see #57); these are what remains.
+
+- [ ] **T1 — Headless authentication for tier 2.** `gh auth login`, `claude` login and MCP
+  `/mcp` OAuth all assume a browser and a person, so none of them work on a VM an agent is
+  driving. This is the wall the weekly sweep routine is parked behind
+  ([`docs/periodic-sweep.md`](docs/periodic-sweep.md)). Options not yet weighed: device-code
+  flows where the tool supports one, injected long-lived tokens, or a credential-provisioning
+  step outside the installer. **Deferred deliberately** — picking a mechanism commits CSA to a
+  credential posture, and that is not a decision to make as a side effect of writing a script.
+
+- [ ] **T2 — AWS credentials on a headless box.** Several viable routes and no comparison yet:
+  the AWS CLI's own configuration, static API keys, AWS SSO (another browser flow), or — most
+  promising — an **EC2 instance role**, since [DEC-006](https://github.com/CloudSecurityAlliance-Internal/CINO-Platform-Engineering/blob/main/DECISIONS.md)
+  already mandates IAM-first with no stored credentials. If tier-2 VMs run inside AWS, the
+  instance role solves this *by construction* and much of T1 with it — but that would make
+  "runs in AWS" a tier-2 requirement, which is exactly the kind of constraint worth choosing on
+  purpose rather than discovering. Blocks Terraform state access (S3 + locking) either way.
+
+Related and also unspecified: `ansible-galaxy` collections (`amazon.aws` is not installed by
+installing Ansible), 1Password service accounts (`OP_SERVICE_ACCOUNT_TOKEN`) for headless secret
+access per DEC-011, git identity/signing on an ephemeral VM, and whether tier 2 wants an update
+path at all or should only ever be provisioned from cold.
+
+---
+
 ## Security Audit Findings
 
 Audit performed 2026-02-24.
