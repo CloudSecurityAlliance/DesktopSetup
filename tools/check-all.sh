@@ -35,6 +35,9 @@ check python3 tools/check-duplication.py
 step "native-call guards"
 check python3 tools/check-powershell-native.py
 
+step "pipeline assignments cannot kill the script"
+check python3 tools/check-pipeline-assignments.py
+
 step "paste safety"
 check python3 tools/check-paste-safety.py
 
@@ -49,6 +52,9 @@ check python3 tests/test_version_floors.py
 
 step "venv replacement safety"
 check python3 tests/test_venv_replacement.py
+
+step "a failing tool must not kill the installer"
+check python3 tests/test_survives_tool_failure.py
 
 if command -v pwsh >/dev/null; then
   step "powershell parse"

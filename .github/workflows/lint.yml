@@ -116,6 +116,9 @@ jobs:
       - name: Windows PowerShell 5.1 hazards
         run: python3 tools/check-powershell-native.py
 
+      - name: Assignments from a pipeline must not kill the script
+        run: python3 tools/check-pipeline-assignments.py
+
       - name: README must not ask for a multi-line paste
         run: python3 tools/check-paste-safety.py
 
@@ -133,3 +136,6 @@ jobs:
 
       - name: Replacing the shared venv must not lose it
         run: python3 tests/test_venv_replacement.py
+
+      - name: A failing tool must not kill the installer (#51)
+        run: python3 tests/test_survives_tool_failure.py
