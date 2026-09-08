@@ -25,7 +25,7 @@
 
 set -euo pipefail
 
-SCRIPT_VERSION="2026.09061330"
+SCRIPT_VERSION="2026.09081420"
 
 # ── CSA plugin marketplaces ─────────────────────────────────────────
 # Plugin marketplaces to register with Claude Code. Each entry is an
@@ -872,17 +872,44 @@ install_doc_python_deps() {
 
   # A venv created before this floor existed is a 3.9 venv and STAYS one - `python3 -m venv`
   # does not upgrade a directory in place, so every later run would reuse it and reinstall
-  # into an interpreter csa-google-workspace refuses. Moved aside rather than deleted: other
-  # CSA repos install into this venv too, and a rename is something a person can undo.
+  # into an interpreter csa-google-workspace refuses. It has to be replaced.
+  #
+  # BUILD FIRST, SWAP LAST. The obvious order - move the old one aside, then create the new
+  # one - leaves the machine with NO venv when creation fails, and a sub-floor venv is not
+  # worthless: it is below what csa-google-workspace needs but still serves csa-preflight,
+  # which imports only yaml and fitz. Losing that is a regression caused by the repair.
+  # Moved aside rather than deleted, because other CSA repos install into this venv too and a
+  # rename is something a person can undo.
   if [[ -x "$CSA_VENV/bin/python3" ]] && ! python_meets_floor "$CSA_VENV/bin/python3"; then
-    local stale
-    stale="${CSA_VENV}.pre-${CSA_PYTHON_MIN}-$(date +%Y%m%d%H%M%S)"
-    warn "$CSA_VENV is $(get_version "$CSA_VENV/bin/python3" --version), below ${CSA_PYTHON_MIN}"
-    warn "  moving it to $stale and rebuilding"
-    mv "$CSA_VENV" "$stale" || {
-      warn "Could not move $CSA_VENV — skipping document preflight deps"
+    # Never move a venv that is ACTIVE in the calling shell: $VIRTUAL_ENV and the python3 on
+    # that shell's PATH would both dangle, and the person is left debugging their own prompt.
+    if [[ -n "${VIRTUAL_ENV:-}" ]] && [[ "${VIRTUAL_ENV%/}" == "${CSA_VENV%/}" ]]; then
+      warn "$CSA_VENV is below ${CSA_PYTHON_MIN} but is ACTIVE in this shell — leaving it alone"
+      warn "  run 'deactivate', then re-run this script to rebuild it"
       return 0
-    }
+    fi
+
+    local build stale
+    build="${CSA_VENV}.new.$$"
+    rm -rf "$build"
+    info "Rebuilding $CSA_VENV — it is $(get_version "$CSA_VENV/bin/python3" --version), below ${CSA_PYTHON_MIN}"
+    if ! "$py" -m venv "$build"; then
+      rm -rf "$build"
+      warn "Could not build a replacement venv — leaving $CSA_VENV exactly as it was"
+      return 0
+    fi
+
+    stale="${CSA_VENV}.pre-${CSA_PYTHON_MIN}-$(date +%Y%m%d%H%M%S)"
+    if ! mv "$CSA_VENV" "$stale"; then
+      rm -rf "$build"
+      warn "Could not move $CSA_VENV aside — leaving it exactly as it was"
+      return 0
+    fi
+    if ! mv "$build" "$CSA_VENV"; then
+      warn "Could not install the replacement venv; the old one is at $stale"
+      return 0
+    fi
+    warn "$CSA_VENV rebuilt; the previous one is at $stale (delete it once you are happy)"
   fi
 
   if [[ ! -x "$CSA_VENV/bin/python3" ]]; then

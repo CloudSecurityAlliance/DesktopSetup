@@ -130,3 +130,6 @@ jobs:
 
       - name: Interpreter/runtime floors reject what the OS ships
         run: python3 tests/test_version_floors.py
+
+      - name: Replacing the shared venv must not lose it
+        run: python3 tests/test_venv_replacement.py
