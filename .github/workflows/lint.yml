@@ -128,6 +128,9 @@ jobs:
       - name: Debug mode must not swallow interactive prompts
         run: python3 tests/test_prompt_visibility.py
 
+      - name: A headless run must not block on a prompt (DEC-013 tier 2)
+        run: python3 tests/test_headless.py
+
       - name: npm noise filtered without hiding npm failures
         run: python3 tests/test_npm_output_filter.py
 
