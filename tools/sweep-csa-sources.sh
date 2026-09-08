@@ -226,6 +226,59 @@ else
   ok "no MCP server is waiting to be wired up"
 fi
 
+# ── 4. version floors ───────────────────────────────────────────────────────────
+# CSA_PYTHON_MIN and the Node floor are DERIVED values: the rule this repo follows is that a
+# floor comes from the consumer that asks for most, never from a number someone picked. That
+# makes them a drift risk nothing else watches — if upstream raises its requirement, the
+# installer keeps happily accepting an interpreter the tooling will then refuse, and the
+# failure surfaces far away (which is exactly how #53 played out).
+#
+# Lives here rather than in check-all.sh for the same reason as everything else in this file:
+# it needs the network, and a check that cannot pass in CI is a check that gets deleted.
+step "4. version floors still match what upstream asks for"
+floor_drift=0
+
+# Python: CSA-Document-Pipeline's pyproject.toml is the authority.
+declared_py="$(grep -m1 '^CSA_PYTHON_MIN=' scripts/macos-ai-tools.sh | cut -d'"' -f2)"
+upstream_py="$(gh api "repos/CloudSecurityAlliance-Internal/CSA-Document-Pipeline/contents/pyproject.toml" \
+  --jq '.content' 2>/dev/null | base64 --decode 2>/dev/null \
+  | grep -m1 'requires-python' | grep -oE '[0-9]+\.[0-9]+')" || upstream_py=""
+if [[ -z "$upstream_py" ]]; then
+  probe_errors=$((probe_errors + 1))
+  err "could not read requires-python from CSA-Document-Pipeline — floor NOT verified"
+elif [[ "$declared_py" != "$upstream_py" ]]; then
+  drift "PYTHON FLOOR: scripts say $declared_py, CSA-Document-Pipeline requires-python says $upstream_py"
+  drift "  -> update CSA_PYTHON_MIN in macos-ai-tools.sh (and \$CsaPythonMin in windows-ai-tools.ps1)"
+  floor_drift=1
+else
+  note "python floor $declared_py matches upstream requires-python"
+fi
+
+# Node: whichever npm package we install asks for most. Wrangler binds today; that can change.
+declared_node="$(grep -m1 'local min=' scripts/macos-ai-tools.sh | grep -oE '[0-9]+')"
+node_needed=0
+for pkg in wrangler @google/gemini-cli @openai/codex typescript; do
+  want="$(npm view "$pkg" engines.node 2>/dev/null | grep -oE '[0-9]+' | head -1)" || want=""
+  [[ -n "$want" ]] || continue
+  [[ "$want" -le "$node_needed" ]] || { node_needed="$want"; node_who="$pkg"; }
+done
+if [[ "$node_needed" -eq 0 ]]; then
+  probe_errors=$((probe_errors + 1))
+  err "could not read engines.node from any package — Node floor NOT verified"
+elif [[ "$declared_node" -lt "$node_needed" ]]; then
+  drift "NODE FLOOR: scripts say $declared_node, ${node_who} needs >= $node_needed"
+  drift "  -> update node_meets_floor in macos-ai-tools.sh AND macos-work-tools.sh (byte-identical)"
+  floor_drift=1
+else
+  note "node floor $declared_node covers the highest requirement ($node_needed, from ${node_who:-?})"
+fi
+
+if [[ $floor_drift -eq 1 ]]; then
+  found_drift=1
+else
+  ok "both version floors still match what upstream asks for"
+fi
+
 # ── summary ─────────────────────────────────────────────────────────────────────
 printf '\n'
 if [[ $probe_errors -gt 0 ]]; then

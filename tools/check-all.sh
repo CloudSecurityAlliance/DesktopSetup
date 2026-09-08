@@ -44,6 +44,9 @@ check python3 tools/check-paste-safety.py
 step "debug mode shows prompts"
 check python3 tests/test_prompt_visibility.py
 
+step "a headless run must not block on a prompt"
+check python3 tests/test_headless.py
+
 step "npm output filter"
 check python3 tests/test_npm_output_filter.py
 

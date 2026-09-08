@@ -161,3 +161,34 @@ pushing.
 Judgement required, and the sweep cannot make it for you: **a plugin existing is not a
 plugin being ready for every new hire.** The sweep reports what is published; deciding
 what belongs in a default install is a human call.
+
+## 4. Version floors no longer match upstream
+
+**What it means.** `CSA_PYTHON_MIN` and the Node floor in `node_meets_floor` are **derived**
+values — the rule is that a floor comes from the consumer that asks for most, never from a
+number someone picked. The sweep re-derives them:
+
+- **Python** — reads `requires-python` from `CSA-Document-Pipeline/pyproject.toml`.
+- **Node** — takes the highest `engines.node` among `wrangler`, `@google/gemini-cli`,
+  `@openai/codex` and `typescript`. Wrangler binds today at `>= 22.0.0`; that is not permanent,
+  which is the point of checking rather than remembering.
+
+**Why it is here and not in `check-all.sh`.** It needs the network and `gh`. Same rule as the
+rest of this file.
+
+**What to do with a finding.**
+
+- *Python floor drift* — update `CSA_PYTHON_MIN` in `macos-ai-tools.sh` **and**
+  `$CsaPythonMin` in `windows-ai-tools.ps1`, bump both `SCRIPT_VERSION`s. Then check whether
+  `CSA_PYTHON_PREFERRED` still clears the new floor.
+- *Node floor drift* — update `node_meets_floor` in `macos-ai-tools.sh` **and**
+  `macos-work-tools.sh`. Those two must stay byte-identical or `check-duplication.py` fails,
+  which is deliberate.
+
+**Why this section exists.** Nothing else notices. The installer keeps cheerfully accepting an
+interpreter or runtime that the tooling downstream will then refuse, and the failure surfaces
+somewhere else entirely — which is exactly how #53 played out, several hundred lines into a pip
+resolver, long after the point where the real problem had been reported as fine.
+
+A probe failure here increments `probe_errors`, so it exits **2** rather than reporting "no
+drift". An unverified floor is not a matching floor.
