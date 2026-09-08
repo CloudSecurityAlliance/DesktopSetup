@@ -56,7 +56,7 @@ TODO.md                     # Audit findings, priority-grouped with file:line ci
 - Target macOS only (checks `uname -s` at startup)
 - `macos-work-tools.sh` base layer: Xcode CLI Tools → Homebrew → Node.js/npm
 - `macos-ai-tools.sh` base layer: Xcode CLI Tools → Homebrew → Node.js/npm → uv → Python
-- **Python comes from uv, with Homebrew as the fallback** (CINO-Platform-Engineering DEC-012). `install_uv` runs before `install_python`; `install_python` provisions `CSA_PYTHON_PREFERRED` via `uv python install` and only falls back to `brew install python` if uv is missing or fails. Both floors are taken from the consumer that asks for most, never picked: `CSA_PYTHON_MIN=3.10` from CSA-Document-Pipeline's `requires-python`, and the Node floor of 22 from Wrangler's `engines.node`. **uv creates no PATH shims for interpreters it manages** (measured, uv 0.12.10), so `find_usable_python` / `Find-UsablePython` probe PATH first and then ask `uv python find` directly — PATH probing alone would miss a good uv Python and install a second one.
+- **Python comes from uv, with Homebrew as the fallback** (CINO-Platform-Engineering DEC-012). `install_uv` runs before `install_python`; `install_python` provisions `CSA_PYTHON_PREFERRED` via `uv python install` and only falls back to `brew install python` if uv is missing or fails. **But it provisions nothing at all when the machine already has a floor-clearing Python** — `install_python` returns early on any `find_usable_python` hit, deliberately, so an existing install is never churned. So the honest claim is *clean machines converge on `CSA_PYTHON_PREFERRED`*, not *every machine runs the same version*: a Mac that already had `brew install python` keeps 3.14, and the cross-platform version split is closed for new machines only. Both floors are taken from the consumer that asks for most, never picked: `CSA_PYTHON_MIN=3.10` from CSA-Document-Pipeline's `requires-python`, and the Node floor of 22 from Wrangler's `engines.node`. **uv creates no PATH shims for interpreters it manages** (measured, uv 0.12.10), so `find_usable_python` / `Find-UsablePython` probe PATH first and then ask `uv python find` directly — PATH probing alone would miss a good uv Python and install a second one.
 - Must be idempotent — safe to run multiple times
 - Must be interactive by default (show plan, ask for confirmation)
 - Support `NONINTERACTIVE=1` for CI/automation — also auto-detected when `$CI` is set or stdin is not a TTY
@@ -83,7 +83,7 @@ TODO.md                     # Audit findings, priority-grouped with file:line ci
 All scripts declare a version string near the top — `SCRIPT_VERSION="YYYY.MMDDHHSS"` in the bash scripts, `$ScriptVersion = "YYYY.MMDDHHSS"` in the PowerShell scripts. Update this value when making changes — use the current date/time in that format.
 
 ### Shared boilerplate
-**These are checked now, not just documented.** `.github/workflows/lint.yml` runs on every PR: `bash -n` + shellcheck on the `.sh` files, and — because GitHub runners have `pwsh` and the authoring machine does not — a **parse check and PSScriptAnalyzer on the `.ps1` files**, which had never been verified anywhere before. Plus two repo-specific checks in `tools/`:
+**These are checked now, not just documented.** `.github/workflows/lint.yml` runs on every PR: `bash -n` + shellcheck on the `.sh` files, and — because GitHub runners have `pwsh` and the authoring machine does not — a **parse check and PSScriptAnalyzer on the `.ps1` files**, which had never been verified anywhere before. Plus four repo-specific checks in `tools/` (`check-duplication.py`, `check-powershell-native.py`, `check-paste-safety.py`, `check-shell-tail-conditionals.py`), the first two of which are worth explaining:
 
 - **`check-duplication.py`** — a function duplicated across scripts must be byte-identical in behaviour (comments and whitespace ignored). Names that are *meant* to differ live in its `PER_SCRIPT` map with a reason, so allowing a difference is a deliberate act. This turns the instruction below from a discipline into a check; when it was first run, twelve functions had already drifted.
 - **`check-powershell-native.py`** — a native command (`winget`, `npm`, `gh`, `claude`, `git`, `icacls`, …) invoked in a script that sets `$ErrorActionPreference = 'Stop'` must go through a wrapper that sets `'Continue'`, or a `try/catch`. When first run this found 14 unguarded calls, 13 of them in `windows-work-tools.ps1`, including every `winget install/upgrade` and `npm install -g`; npm writes deprecation warnings to stderr routinely, so that script terminated on a *successful* run.
@@ -115,7 +115,7 @@ iex`, which passes no argument vector at all (`NONINTERACTIVE` already works thi
 
 Two different mechanisms, for a reason:
 
-- **PowerShell:** the four `Invoke-Native*` wrappers log. Nothing at the call sites changed,
+- **PowerShell:** the five `Invoke-Native*` wrappers log. Nothing at the call sites changed,
   because `check-powershell-native.py` already guarantees every native command goes through
   one — the wrappers were already the choke point.
 - **bash:** `exec > >(csa_redact | tee -a "$CSA_LOG") 2>&1`, process-wide. There is no
@@ -206,7 +206,15 @@ Deliberately **not** in `check-all.sh`: it needs the network and a `gh` token wi
 All macOS scripts follow the same pattern: `main` → preconditions → preflight (show plan) → confirm → action steps → summary. `macos-ai-tools.sh` adds a migration layer: `detect_migrations()` runs during preflight, then `migrate_*()` runs before each tool's install to remove wrong-method installs. `macos-update.sh` takes a pre-update snapshot (to `~/Library/Logs/CSA-DesktopSetup/`) before showing the plan, enabling version rollback if updates break something.
 
 ### Validation
-No test suite. Use these to check scripts:
+**Run `./tools/check-all.sh`** — it mirrors CI. There *is* a test suite now (this section used to say there wasn't):
+
+- `tests/test_prompt_visibility.py` — debug mode must not swallow interactive prompts (uses a real pty; three simpler harnesses each produced a false negative)
+- `tests/test_npm_output_filter.py` — npm's install-scripts noise is dropped without hiding npm's failures, and keeps the `grep -v` version as a control so the test can still detect the regression
+- `tests/test_version_floors.py` — the interpreter/runtime floors reject what the OS ships (asserts the real `/usr/bin/python3` on macOS, stubs the selection logic so it behaves identically on CI's Linux)
+- `tests/test_venv_replacement.py` — replacing the shared venv never leaves the machine worse than it found it; keeps the move-first ordering as a control
+- `tests/NativeWrappers.Tests.ps1` — the five `Invoke-Native*` wrappers' contract, run under pwsh 7 locally and under real Windows PowerShell 5.1 in CI
+
+Every one of these extracts the code under test out of the shipping script rather than copying it, so a test cannot drift from what runs. The lower-level checks:
 ```bash
 # macOS — syntax check
 bash -n scripts/macos-work-tools.sh

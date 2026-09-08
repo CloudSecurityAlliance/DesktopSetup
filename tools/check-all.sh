@@ -47,6 +47,9 @@ check python3 tests/test_npm_output_filter.py
 step "version floors"
 check python3 tests/test_version_floors.py
 
+step "venv replacement safety"
+check python3 tests/test_venv_replacement.py
+
 if command -v pwsh >/dev/null; then
   step "powershell parse"
   check pwsh -NoProfile -c '

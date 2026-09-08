@@ -46,8 +46,8 @@ BeforeAll {
     # about the wrappers' contract, and asserting it holds with logging OFF is asserting it
     # for the path every normal run takes.
     $wanted = 'Invoke-NativeQuiet', 'Invoke-NativeOutput', 'Invoke-NativeShow',
-              'Invoke-NativeCapture', 'Write-CsaLog', 'Write-CsaNativeLog',
-              'Expand-CsaCommandText'
+              'Invoke-NativeCapture', 'Invoke-NativeNpm', 'Write-CsaLog',
+              'Write-CsaNativeLog', 'Expand-CsaCommandText'
     $definitions = $ast.FindAll(
         { $args[0] -is [System.Management.Automation.Language.FunctionDefinitionAst] }, $true)
     foreach ($definition in $definitions) {
@@ -58,8 +58,8 @@ BeforeAll {
 }
 
 Describe 'the wrappers are defined in the script under test' {
-    It 'defines all four' {
-        foreach ($n in 'Invoke-NativeQuiet','Invoke-NativeOutput','Invoke-NativeShow','Invoke-NativeCapture') {
+    It 'defines all five' {
+        foreach ($n in 'Invoke-NativeQuiet','Invoke-NativeOutput','Invoke-NativeShow','Invoke-NativeCapture','Invoke-NativeNpm') {
             Get-Command $n -ErrorAction SilentlyContinue | Should -Not -BeNullOrEmpty
         }
     }
@@ -241,5 +241,59 @@ Describe 'Expand-CsaCommandText' {
     It 'skips a collection and an over-long value, which are noise on a command line' {
         Expand-CsaCommandText { echo $tbl }  | Should -Be 'echo $tbl'
         Expand-CsaCommandText { echo $long } | Should -Be 'echo $long'
+    }
+}
+
+Describe 'Invoke-NativeNpm' {
+    # The fifth wrapper, added for npm's install-scripts noise. It had no coverage at all while
+    # the other four had twenty-six tests between them — found by an adversarial review of the
+    # change that introduced it, not by anything failing.
+    #
+    # What matters here is that filtering did not cost the contract the other four keep. A pipe
+    # is no safer than a bare call under $ErrorActionPreference='Stop', so the wrapper must
+    # still set 'Continue' first, still return the command's own exit code through a pipeline
+    # of cmdlets, and still restore the preference on the way out.
+
+    It 'returns the exit code of a successful command' {
+        $code = Invoke-NativeNpm { & cmd.exe /c "exit 0" }
+        if (-not $IsWindows -and $null -ne $IsWindows) { Set-ItResult -Skipped -Because 'cmd.exe' }
+        else { $code | Should -Be 0 }
+    }
+
+    It 'drops the install-scripts block but keeps everything else' {
+        # Stand in for npm: one line that must survive, and the block that must not.
+        $out = Invoke-NativeNpm {
+            Write-Output 'changed 1 package in 726ms'
+            Write-Output '15 packages are looking for funding'
+            Write-Output '  run `npm fund` for details'
+            Write-Output 'npm warn install-scripts 2 packages have install scripts'
+            Write-Output 'npm warn install-scripts   node-pty@1.0.0 (postinstall: ...)'
+        } 6>$null
+        $text = ($out | Out-String)
+        $text | Should -Match 'changed 1 package'
+        $text | Should -Not -Match 'install-scripts'
+        $text | Should -Not -Match 'looking for funding'
+        $text | Should -Not -Match 'npm fund'
+    }
+
+    It 'never filters a real npm error' {
+        $out = Invoke-NativeNpm { Write-Output 'npm error code E404'; Write-Output 'npm error 404 Not Found' }
+        ($out | Out-String) | Should -Match 'E404'
+    }
+
+    It 'restores $ErrorActionPreference' {
+        $before = $ErrorActionPreference
+        $null = Invoke-NativeNpm { Write-Output 'x' }
+        $ErrorActionPreference | Should -Be $before
+    }
+
+    It 'restores $ErrorActionPreference even when the scriptblock throws' {
+        $before = $ErrorActionPreference
+        $null = Invoke-NativeNpm { throw 'boom' }
+        $ErrorActionPreference | Should -Be $before
+    }
+
+    It 'returns 1 rather than propagating a throw' {
+        Invoke-NativeNpm { throw 'boom' } | Should -Be 1
     }
 }
