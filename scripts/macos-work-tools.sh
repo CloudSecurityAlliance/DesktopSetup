@@ -24,7 +24,7 @@
 
 set -euo pipefail
 
-SCRIPT_VERSION="2026.09061240"
+SCRIPT_VERSION="2026.09081530"
 
 # ── Output helpers ──────────────────────────────────────────────────
 
@@ -464,7 +464,10 @@ install_homebrew() {
 # it is the runtime for building Cloudflare Workers and TypeScript.
 node_meets_floor() {
   local min=22 major
-  major="$(node --version 2>/dev/null | sed 's/^v//; s/\..*//')"
+  # `|| major=""` is not decoration: under pipefail a missing or broken `node` makes this
+  # pipeline non-zero, the assignment inherits it, and set -e kills the caller. That is the
+  # #51 class, and tools/check-pipeline-assignments.py now fails on it.
+  major="$(node --version 2>/dev/null | sed 's/^v//; s/\..*//')" || major=""
   if [[ ! "$major" =~ ^[0-9]+$ ]]; then
     return 1
   fi

@@ -17,7 +17,7 @@
 
 set -euo pipefail
 
-SCRIPT_VERSION="2026.04271200"
+SCRIPT_VERSION="2026.09081530"
 
 # ── CSA plugin marketplaces ─────────────────────────────────────────
 # Registered in sync_plugin_marketplaces() regardless of whether
@@ -307,7 +307,7 @@ install_plugins_preview() {
   local installed_plugins=""
   if has_command claude; then
     installed_plugins="$(claude plugin list 2>/dev/null \
-      | grep -oE '[A-Za-z0-9._-]+@[A-Za-z0-9._-]+')"
+      | grep -oE '[A-Za-z0-9._-]+@[A-Za-z0-9._-]+')" || installed_plugins=""
   fi
 
   local total=0 already=0 line
@@ -345,9 +345,9 @@ install_plugins() {
 
   local registered_repos installed_plugins
   registered_repos="$(claude plugin marketplace list 2>/dev/null \
-    | sed -n 's/.*GitHub (\([^)]*\)).*/\1/p')"
+    | sed -n 's/.*GitHub (\([^)]*\)).*/\1/p')" || registered_repos=""
   installed_plugins="$(claude plugin list 2>/dev/null \
-    | grep -oE '[A-Za-z0-9._-]+@[A-Za-z0-9._-]+')"
+    | grep -oE '[A-Za-z0-9._-]+@[A-Za-z0-9._-]+')" || installed_plugins=""
 
   local gh_authed=0
   if has_command gh && gh auth status >/dev/null 2>&1; then gh_authed=1; fi
@@ -444,7 +444,7 @@ sync_plugin_marketplaces() {
   if has_command gh && gh auth status >/dev/null 2>&1; then
     local already_added
     already_added="$(claude plugin marketplace list 2>/dev/null \
-      | sed -n 's/.*GitHub (\([^)]*\)).*/\1/p')"
+      | sed -n 's/.*GitHub (\([^)]*\)).*/\1/p')" || already_added=""
 
     local added=() failed=() failed_errs=()
     local repo add_err

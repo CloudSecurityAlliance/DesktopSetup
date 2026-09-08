@@ -25,7 +25,7 @@
 
 set -euo pipefail
 
-SCRIPT_VERSION="2026.09081420"
+SCRIPT_VERSION="2026.09081530"
 
 # ── CSA plugin marketplaces ─────────────────────────────────────────
 # Plugin marketplaces to register with Claude Code. Each entry is an
@@ -694,7 +694,10 @@ install_homebrew() {
 # it is the runtime for building Cloudflare Workers and TypeScript.
 node_meets_floor() {
   local min=22 major
-  major="$(node --version 2>/dev/null | sed 's/^v//; s/\..*//')"
+  # `|| major=""` is not decoration: under pipefail a missing or broken `node` makes this
+  # pipeline non-zero, the assignment inherits it, and set -e kills the caller. That is the
+  # #51 class, and tools/check-pipeline-assignments.py now fails on it.
+  major="$(node --version 2>/dev/null | sed 's/^v//; s/\..*//')" || major=""
   if [[ ! "$major" =~ ^[0-9]+$ ]]; then
     return 1
   fi
@@ -1256,7 +1259,7 @@ setup_plugin_marketplaces() {
   # list format: "    Source: GitHub (ORG/REPO)"
   local already_added
   already_added="$(claude plugin marketplace list 2>/dev/null \
-    | sed -n 's/.*GitHub (\([^)]*\)).*/\1/p')"
+    | sed -n 's/.*GitHub (\([^)]*\)).*/\1/p')" || already_added=""
 
   local added=() failed=() failed_errs=()
   local repo add_err
@@ -1400,7 +1403,7 @@ install_plugins_preview() {
   local installed_plugins=""
   if has_command claude; then
     installed_plugins="$(claude plugin list 2>/dev/null \
-      | grep -oE '[A-Za-z0-9._-]+@[A-Za-z0-9._-]+')"
+      | grep -oE '[A-Za-z0-9._-]+@[A-Za-z0-9._-]+')" || installed_plugins=""
   fi
 
   local total=0 already=0 line
@@ -1439,9 +1442,9 @@ install_plugins() {
   # Snapshot already-registered marketplaces and already-installed plugins.
   local registered_repos installed_plugins
   registered_repos="$(claude plugin marketplace list 2>/dev/null \
-    | sed -n 's/.*GitHub (\([^)]*\)).*/\1/p')"
+    | sed -n 's/.*GitHub (\([^)]*\)).*/\1/p')" || registered_repos=""
   installed_plugins="$(claude plugin list 2>/dev/null \
-    | grep -oE '[A-Za-z0-9._-]+@[A-Za-z0-9._-]+')"
+    | grep -oE '[A-Za-z0-9._-]+@[A-Za-z0-9._-]+')" || installed_plugins=""
 
   local gh_authed=0
   if has_command gh && gh auth status >/dev/null 2>&1; then gh_authed=1; fi

@@ -273,7 +273,7 @@ echo ""
 if [[ -t 0 ]]; then
   while true; do
     read -r -p "  Clone to default location, or choose your own? [yes/No] " reply
-    reply_lower="$(echo "$reply" | tr '[:upper:]' '[:lower:]')"
+    reply_lower="$(echo "$reply" | tr '[:upper:]' '[:lower:]')" || reply_lower=""
     case "$reply_lower" in
       y|yes)
         BASE_DIR="$DEFAULT_BASE"
@@ -325,7 +325,7 @@ if [[ -t 0 ]]; then
   echo ""
   while true; do
     read -r -p "  Proceed? [y/N] " confirm_reply
-    confirm_lower="$(echo "$confirm_reply" | tr '[:upper:]' '[:lower:]')"
+    confirm_lower="$(echo "$confirm_reply" | tr '[:upper:]' '[:lower:]')" || confirm_lower=""
     case "$confirm_lower" in
       y|yes) break ;;
       n|no|"") abort "Aborted." ;;
