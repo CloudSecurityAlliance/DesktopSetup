@@ -39,7 +39,11 @@ scripts/
   csa-plugins-internal.txt  # CSA-internal default plugin list (fetched from HEAD at runtime)
 tools/
   check-all.sh              # Everything CI runs, locally, in one command
+  check-*.py                # Repo-specific static checks — all five also run in CI
   sweep-csa-sources.sh      # Weekly drift sweep (network + gh, NOT in check-all.sh)
+tests/
+  test_*.py                 # Standalone executables — run one directly with python3
+  NativeWrappers.Tests.ps1  # Pester; the only suite needing real 5.1 to mean anything
 archives/                   # Previous script versions for reference
 docs/
   periodic-sweep.md         # Weekly sweep runbook — what drifts and where to fix it
@@ -83,7 +87,7 @@ TODO.md                     # Audit findings, priority-grouped with file:line ci
 All scripts declare a version string near the top — `SCRIPT_VERSION="YYYY.MMDDHHSS"` in the bash scripts, `$ScriptVersion = "YYYY.MMDDHHSS"` in the PowerShell scripts. Update this value when making changes — use the current date/time in that format.
 
 ### Shared boilerplate
-**These are checked now, not just documented.** `.github/workflows/lint.yml` runs on every PR: `bash -n` + shellcheck on the `.sh` files, and — because GitHub runners have `pwsh` and the authoring machine does not — a **parse check and PSScriptAnalyzer on the `.ps1` files**, which had never been verified anywhere before. Plus four repo-specific checks in `tools/` (`check-duplication.py`, `check-powershell-native.py`, `check-paste-safety.py`, `check-shell-tail-conditionals.py`), the first two of which are worth explaining:
+**These are checked now, not just documented.** `.github/workflows/lint.yml` runs on every PR: `bash -n` + shellcheck on the `.sh` files, and — because GitHub runners have `pwsh` and the authoring machine does not — a **parse check and PSScriptAnalyzer on the `.ps1` files**, which had never been verified anywhere before. Plus five repo-specific checks in `tools/` (`check-duplication.py`, `check-powershell-native.py`, `check-pipeline-assignments.py`, `check-paste-safety.py`, `check-shell-tail-conditionals.py`), the first two of which are worth explaining:
 
 - **`check-duplication.py`** — a function duplicated across scripts must be byte-identical in behaviour (comments and whitespace ignored). Names that are *meant* to differ live in its `PER_SCRIPT` map with a reason, so allowing a difference is a deliberate act. This turns the instruction below from a discipline into a check; when it was first run, twelve functions had already drifted.
 - **`check-powershell-native.py`** — a native command (`winget`, `npm`, `gh`, `claude`, `git`, `icacls`, …) invoked in a script that sets `$ErrorActionPreference = 'Stop'` must go through a wrapper that sets `'Continue'`, or a `try/catch`. When first run this found 14 unguarded calls, 13 of them in `windows-work-tools.ps1`, including every `winget install/upgrade` and `npm install -g`; npm writes deprecation warnings to stderr routinely, so that script terminated on a *successful* run.
@@ -166,6 +170,49 @@ been done.
 
 All scripts (both platforms) duplicate their output helpers, precondition checks, and utility functions. macOS uses `has_command`, `confirm`, `ensure_brew_in_path`; Windows uses `Has-Command`. The two macOS install scripts additionally share `install_xcode_cli_tools`, `install_homebrew`, `install_node`, `setup_gh_auth`, and `setup_git_identity`. The `CSA_MARKETPLACES` array (list of plugin marketplace `ORG/REPO` strings) is duplicated across **five** scripts: `macos-ai-tools.sh`, `windows-ai-tools.ps1`, `macos-update.sh`, `macos-plugins.sh`, `windows-plugins.ps1` — update all five when adding a new marketplace, and bump each file's `SCRIPT_VERSION`. **When changing shared logic, update all files that use it.** The marketplace-name → repo mapping is similarly duplicated across all five scripts: as a `plugin_marketplace_repo` bash function in the three `.sh` files (function-based because macOS ships bash 3.2, which doesn't support `declare -A` associative arrays), and as a `$PluginMarketplaceRepos` hashtable in the two `.ps1` files. The same five files also share the CSA MCP server registration logic (`setup_csa_mcp_server` / `Register-CSAMcpServer`) and the constants `CSA_MCP_NAME`, `CSA_MCP_URL`, `CSA_MCP_GATE_REPO` — keep these in sync too. The actual plugin lists, however, are single-source: `scripts/csa-plugins.txt` and `scripts/csa-plugins-internal.txt` are fetched from HEAD at runtime, so list-only changes do **not** require a script edit or `SCRIPT_VERSION` bump.
 
+### What a Windows authoring machine proves, and what it does not
+
+Sibling to the `pwsh` note above, and the same lesson from the other direction. This repo was
+authored on a Mac; the test suite first ran on Windows on 2026-09-15 and ten of eleven checks
+failed — none of them because the scripts were wrong. Measured on Windows 11 26200 with Git
+for Windows:
+
+| | macOS / Linux | Windows |
+|---|---|---|
+| `Path.read_text()` default encoding | UTF-8 | **cp1252** — dies on bytes `0x81 0x8D 0x8F 0x90 0x9D` |
+| `Path.chmod(0o755)` | mode `0o755` | mode **`0o666`** — Python cannot set the exec bit |
+| `test -x stub` under Git Bash | true | **false** — yet the stub still runs (see below) |
+| bare `"bash"` via `subprocess` | `/bin/bash` | **`System32\bash.exe`**, the WSL launcher |
+| `shutil.which("bash")` | `/bin/bash` | `…\Git\usr\bin\bash.EXE` — *disagrees with the line above* |
+| `pty.fork()` | works | **absent** — no `termios`, and `winpty` refuses a piped stdin |
+
+Four consequences worth keeping:
+
+- **Pin every `read_text`/`write_text` to `encoding="utf-8"`.** Not `errors="replace"`: that
+  decodes cp1252 without raising and silently substitutes U+FFFD, so `check-duplication.py`
+  would compare two functions *after* corrupting both identically — they differ in a non-ASCII
+  character and still compare equal. A check that cannot fail, again. cp1252 only chokes on
+  five byte values, so a file passes or fails on whether it happens to contain one; three
+  checks here were passing by luck, not correctness.
+- **Resolve `bash` absolutely, and never as a bare name.** `shutil.which` and `CreateProcess`
+  resolve `"bash"` to *different binaries* on Windows, and the one `CreateProcess` picks is the
+  WSL launcher, which exits 1 with a UTF-16LE "no installed distributions" message. That reads
+  as the test failing, not as bash being missing. `tests/*.py` share a `_posix_bash()` helper
+  that prefers Git Bash and refuses anything under `System32`; `CSA_TEST_BASH` overrides it.
+- **The stub-executable technique still works.** The tests intercept `npm`/`gh`/`claude` by
+  putting shebang'd stubs on a stub-only PATH. Windows cannot mark them executable and `test -x`
+  agrees, but MSYS2 resolves and runs them anyway by sniffing the `#!`. So no Windows-specific
+  test suite is needed — measure before assuming a POSIX technique is unavailable, because the
+  obvious reading of `chmod` here is wrong.
+- **`tests/test_prompt_visibility.py` is the one genuine casualty**, and it exits **77**
+  ("skipped") rather than pretending to pass. It needs a real pty on *both* ends — three
+  cheaper harnesses each produced a false negative, so a Windows substitute would risk being a
+  fourth. `check-all.sh` counts 77 separately and says so in its summary, because a check that
+  did not run must never be reported as one that passed. CI still runs it on every PR.
+
+**So a green run on Windows is worth slightly less than a green run on macOS** — one fewer
+check — and `check-all.sh` tells you so explicitly rather than leaving you to remember it.
+
 ### Plugin marketplace registration
 `macos-ai-tools.sh`, `windows-ai-tools.ps1`, `macos-update.sh`, `macos-plugins.sh`, and `windows-plugins.ps1` share the same silent-by-default registration contract:
 1. If `claude` or `gh` is missing, or `gh` is not authenticated, return silently — no warning, no action-item line. A user outside CSA-Internal running the installer should not see chatter about repos they can't see.
@@ -193,10 +240,10 @@ The plugin-install contract is shared across all five scripts — `macos-ai-tool
 5. Currently Claude Code only. Codex and Gemini support OAuth-HTTP MCP transports too but their config formats differ; adding them is future work.
 
 ### Local CSA MCP servers (`setup_csa_internal_tools`)
-Separate mechanism from the hosted `csa-mcp` above, and a **third** place the lists drift. The same five scripts run `setup_csa_internal_tools`, which `gh`-probes the gate repo and then fetches one setup script per server from `CloudSecurityAlliance-Internal/CSA-Plugins/internal-setup/`, executing each with `CSA_NESTED=1`. The servers live in their own public repos (`csa-google-workspace`, `csa-skilljar`, and `csa-zendesk` when it is ready); the setup scripts live in the private gate repo because they carry CSA's OAuth client. A server is wired up by appending its `<name>-setup.sh` to the `setups=()` array — in all five scripts, with a `SCRIPT_VERSION` bump each. The loop uses `continue`, not `return`, so a setup script that is absent (unmerged, renamed) cannot silently disable the servers listed after it.
+Separate mechanism from the hosted `csa-mcp` above, and a **third** place the lists drift. **Four** scripts run `setup_csa_internal_tools` / `Invoke-CSAInternalSetup` — `macos-ai-tools.sh`, `macos-plugins.sh`, `macos-update.sh`, `windows-ai-tools.ps1`. Not `windows-plugins.ps1`: it has no such function at all, and its `$ScriptVersion` (`2026.04271200`) is months behind the others, so a Windows user running the standalone plugin script gets no local MCP servers. That is a gap to close, not a design choice. The function `gh`-probes the gate repo and then fetches one setup script per server from `CloudSecurityAlliance-Internal/CSA-Plugins/internal-setup/`, executing each with `CSA_NESTED=1`. The servers live in their own public repos (`csa-google-workspace`, `csa-skilljar`, and `csa-zendesk` when it is ready); the setup scripts live in the private gate repo because they carry CSA's OAuth client. A server is wired up by appending its `<name>-setup.sh` to the `setups=()` array — in all four scripts that have one, with a `SCRIPT_VERSION` bump each. The loop uses `continue`, not `return`, so a setup script that is absent (unmerged, renamed) cannot silently disable the servers listed after it.
 
 ### Periodic source sweep (weekly, manual for now)
-Nothing in CSA notifies this repo when new tooling appears, so **run `./tools/sweep-csa-sources.sh` weekly** — by hand, on a machine whose `gh` has CSA-Internal read access. **Nothing runs it automatically yet.** Long term this belongs on the planned **Operations360** platform (the operations sibling to `CINO-Customer-360` / `Work360-*`), which does not exist as of 2026-09-01. A Claude cloud routine was tried and is parked disabled: the cloud sandbox ships no `gh` binary at all, and fixing it needs a CSA-Internal PAT stored in cloud config — a credential decision, not a technical one. Details in the runbook. It probes the CSA orgs and reports four kinds of drift against four different extension points: unregistered plugin **marketplaces** (`CSA_MARKETPLACES`, 5 scripts), published **plugins** nobody installs (`scripts/csa-plugins*.txt`, list-only change), **MCP servers** that are ready to wire (`setups=()`, 5 scripts), and **version floors** that no longer match what upstream asks for — `CSA_PYTHON_MIN` against CSA-Document-Pipeline's `requires-python`, and the Node floor against the highest `engines.node` among the npm packages we install. The floors are *derived* values, so they are the one thing here that can rot without anyone touching this repo. Exit `0` no drift, `1` drift, `2` could not complete — `2` means "I learned nothing", never "no drift".
+Nothing in CSA notifies this repo when new tooling appears, so **run `./tools/sweep-csa-sources.sh` weekly** — by hand, on a machine whose `gh` has CSA-Internal read access. **Nothing runs it automatically yet.** Long term this belongs on the planned **Operations360** platform (the operations sibling to `CINO-Customer-360` / `Work360-*`), which does not exist as of 2026-09-01. A Claude cloud routine was tried and is parked disabled: the cloud sandbox ships no `gh` binary at all, and fixing it needs a CSA-Internal PAT stored in cloud config — a credential decision, not a technical one. Details in the runbook. It probes the CSA orgs and reports four kinds of drift against four different extension points: unregistered plugin **marketplaces** (`CSA_MARKETPLACES`, 5 scripts), published **plugins** nobody installs (`scripts/csa-plugins*.txt`, list-only change), **MCP servers** that are ready to wire (`setups=()`, 4 scripts), and **version floors** that no longer match what upstream asks for — `CSA_PYTHON_MIN` against CSA-Document-Pipeline's `requires-python`, and the Node floor against the highest `engines.node` among the npm packages we install. The floors are *derived* values, so they are the one thing here that can rot without anyone touching this repo. Exit `0` no drift, `1` drift, `2` could not complete — `2` means "I learned nothing", never "no drift".
 
 Deliberately **not** in `check-all.sh`: it needs the network and a `gh` token with CSA-Internal access, and a check that cannot pass in CI is a check that gets deleted.
 
@@ -208,10 +255,12 @@ All macOS scripts follow the same pattern: `main` → preconditions → prefligh
 ### Validation
 **Run `./tools/check-all.sh`** — it mirrors CI. There *is* a test suite now (this section used to say there wasn't):
 
-- `tests/test_prompt_visibility.py` — debug mode must not swallow interactive prompts (uses a real pty; three simpler harnesses each produced a false negative)
+- `tests/test_prompt_visibility.py` — debug mode must not swallow interactive prompts (uses a real pty; three simpler harnesses each produced a false negative). **The only check that cannot run on Windows** — it exits 77 ("skipped") there rather than pretend to pass; see the Windows note above
 - `tests/test_npm_output_filter.py` — npm's install-scripts noise is dropped without hiding npm's failures, and keeps the `grep -v` version as a control so the test can still detect the regression
 - `tests/test_version_floors.py` — the interpreter/runtime floors reject what the OS ships (asserts the real `/usr/bin/python3` on macOS, stubs the selection logic so it behaves identically on CI's Linux)
 - `tests/test_venv_replacement.py` — replacing the shared venv never leaves the machine worse than it found it; keeps the move-first ordering as a control
+- `tests/test_headless.py` — a headless run must not block on a prompt (DEC-013 tier 2)
+- `tests/test_survives_tool_failure.py` — one failing tool must not kill the installer (#51)
 - `tests/NativeWrappers.Tests.ps1` — the five `Invoke-Native*` wrappers' contract, run under pwsh 7 locally and under real Windows PowerShell 5.1 in CI
 
 Every one of these extracts the code under test out of the shipping script rather than copying it, so a test cannot drift from what runs. The lower-level checks:
@@ -231,7 +280,31 @@ shellcheck scripts/macos-plugins.sh
 shellcheck scripts/clone-and-claude.sh
 ```
 
-There is no equivalent linter configured for the PowerShell scripts. PSScriptAnalyzer can be used if available (`Invoke-ScriptAnalyzer -Path scripts/windows-*.ps1`).
+Every test is a standalone executable, so a single one runs on its own — that is the fast loop while iterating:
+
+```bash
+python3 tests/test_version_floors.py       # or any one file in tests/ or tools/
+```
+
+On Windows the shell-driving tests need a POSIX bash and find Git Bash themselves; set
+`CSA_TEST_BASH=/path/to/bash` to point them elsewhere. They must never be handed a bare
+`bash` — that resolves to the WSL launcher. Details in the Windows note above.
+
+The PowerShell half needs three things installed before `check-all.sh` covers it; without
+them those steps print `skipped`, which is easy to misread as `passed`:
+
+```bash
+brew install shellcheck powershell
+pwsh -NoProfile -c 'Install-Module PSScriptAnalyzer -Scope CurrentUser'
+pwsh -NoProfile -c 'Install-Module Pester -RequiredVersion 5.7.1 -Scope CurrentUser'
+```
+
+**Pester is pinned to 5.7.1, deliberately.** Pester 6.1.0's manifest claims Windows
+PowerShell 5.1 support, but under real 5.1 it aborts the entire run with "a 'break' or
+'continue' statement … escaped from your code" — its own message cites pester/Pester#2669 —
+with no `break` anywhere in the suite. Both CI jobs and `check-all.sh` pin the same version
+so the test framework is not itself a source of divergence between them. Do not bump it
+casually; being current matters less than matching CI.
 
 ### Bootstrap commands
 All bootstrap one-liners include a `Cache-Control: no-cache` header to bypass the `raw.githubusercontent.com` CDN edge cache — without it, a stale copy can persist for a few minutes after a fix ships. Keep this header in every documented bootstrap command (README.md included).
