@@ -8,18 +8,40 @@
 #   5. Slack
 #   6. Zoom
 #   7. Google Chrome
+#   8. Microsoft Office (Microsoft 365 Apps for enterprise)
 #
 # Dev profile (core + these):
-#   8. Visual Studio Code
-#   9. AWS CLI
-#  10. Wrangler (Cloudflare CLI, via npm)
+#   9. Visual Studio Code
+#  10. AWS CLI
+#  11. Wrangler (Cloudflare CLI, via npm)
+#
+# The app lists themselves are $CoreApps and $DevWingetApps below; this comment is a summary.
 #
 # Usage:
 #   irm https://raw.githubusercontent.com/CloudSecurityAlliance/DesktopSetup/HEAD/scripts/windows-work-tools.ps1 | iex
 
 $ErrorActionPreference = 'Stop'
 
-$ScriptVersion = "2026.09151446"
+$ScriptVersion = "2026.09151550"
+
+# ── App sets ────────────────────────────────────────────────────────
+# ONE list per profile, read by Select-Profile, Show-Preflight, Install-Core/Install-Dev,
+# Show-Summary and the next-steps text. The core list used to be written out six times.
+# Adding Office in #69 updated three of them and missed the rest - leaving the next steps
+# telling people to install Office "from your Microsoft 365 portal" right after this script
+# had installed it. A list every consumer reads cannot disagree with itself.
+$CoreApps = @(
+    @{ Label = "1Password";        Id = "AgileBits.1Password" },
+    @{ Label = "Slack";            Id = "SlackTechnologies.Slack" },
+    @{ Label = "Zoom";             Id = "Zoom.Zoom" },
+    @{ Label = "Google Chrome";    Id = "Google.Chrome" },
+    @{ Label = "Microsoft Office"; Id = "Microsoft.Office" }
+)
+# Wrangler is not here: it is an npm package, not a winget one, and is handled separately.
+$DevWingetApps = @(
+    @{ Label = "Visual Studio Code"; Id = "Microsoft.VisualStudioCode" },
+    @{ Label = "AWS CLI";            Id = "Amazon.AWSCLI" }
+)
 
 # ── Output helpers ──────────────────────────────────────────────────
 
@@ -493,8 +515,8 @@ function Select-Profile {
     Write-Host ""
     Write-Info "Select a profile:"
     Write-Host ""
-    Write-Host "  1) Core - Git, GitHub CLI, 1Password, Slack, Zoom, Chrome"
-    Write-Host "  2) Core + Developer - adds VS Code, AWS CLI, Wrangler"
+    Write-Host "  1) Core - Git, GitHub CLI, $(($CoreApps | ForEach-Object { $_.Label }) -join ', ')"
+    Write-Host "  2) Core + Developer - adds $(($DevWingetApps | ForEach-Object { $_.Label }) -join ', '), Wrangler"
     Write-Host ""
 
     $reply = Read-Host "Profile [1/2]"
@@ -547,15 +569,7 @@ function Show-Preflight {
     Write-Host ""
     Write-Host "  -- Core --"
 
-    $coreApps = @(
-        @{ Label = "1Password";     Id = "AgileBits.1Password" },
-        @{ Label = "Slack";         Id = "SlackTechnologies.Slack" },
-        @{ Label = "Zoom";          Id = "Zoom.Zoom" },
-        @{ Label = "Google Chrome"; Id = "Google.Chrome" },
-        @{ Label = "Microsoft Office"; Id = "Microsoft.Office" }
-    )
-
-    foreach ($app in $coreApps) {
+    foreach ($app in $CoreApps) {
         if (Test-WingetInstalled $app.Id) {
             Write-Host "  $($app.Label) .... installed"
         } else {
@@ -568,12 +582,7 @@ function Show-Preflight {
         Write-Host ""
         Write-Host "  -- Developer --"
 
-        $devApps = @(
-            @{ Label = "VS Code"; Id = "Microsoft.VisualStudioCode" },
-            @{ Label = "AWS CLI"; Id = "Amazon.AWSCLI" }
-        )
-
-        foreach ($app in $devApps) {
+        foreach ($app in $DevWingetApps) {
             if (Test-WingetInstalled $app.Id) {
                 Write-Host "  $($app.Label) .... installed"
             } else {
@@ -752,11 +761,7 @@ function Install-Core {
     Write-Info "Installing core apps"
     Write-Host ""
 
-    Install-WingetPackage "1Password"     "AgileBits.1Password"
-    Install-WingetPackage "Slack"         "SlackTechnologies.Slack"
-    Install-WingetPackage "Zoom"          "Zoom.Zoom"
-    Install-WingetPackage "Google Chrome" "Google.Chrome"
-    Install-WingetPackage "Microsoft Office" "Microsoft.Office"
+    foreach ($app in $CoreApps) { Install-WingetPackage $app.Label $app.Id }
 }
 
 function Install-Dev {
@@ -764,9 +769,8 @@ function Install-Dev {
     Write-Info "Installing developer tools"
     Write-Host ""
 
-    Install-WingetPackage "Visual Studio Code" "Microsoft.VisualStudioCode"
-    Install-WingetPackage "AWS CLI"            "Amazon.AWSCLI"
-    Install-NpmPackage    "Wrangler"           "wrangler" "wrangler"
+    foreach ($app in $DevWingetApps) { Install-WingetPackage $app.Label $app.Id }
+    Install-NpmPackage "Wrangler" "wrangler" "wrangler"
 }
 
 # ── Post-install setup ─────────────────────────────────────────────
@@ -910,20 +914,16 @@ function Show-Summary {
     }
 
     # Core apps
-    $coreApps = @(
-        @{ Label = "1Password";     Id = "AgileBits.1Password" },
-        @{ Label = "Slack";         Id = "SlackTechnologies.Slack" },
-        @{ Label = "Zoom";          Id = "Zoom.Zoom" },
-        @{ Label = "Google Chrome"; Id = "Google.Chrome" },
-        @{ Label = "Microsoft Office"; Id = "Microsoft.Office" }
-    )
-    foreach ($app in $coreApps) {
+    foreach ($app in $CoreApps) {
         if (Test-WingetInstalled $app.Id) {
             Write-Host "  $($app.Label) .... installed"
         }
     }
 
-    # Dev tools
+    # Dev tools. Deliberately NOT driven by $DevWingetApps: this block reports the installed
+    # VERSIONS of the CLIs (aws, wrangler), which the list cannot express, mirroring the macOS
+    # summary. A dev app added to the list is still installed and previewed; it just will not
+    # appear here until a version line is written for it.
     if ($script:InstallDev) {
         if (Test-WingetInstalled "Microsoft.VisualStudioCode") {
             Write-Host "  VS Code ........... installed"
@@ -940,8 +940,7 @@ function Show-Summary {
 
     Write-Host ""
     Write-Info "Next steps:"
-    Write-Host "  - Sign in to 1Password, Slack, Zoom, and Chrome"
-    Write-Host "  - Install Microsoft Office from your Microsoft 365 portal"
+    Write-Host "  - Sign in to $(($CoreApps | ForEach-Object { $_.Label }) -join ', ')"
     if (Has-Command gh) {
         $authCheck = (Invoke-NativeCapture { gh auth status }).Output
         if ($LASTEXITCODE -ne 0) {
