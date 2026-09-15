@@ -103,19 +103,26 @@ Snapshots are saved to `~/Library/Logs/CSA-DesktopSetup/` with timestamps.
 
 ### Windows
 
-Re-run either install script to upgrade — they detect what's already installed and update in place. npm tools can also be updated manually:
+Run the update script to update everything at once (winget packages, npm globals, pip packages, and Claude Code). Saves a snapshot of all installed versions before updating so you can roll back if anything breaks:
 
 ```powershell
-npm update -g @openai/codex @google/gemini-cli
+irm https://raw.githubusercontent.com/CloudSecurityAlliance/DesktopSetup/HEAD/scripts/windows-update.ps1 -Headers @{'Cache-Control'='no-cache'} | iex
 ```
 
-Claude Code updates itself automatically.
-
-**Plugins only** — Windows counterpart of `macos-plugins.sh`:
+**Plugins only** — Windows counterpart of `macos-plugins.sh`, if you just want to refresh CSA Claude Code plugins (no winget/npm/pip):
 
 ```powershell
 irm https://raw.githubusercontent.com/CloudSecurityAlliance/DesktopSetup/HEAD/scripts/windows-plugins.ps1 -Headers @{'Cache-Control'='no-cache'} | iex
 ```
+
+Or update individual package managers manually:
+
+```powershell
+# winget packages, npm globals (Codex, Gemini, Wrangler), pip itself, then Claude Code
+winget upgrade --all; npm update -g; python -m pip install --upgrade pip; claude update
+```
+
+Snapshots are saved to `%LOCALAPPDATA%\CSA-DesktopSetup\` with timestamps.
 
 ---
 
@@ -317,6 +324,7 @@ Each script is self-contained and idempotent (safe to re-run):
 - **`macos-ai-tools.sh`** — AI desktop apps and coding assistants with migration support (macOS)
 - **`macos-update.sh`** — Update all installed tools with version snapshots (macOS)
 - **`macos-plugins.sh`** — Standalone Claude Code plugin install/update (macOS)
+- **`windows-update.ps1`** — Update all installed tools with version snapshots (Windows)
 - **`windows-plugins.ps1`** — Standalone Claude Code plugin install/update (Windows)
 - **`macos-work-tools.sh`** — Core work apps + optional developer tools (macOS)
 - **`windows-ai-tools.ps1`** — AI desktop apps and coding assistants with migration support (Windows)
