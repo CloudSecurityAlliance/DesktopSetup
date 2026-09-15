@@ -1,19 +1,30 @@
-# Cloud Security Alliance — Windows Plugin Install/Update
+# Cloud Security Alliance — Windows Update Script
 #
-# Standalone script that just handles Claude Code plugins: register
-# missing marketplaces (CSA ones via gh probe), install any plugins
-# from scripts/csa-plugins.txt and scripts/csa-plugins-internal.txt
-# that aren't yet installed, then refresh all registered marketplaces.
+# Windows counterpart of macos-update.sh. Updates everything the two installers put on the
+# machine:
+#   1. winget packages (Git, Node.js, desktop apps, …) — everything winget manages
+#   2. Global npm packages (Codex, Gemini, Wrangler)
+#   3. pip itself and every outdated pip package
+#   4. Claude Code — via `claude update`
+#   5. CSA plugin marketplaces, default plugins, and the CSA MCP server
+#   6. CSA-internal MCP servers, for accounts with CSA-Internal access
 #
-# Use this when you want to get current on plugins without running
-# the full windows-ai-tools.ps1 (which also installs winget apps).
+# Before updating, saves a snapshot of installed versions to:
+#   %LOCALAPPDATA%\CSA-DesktopSetup\pre-update-<timestamp>.txt
 #
 # Usage:
-#   irm https://raw.githubusercontent.com/CloudSecurityAlliance/DesktopSetup/HEAD/scripts/windows-plugins.ps1 -Headers @{'Cache-Control'='no-cache'} | iex
+#   irm https://raw.githubusercontent.com/CloudSecurityAlliance/DesktopSetup/HEAD/scripts/windows-update.ps1 -Headers @{'Cache-Control'='no-cache'} | iex
 
 $ErrorActionPreference = 'Stop'
 
 $ScriptVersion = "2026.09151446"
+
+# ── Snapshot location ───────────────────────────────────────
+
+$LogDir        = Join-Path $env:LOCALAPPDATA 'CSA-DesktopSetup'
+$SnapshotStamp = Get-Date -Format 'yyyyMMdd-HHmmss'
+$SnapshotFile  = Join-Path $LogDir "pre-update-$SnapshotStamp.txt"
+$PipFreezeFile = Join-Path $LogDir "pre-update-$SnapshotStamp-pip-freeze.txt"
 
 # ── CSA plugin marketplaces ─────────────────────────────────────────
 # Registered in Setup-PluginMarketplaces regardless of whether
@@ -25,7 +36,7 @@ $ScriptVersion = "2026.09151446"
 #   scripts/macos-update.sh        (full updater, macOS)
 #   scripts/macos-plugins.sh       (standalone plugins, macOS)
 #   scripts/windows-ai-tools.ps1   (installer, Windows)
-#   scripts/windows-update.ps1     (full updater, Windows)
+#   scripts/windows-plugins.ps1    (standalone plugins, Windows)
 # All six files hard-code the same list. When adding or removing a
 # marketplace, update every file and bump each file's SCRIPT_VERSION /
 # $ScriptVersion — otherwise the scripts will drift.
@@ -47,7 +58,7 @@ $CSA_MARKETPLACES = @(
 #   scripts/macos-plugins.sh
 # and as $PluginMarketplaceRepos in
 #   scripts/windows-ai-tools.ps1
-#   scripts/windows-update.ps1
+#   scripts/windows-plugins.ps1
 $PluginMarketplaceRepos = @{
     'claude-plugins-official'  = 'anthropics/claude-plugins-official'
     'anthropic-agent-skills'   = 'anthropics/skills'
@@ -435,27 +446,6 @@ function Detect-NonInteractive {
 
 # ── Preconditions ───────────────────────────────────────────────────
 
-function Test-Preconditions {
-    $osVersion = [System.Environment]::OSVersion.Version
-    if ($osVersion.Major -lt 10) {
-        Abort "This script requires Windows 10 or later."
-    }
-
-    $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
-    $principal = New-Object Security.Principal.WindowsPrincipal($identity)
-    if ($principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
-        Abort "Don't run this as Administrator. Run from a normal PowerShell prompt."
-    }
-
-    $policy = Get-ExecutionPolicy -Scope CurrentUser
-    if ($policy -eq 'Restricted' -or $policy -eq 'AllSigned') {
-        Abort "Execution policy is '$policy'. Fix with: Set-ExecutionPolicy RemoteSigned -Scope CurrentUser"
-    }
-
-    if (-not (Has-Command claude)) {
-        Abort "claude CLI not found -- install it first via scripts/windows-ai-tools.ps1"
-    }
-}
 
 # ── Plugin install ──────────────────────────────────────────────────
 
@@ -732,21 +722,45 @@ function Register-CSAMcpServer {
     }
 }
 
-# ── Preflight ───────────────────────────────────────────────────────
 
-function Show-Preflight {
-    Write-Host ""
-    Write-Info "Plugin sync plan:"
-    Write-Host ""
-
-    Write-Host "  Plugin marketplaces: refresh registered, add accessible CSA repos"
-    Show-PluginsPreview
-    Write-Host "  CSA MCP server     : register $CSA_MCP_NAME if your GitHub account has CSA-Internal access"
-
-    Write-Host ""
+# Run npm with its output visible but its install-scripts noise removed — the PowerShell half
+# of the bash `csa_npm`, and the same reasoning (see macos-ai-tools.sh). npm 11.19+ ends every
+# global install with five lines of `npm warn install-scripts`, announcing that a FUTURE npm
+# will run native packages' install scripts only from an allowlist. They still run today; the
+# block is a pre-announcement. The people running this installer do not use npm and cannot tell
+# that from a failure, which is what issue #51 was.
+#
+# The $CsaLog branch deliberately does NOT filter: the moment anyone is actually debugging an
+# npm problem, those are the lines that diagnose it.
+#
+# Where the bash side has to choose `sed` over `grep -v` to keep npm's exit status, the hazard
+# on this side is the one this whole family exists for. Filtering means piping, and a pipe is
+# no safer than a bare call under $ErrorActionPreference='Stop' — a SUCCESSFUL npm that wrote
+# to stderr still terminates the caller on 5.1. 'Continue' goes on first, as in the siblings.
+# $LASTEXITCODE survives the pipeline because ForEach-Object and Where-Object are cmdlets, not
+# native commands, so nothing between npm and the caller resets it.
+function Invoke-NativeNpm {
+    param([scriptblock]$Call)
+    $noise = '^npm warn install-scripts|looking for funding$|run `npm fund` for details$'
+    $prev = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+    try {
+        if ($CsaLog) {
+            $captured = & $Call 2>&1 | ForEach-Object {
+                if ($_ -is [System.Management.Automation.ErrorRecord]) { $_.Exception.Message } else { $_ }
+            } | Tee-Object -Variable teed | Out-String
+            $code = $LASTEXITCODE
+            Write-CsaNativeLog $Call $code $captured
+            return $code
+        }
+        & $Call 2>&1 | ForEach-Object {
+            if ($_ -is [System.Management.Automation.ErrorRecord]) { $_.Exception.Message } else { $_ }
+        } | Where-Object { $_ -notmatch $noise }
+        return $LASTEXITCODE
+    }
+    catch { Write-CsaNativeLog $Call 1 $_.Exception.Message; return 1 }
+    finally { $ErrorActionPreference = $prev }
 }
-
-# ── Main ────────────────────────────────────────────────────────────
 
 # Run CSA-internal setup that cannot live in this public repo (it carries CSA's OAuth
 # client). Gated exactly like Register-CSAMcpServer: probe CloudSecurityAlliance-Internal
@@ -792,40 +806,268 @@ function Invoke-CSAInternalSetup {
     }
 }
 
+# ── Preconditions ───────────────────────────────────────────────────
+
+# Deliberately lighter than the installers'. An update run has work to do even when half the
+# toolchain is absent - each Update-* below returns early when its tool is missing - so a
+# missing winget or claude is not a reason to refuse to update npm. PER_SCRIPT sanctions the
+# difference from the installer versions.
+function Test-Preconditions {
+    $osVersion = [System.Environment]::OSVersion.Version
+    if ($osVersion.Major -lt 10) {
+        Abort "This script requires Windows 10 or later."
+    }
+
+    $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
+    $principal = New-Object Security.Principal.WindowsPrincipal($identity)
+    if ($principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
+        Abort "Don't run this as Administrator. Run from a normal PowerShell prompt."
+    }
+
+    $policy = Get-ExecutionPolicy -Scope CurrentUser
+    if ($policy -eq 'Restricted' -or $policy -eq 'AllSigned') {
+        Abort "Execution policy is '$policy'. Fix with: Set-ExecutionPolicy RemoteSigned -Scope CurrentUser"
+    }
+}
+
+# ── Snapshot ────────────────────────────────────────────────────────
+
+# Written BEFORE anything is upgraded, because the whole value of it is answering "what did
+# I have an hour ago" after an upgrade broke something. %LOCALAPPDATA% rather than $HOME:
+# it is the Windows counterpart of ~/Library/Logs, and it is excluded from roaming profiles,
+# so a 200-line version dump does not follow the user onto every machine they sign in to.
+# Invoke-NativeOutput hands back a string ARRAY for multi-line output, and
+# List[string].Add() coerces an array into one space-joined line. Measured: that turned a
+# 50 KB `winget list` into a single line, and made the pip-freeze file unusable by the
+# `pip install -r` command written at the top of it. Append element by element instead.
+function Add-SnapshotLines {
+    param($Target, $Value, [string]$Empty = '(none)')
+    if (-not $Value) { $Target.Add($Empty); return }
+    foreach ($line in @($Value)) { $Target.Add([string]$line) }
+}
+
+function Save-Snapshot {
+    if (-not (Test-Path $LogDir)) { New-Item -ItemType Directory -Path $LogDir -Force | Out-Null }
+
+    Write-Info "Saving pre-update snapshot"
+
+    $lines = New-Object System.Collections.Generic.List[string]
+    $lines.Add("=== CSA DesktopSetup Pre-Update Snapshot ===")
+    $lines.Add("Date: $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')")
+    $lines.Add("Windows: $([System.Environment]::OSVersion.Version)")
+    $lines.Add("")
+
+    $lines.Add("---- winget Packages ----")
+    if (Has-Command winget) {
+        Add-SnapshotLines $lines (Invoke-NativeOutput { winget list --accept-source-agreements })
+    } else {
+        $lines.Add("(winget not installed)")
+    }
+    $lines.Add("")
+
+    $lines.Add("---- npm Global Packages ----")
+    if (Has-Command npm) {
+        Add-SnapshotLines $lines (Invoke-NativeOutput { npm list -g --depth=0 })
+    } else {
+        $lines.Add("(npm not installed)")
+    }
+    $lines.Add("")
+
+    $lines.Add("---- pip Packages ----")
+    if (Has-Command python) {
+        $lines.Add("Python: $(Invoke-NativeOutput { python --version })")
+        $lines.Add("")
+        Add-SnapshotLines $lines (Invoke-NativeOutput { python -m pip list })
+    } else {
+        $lines.Add("(Python not available)")
+    }
+    $lines.Add("")
+
+    # UTF8 without a BOM. Set-Content -Encoding utf8 writes a BOM under Windows PowerShell
+    # 5.1 and none under 7 - the same divergence the Invoke-Native* wrappers exist for, and
+    # the one that broke csa-google-workspace's OAuth login when a BOM reached a JSON file.
+    [System.IO.File]::WriteAllLines($SnapshotFile, $lines, (New-Object System.Text.UTF8Encoding $false))
+
+    # pip freeze separately, because it is the only one of these that can be fed straight
+    # back in to restore a working set.
+    if (Has-Command python) {
+        $freeze = New-Object System.Collections.Generic.List[string]
+        $freeze.Add("# CSA DesktopSetup pip snapshot - $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')")
+        $freeze.Add("# Python: $(Invoke-NativeOutput { python --version })")
+        $freeze.Add("# Restore with: python -m pip install -r $(Split-Path -Leaf $PipFreezeFile)")
+        $freeze.Add("")
+        Add-SnapshotLines $freeze (Invoke-NativeOutput { python -m pip freeze }) ''
+
+        [System.IO.File]::WriteAllLines($PipFreezeFile, $freeze, (New-Object System.Text.UTF8Encoding $false))
+    }
+
+    Write-Success "Snapshot saved: $SnapshotFile"
+}
+
+# ── Updaters ────────────────────────────────────────────────────────
+
+# `winget upgrade --all` is the counterpart of `brew upgrade`: everything the package manager
+# manages, not just what CSA installed. Same scope, same reasoning - a user running "update
+# everything" means everything, and a curated list would silently leave the rest to rot.
+function Update-Winget {
+    if (-not (Has-Command winget)) { return }
+
+    Write-Info "Refreshing winget sources"
+    $null = Invoke-NativeShow { winget source update }
+
+    Write-Info "Upgrading winget packages"
+    $null = Invoke-NativeShow { winget upgrade --all --accept-package-agreements --accept-source-agreements }
+    # winget exits non-zero when there was simply nothing to upgrade, so a non-zero here is
+    # not news. Real failures are visible in the output above, and in the log under CSA_DEBUG.
+}
+
+function Update-Npm {
+    if (-not (Has-Command npm)) { return }
+
+    Write-Info "Updating global npm packages"
+    $code = Invoke-NativeNpm { npm update -g }
+    if ($code -ne 0) { Write-Warn "npm update -g failed; continuing" }
+}
+
+# No venv here, unlike macOS. macos-ai-tools.sh puts the document-pipeline deps in
+# ~/.default_venv because brew's python3 is PEP 668 externally-managed; the winget Python is
+# not, so windows-ai-tools.ps1 installs them straight into it and there is no second
+# environment to refresh.
+function Update-Python {
+    if (-not (Has-Command python)) { return }
+
+    Write-Info "Updating pip itself"
+    $null = Invoke-NativeShow { python -m pip install --upgrade pip }
+    if ($LASTEXITCODE -ne 0) { Write-Warn "pip upgrade failed; continuing" }
+
+    Write-Info "Updating pip packages"
+    $outdated = Invoke-NativeOutput { python -m pip list --outdated --format=json }
+    if (-not $outdated) { Write-Host "  All pip packages are up to date"; return }
+
+    $names = @()
+    try {
+        $parsed = $outdated | ConvertFrom-Json
+        if ($parsed) { $names = @($parsed | ForEach-Object { $_.name }) }
+    } catch {
+        Write-Warn "could not read the outdated-package list; skipping pip package upgrades"
+        return
+    }
+
+    if ($names.Count -eq 0) { Write-Host "  All pip packages are up to date"; return }
+
+    foreach ($pkg in $names) {
+        Write-Info "  Upgrading $pkg"
+        $null = Invoke-NativeQuiet { python -m pip install --upgrade $pkg }
+        if ($LASTEXITCODE -ne 0) { Write-Warn "Failed to upgrade $pkg; continuing" }
+    }
+}
+
+function Update-ClaudeCode {
+    if (-not (Has-Command claude)) { return }
+
+    Write-Info "Updating Claude Code"
+    $null = Invoke-NativeShow { claude update }
+    if ($LASTEXITCODE -ne 0) { Write-Warn "claude update failed; continuing" }
+}
+
+# ── Preflight ───────────────────────────────────────────────────────
+
+function Show-Preflight {
+    Write-Host ""
+    Write-Info "Update plan:"
+    Write-Host ""
+
+    if (Has-Command winget) { Write-Host "  winget packages    : upgrade all" }
+    else                    { Write-Host "  winget packages    : skipped (winget not installed)" }
+    if (Has-Command npm)    { Write-Host "  npm globals        : npm update -g" }
+    else                    { Write-Host "  npm globals        : skipped (npm not installed)" }
+    if (Has-Command python) { Write-Host "  pip packages       : upgrade pip, then every outdated package" }
+    else                    { Write-Host "  pip packages       : skipped (Python not installed)" }
+    if (Has-Command claude) { Write-Host "  Claude Code        : claude update" }
+    else                    { Write-Host "  Claude Code        : skipped (claude not installed)" }
+
+    Write-Host "  Plugin marketplaces: refresh registered, add accessible CSA repos"
+    Show-PluginsPreview
+    Write-Host "  CSA MCP server     : register $CSA_MCP_NAME if your GitHub account has CSA-Internal access"
+
+    Write-Host ""
+    Write-Host "  Snapshot           : $SnapshotFile"
+    Write-Host ""
+}
+
+# ── Summary ─────────────────────────────────────────────────────────
+
+function Show-Summary {
+    Write-Host ""
+    Write-Success "Update complete!"
+    Write-Host ""
+
+    Write-Info "Current versions:"
+    Write-Host ""
+
+    $probes = @(
+        @{ Label = "Node.js ..........."; Cmd = 'node';   Call = { node --version } },
+        @{ Label = "npm ..............."; Cmd = 'npm';    Call = { npm --version } },
+        @{ Label = "Git ..............."; Cmd = 'git';    Call = { git --version } },
+        @{ Label = "Python ............"; Cmd = 'python'; Call = { python --version } },
+        @{ Label = "pip ..............."; Cmd = 'python'; Call = { python -m pip --version } },
+        @{ Label = "Claude Code ......."; Cmd = 'claude'; Call = { claude --version } },
+        @{ Label = "Codex CLI ........."; Cmd = 'codex';  Call = { codex --version } },
+        @{ Label = "Gemini CLI ........"; Cmd = 'gemini'; Call = { gemini --version } }
+    )
+    foreach ($p in $probes) {
+        if (-not (Has-Command $p.Cmd)) { continue }
+        $v = Invoke-NativeOutput $p.Call
+        if ($v) { Write-Host "  $($p.Label) $(($v -split "`n")[0].Trim())" }
+    }
+
+    Write-Host ""
+    Write-Info "Snapshot files (for rollback):"
+    Write-Host "  $SnapshotFile"
+    if (Test-Path $PipFreezeFile) { Write-Host "  $PipFreezeFile" }
+    Write-Host ""
+    Write-Host "  Rollback examples:"
+    Write-Host "    winget install --id <package> --version <version>"
+    Write-Host "    npm install -g <package>@<version>"
+    if (Test-Path $PipFreezeFile) { Write-Host "    python -m pip install -r $PipFreezeFile" }
+    Write-Host ""
+}
+
+# ── Main ────────────────────────────────────────────────────────────
+
 function Main {
-    Write-Info "Cloud Security Alliance -- Windows Plugin Sync v$ScriptVersion"
+    Write-Info "Cloud Security Alliance - Windows Update v$ScriptVersion"
 
     Detect-NonInteractive
     Test-Preconditions
-
+    Save-Snapshot
     Show-Preflight
 
-    if (-not (Confirm-Step "Proceed with plugin sync?")) {
+    if (-not (Confirm-Step "Proceed with updates?")) {
         Abort "Aborted."
     }
 
+    Write-Host ""
+    Update-Winget
+    Update-Npm
+    Update-Python
+    Update-ClaudeCode
     Setup-PluginMarketplaces
     Install-Plugins
     Register-CSAMcpServer
 
-    Write-Info "Refreshing plugin marketplaces"
-    $result = Invoke-NativeCapture { claude plugin marketplace update }
-    if ($result.ExitCode -ne 0) {
-        Write-Warn "marketplace update failed; continuing"
-        if ($result.Output) { Write-Host "      $($result.Output)" }
+    # Guarded, unlike the plugin-only script: that one aborts in Test-Preconditions when
+    # claude is missing, this one does not, so the command has to check for itself.
+    if (Has-Command claude) {
+        Write-Info "Refreshing plugin marketplaces"
+        $result = Invoke-NativeCapture { claude plugin marketplace update }
+        if ($result.ExitCode -ne 0) {
+            Write-Warn "marketplace update failed; continuing"
+            if ($result.Output) { Write-Host "      $($result.Output)" }
+        }
     }
 
-    Write-Host ""
-    Write-Success "Plugin sync complete."
-    Write-Host ""
-    Write-Host "  To list installed plugins:"
-    Write-Host "    claude plugin list"
-    Write-Host ""
-    Write-Host "  To enable/disable individual plugins:"
-    Write-Host "    claude plugin enable <name>"
-    Write-Host "    claude plugin disable <name>"
-    Write-Host ""
-
+    Show-Summary
     # Runs LAST, after the summary, so the internal setup's own output - including the
     # "you still need to log in" banner - is the final thing on screen instead of being
     # buried under a wall of install output the user has stopped reading.

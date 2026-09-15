@@ -19,7 +19,7 @@
 
 $ErrorActionPreference = 'Stop'
 
-$ScriptVersion = "2026.09052335"
+$ScriptVersion = "2026.09151446"
 
 # ── Output helpers ──────────────────────────────────────────────────
 
@@ -551,7 +551,8 @@ function Show-Preflight {
         @{ Label = "1Password";     Id = "AgileBits.1Password" },
         @{ Label = "Slack";         Id = "SlackTechnologies.Slack" },
         @{ Label = "Zoom";          Id = "Zoom.Zoom" },
-        @{ Label = "Google Chrome"; Id = "Google.Chrome" }
+        @{ Label = "Google Chrome"; Id = "Google.Chrome" },
+        @{ Label = "Microsoft Office"; Id = "Microsoft.Office" }
     )
 
     foreach ($app in $coreApps) {
@@ -755,6 +756,7 @@ function Install-Core {
     Install-WingetPackage "Slack"         "SlackTechnologies.Slack"
     Install-WingetPackage "Zoom"          "Zoom.Zoom"
     Install-WingetPackage "Google Chrome" "Google.Chrome"
+    Install-WingetPackage "Microsoft Office" "Microsoft.Office"
 }
 
 function Install-Dev {
@@ -795,6 +797,96 @@ function Setup-GHAuth {
     }
 }
 
+function Setup-GitIdentity {
+    $currentName  = Invoke-NativeOutput { git config --global user.name }
+    $currentEmail = Invoke-NativeOutput { git config --global user.email }
+
+    if ($currentName -and $currentEmail) {
+        Write-Info "Git identity already configured: $currentName <$currentEmail>"
+        return
+    }
+
+    # Need gh authenticated to pull profile info
+    $ghAuthed = $false
+    if (Has-Command gh) {
+        if ((Invoke-NativeQuiet { gh auth status }) -eq 0) { $ghAuthed = $true }
+    }
+
+    if (-not $ghAuthed) {
+        Write-Warn "Git identity not configured. Run these after authenticating with GitHub:"
+        if (-not $currentName)  { Write-Host "  git config --global user.name `"Your Name`"" }
+        if (-not $currentEmail) { Write-Host "  git config --global user.email `"you@example.com`"" }
+        return
+    }
+
+    # Fetch name and email from GitHub profile
+    $ghName  = Invoke-NativeOutput { gh api user --jq '.name // empty' }
+    $ghEmail = Invoke-NativeOutput { gh api user --jq '.email // empty' }
+
+    # If email is private/null, try the emails endpoint. Requires user:email
+    # scope on the gh token -- returns 404 otherwise, which is fine; we just
+    # fall through without an email and the user can set it manually.
+    if (-not $ghEmail) {
+        $ghEmail = Invoke-NativeOutput { gh api user/emails --jq '[.[] | select(.primary==true)][0].email // empty' }
+    }
+
+    # Use GitHub values only for fields not already set
+    $setName  = if ($currentName)  { $currentName }  else { $ghName }
+    $setEmail = if ($currentEmail) { $currentEmail } else { $ghEmail }
+
+    if (-not $setName -and -not $setEmail) {
+        Write-Warn "Could not determine Git identity from GitHub profile."
+        Write-Warn "Run: git config --global user.name `"Your Name`""
+        Write-Warn "Run: git config --global user.email `"you@example.com`""
+        return
+    }
+
+    if ($env:NONINTERACTIVE -eq '1') {
+        if (-not $currentName  -and $setName)  { git config --global user.name  $setName }
+        if (-not $currentEmail -and $setEmail) { git config --global user.email $setEmail }
+        if ($setName -and $setEmail) {
+            Write-Info "Git identity configured from GitHub profile"
+        } else {
+            Write-Warn "Git identity partially configured from GitHub profile. Still missing:"
+            if (-not $setName)  { Write-Host "  user.name  (run: git config --global user.name `"Your Name`")" }
+            if (-not $setEmail) { Write-Host "  user.email (run: git config --global user.email `"you@example.com`")" }
+        }
+        return
+    }
+
+    Write-Host ""
+    Write-Info "Git identity (user.name / user.email) is used in every commit."
+    if (-not $currentName  -and $setName)  { Write-Host "  Name:  $setName (from GitHub)" }
+    if (-not $currentEmail -and $setEmail) { Write-Host "  Email: $setEmail (from GitHub)" }
+
+    if (Confirm-Step "Set Git identity from your GitHub profile?") {
+        if (-not $currentName -and $setName) {
+            $null = Invoke-NativeShow { git config --global user.name $setName }
+            Write-Success "Set user.name to: $setName"
+        }
+        if (-not $currentEmail -and $setEmail) {
+            $null = Invoke-NativeShow { git config --global user.email $setEmail }
+            Write-Success "Set user.email to: $setEmail"
+        }
+
+        # Catch partial success: GitHub didn't expose everything we needed
+        # (common cause: existing gh token lacks the user:email scope, so
+        # the email fallback returns 404 and we have no email to set).
+        if (-not $setName -or -not $setEmail) {
+            Write-Warn "GitHub didn't expose everything. Set manually:"
+            if (-not $setName)  { Write-Host "  git config --global user.name `"Your Name`"" }
+            if (-not $setEmail) {
+                Write-Host "  git config --global user.email `"you@example.com`""
+                Write-Host "  (or run 'gh auth refresh --scopes user:email' and re-run this script to pull it from GitHub)"
+            }
+        }
+    } else {
+        Write-Warn "Skipped. Set manually with:"
+        if (-not $currentName)  { Write-Host "  git config --global user.name `"Your Name`"" }
+        if (-not $currentEmail) { Write-Host "  git config --global user.email `"you@example.com`"" }
+    }
+}
+
 # ── Summary ─────────────────────────────────────────────────────────
 
 function Show-Summary {
@@ -822,7 +914,8 @@ function Show-Summary {
         @{ Label = "1Password";     Id = "AgileBits.1Password" },
         @{ Label = "Slack";         Id = "SlackTechnologies.Slack" },
         @{ Label = "Zoom";          Id = "Zoom.Zoom" },
-        @{ Label = "Google Chrome"; Id = "Google.Chrome" }
+        @{ Label = "Google Chrome"; Id = "Google.Chrome" },
+        @{ Label = "Microsoft Office"; Id = "Microsoft.Office" }
     )
     foreach ($app in $coreApps) {
         if (Test-WingetInstalled $app.Id) {
@@ -892,6 +985,7 @@ function Main {
     }
 
     Setup-GHAuth
+    Setup-GitIdentity
     Show-Summary
 }
 

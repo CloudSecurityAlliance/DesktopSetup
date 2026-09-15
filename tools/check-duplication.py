@@ -39,7 +39,10 @@ PER_SCRIPT = {
     "Show-Preflight": "each script previews the steps it actually runs",
     "summary": "each script summarises what it did",
     "Show-Summary": "each script summarises what it did",
-    "Test-Preconditions": "the plugin-only script needs fewer preconditions than the full one",
+    "Test-Preconditions": "the plugin-only script needs fewer preconditions than the full "
+                          "one, and the updater fewer still - every Update-* returns early "
+                          "when its tool is missing, so a missing winget is no reason to "
+                          "refuse to update npm",
     "sync_plugin_marketplaces": "macos-update.sh additionally runs `claude plugin marketplace "
                                 "update`, which is that script's whole purpose; the installers "
                                 "only register what is missing",

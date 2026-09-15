@@ -17,7 +17,7 @@
 
 set -euo pipefail
 
-SCRIPT_VERSION="2026.09081530"
+SCRIPT_VERSION="2026.09151446"
 
 # ── CSA plugin marketplaces ─────────────────────────────────────────
 # Registered in sync_plugin_marketplaces() regardless of whether
@@ -30,7 +30,8 @@ SCRIPT_VERSION="2026.09081530"
 #   scripts/windows-ai-tools.ps1   (installer, Windows)
 #   scripts/macos-update.sh        (full updater, macOS)
 #   scripts/windows-plugins.ps1    (standalone plugins, Windows)
-# All five files hard-code the same list. When adding or removing a
+#   scripts/windows-update.ps1     (full updater, Windows)
+# All six files hard-code the same list. When adding or removing a
 # marketplace, update every file and bump each file's SCRIPT_VERSION /
 # $ScriptVersion — otherwise the scripts will drift.
 CSA_MARKETPLACES=(
@@ -53,6 +54,7 @@ CSA_MARKETPLACES=(
 # and as $PluginMarketplaceRepos in
 #   scripts/windows-ai-tools.ps1
 #   scripts/windows-plugins.ps1
+#   scripts/windows-update.ps1
 plugin_marketplace_repo() {
   case "$1" in
     # Public
@@ -71,7 +73,7 @@ plugin_marketplace_repo() {
 
 # ── CSA MCP server ──────────────────────────────────────────────────
 # See scripts/macos-ai-tools.sh for full rationale. Keep these constants
-# and the setup_csa_mcp_server function in sync across all five scripts.
+# and the setup_csa_mcp_server function in sync across all six scripts.
 CSA_MCP_NAME="csa-mcp"
 CSA_MCP_URL="https://cloudsecurityalliance.org/mcp"
 CSA_MCP_GATE_REPO="CloudSecurityAlliance-Internal/CSA-Plugins"
