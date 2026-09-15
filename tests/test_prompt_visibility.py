@@ -40,6 +40,19 @@ from __future__ import annotations
 
 import os
 import pathlib
+
+# This harness needs a real pty on BOTH ends -- see "Why a pty" above; three cheaper
+# harnesses each produced a false negative. Windows has no pty.fork(): MSYS2 ships
+# winpty, but winpty refuses a piped stdin, so driving it from a test would need the
+# third-party pywinpty and would risk becoming a fourth harness that cannot fail.
+# Exit 77 ("skipped", the autotools convention) rather than pretend to pass. CI runs
+# this on Linux and macOS on every PR, so the coverage is not lost -- only local
+# Windows runs skip it.
+if os.name == "nt":
+    print("SKIPPED - needs a real pty on both ends; unavailable on Windows.")
+    print("          Run under WSL or rely on CI (Linux/macOS) for this check.")
+    raise SystemExit(77)
+
 import pty
 import re
 import select
@@ -71,7 +84,7 @@ def extract(text: str, name: str) -> str:
 
 
 def build(pipeline: str, log: str, done: str) -> str:
-    text = SOURCE.read_text()
+    text = SOURCE.read_text(encoding="utf-8")
     return "\n".join([
         "#!/usr/bin/env bash",
         "set -uo pipefail",

@@ -86,7 +86,7 @@ def main(argv: list[str]) -> int:
 
     problems = 0
     for f in files:
-        for line_no, stmt in offenders(f.read_text(), str(f)):
+        for line_no, stmt in offenders(f.read_text(encoding="utf-8"), str(f)):
             print(f"{f}:{line_no}: `[[ ]] &&` in tail position — under `set -e` this returns 1 "
                   f"when the condition is false, which becomes the function's exit status and "
                   f"kills the script.\n    {stmt}\n    fix: append `|| true`")
