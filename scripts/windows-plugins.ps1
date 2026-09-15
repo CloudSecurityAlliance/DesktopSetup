@@ -13,7 +13,7 @@
 
 $ErrorActionPreference = 'Stop'
 
-$ScriptVersion = "2026.04271200"
+$ScriptVersion = "2026.09151446"
 
 # ── CSA plugin marketplaces ─────────────────────────────────────────
 # Registered in Setup-PluginMarketplaces regardless of whether
@@ -25,7 +25,8 @@ $ScriptVersion = "2026.04271200"
 #   scripts/macos-update.sh        (full updater, macOS)
 #   scripts/macos-plugins.sh       (standalone plugins, macOS)
 #   scripts/windows-ai-tools.ps1   (installer, Windows)
-# All five files hard-code the same list. When adding or removing a
+#   scripts/windows-update.ps1     (full updater, Windows)
+# All six files hard-code the same list. When adding or removing a
 # marketplace, update every file and bump each file's SCRIPT_VERSION /
 # $ScriptVersion — otherwise the scripts will drift.
 $CSA_MARKETPLACES = @(
@@ -46,6 +47,7 @@ $CSA_MARKETPLACES = @(
 #   scripts/macos-plugins.sh
 # and as $PluginMarketplaceRepos in
 #   scripts/windows-ai-tools.ps1
+#   scripts/windows-update.ps1
 $PluginMarketplaceRepos = @{
     'claude-plugins-official'  = 'anthropics/claude-plugins-official'
     'anthropic-agent-skills'   = 'anthropics/skills'
@@ -59,7 +61,7 @@ $PluginMarketplaceRepos = @{
 
 # ── CSA MCP server ──────────────────────────────────────────────────
 # See scripts/macos-ai-tools.sh for full rationale. Keep these constants
-# and the Register-CSAMcpServer function in sync across all five scripts.
+# and the Register-CSAMcpServer function in sync across all six scripts.
 $CSA_MCP_NAME      = 'csa-mcp'
 $CSA_MCP_URL       = 'https://cloudsecurityalliance.org/mcp'
 $CSA_MCP_GATE_REPO = 'CloudSecurityAlliance-Internal/CSA-Plugins'
@@ -746,6 +748,50 @@ function Show-Preflight {
 
 # ── Main ────────────────────────────────────────────────────────────
 
+# Run CSA-internal setup that cannot live in this public repo (it carries CSA's OAuth
+# client). Gated exactly like Register-CSAMcpServer: probe CloudSecurityAlliance-Internal
+# with gh and silently do nothing without access, so external users of this public repo
+# see no chatter. The fetched script is idempotent and reports for itself.
+function Invoke-CSAInternalSetup {
+    if (-not (Has-Command 'gh')) { return }
+    if ((Invoke-NativeQuiet { gh auth status }) -ne 0) { return }
+    if ((Invoke-NativeQuiet { gh api "repos/$CSA_MCP_GATE_REPO" }) -ne 0) { return }
+
+    # One entry per internal MCP server, mirroring setup_csa_internal_tools() in the bash
+    # scripts. A list rather than a copied block, so a third server is one line.
+    #
+    # Both scripts exist in the gate repo. The list is still the right shape for a script
+    # that is absent - `continue` below skips one the repo does not carry - which is how
+    # csa-skilljar was carried between the day it was listed here and the day its .ps1
+    # landed, with no change needed in this file.
+    $setups = @(
+        'csa-google-workspace-setup.ps1',
+        'csa-skilljar-setup.ps1'
+    )
+
+    foreach ($name in $setups) {
+        $encoded = Invoke-NativeOutput { gh api "repos/$CSA_MCP_GATE_REPO/contents/internal-setup/$name" --jq '.content' }
+        # `continue`, not `return`: a setup script that is absent - not merged yet, or
+        # renamed - must not stop the ones after it. The earlier single-script form
+        # returned, so a rename would have silently disabled every server that followed.
+        if ($LASTEXITCODE -ne 0 -or -not $encoded) { continue }
+
+        try {
+            $script = [System.Text.Encoding]::UTF8.GetString(
+                [System.Convert]::FromBase64String(($encoded -replace '\s', '')))
+        } catch { continue }
+
+        # CSA_NESTED tells the fetched script that it is running inside another CSA installer, so
+        # it should leave the closing summary to this one. Without it both printed "if anything
+        # above went wrong, re-run with logging on", one after the other.
+        $prevNested = $env:CSA_NESTED
+        $env:CSA_NESTED = '1'
+        try { & ([ScriptBlock]::Create($script)) }
+        catch { Write-Warn "CSA internal setup ($name) reported a problem: $_" }
+        finally { $env:CSA_NESTED = $prevNested }
+    }
+}
+
 function Main {
     Write-Info "Cloud Security Alliance -- Windows Plugin Sync v$ScriptVersion"
 
@@ -779,6 +825,11 @@ function Main {
     Write-Host "    claude plugin enable <name>"
     Write-Host "    claude plugin disable <name>"
     Write-Host ""
+
+    # Runs LAST, after the summary, so the internal setup's own output - including the
+    # "you still need to log in" banner - is the final thing on screen instead of being
+    # buried under a wall of install output the user has stopped reading.
+    Invoke-CSAInternalSetup
 }
 
 Main
