@@ -12,8 +12,18 @@ set -uo pipefail
 cd "$(dirname "$0")/.."
 
 fail=0
+skipped=0
 step() { printf '\n\033[1m==> %s\033[0m\n' "$1"; }
-check() { if "$@"; then :; else fail=1; printf '\033[31m    FAILED: %s\033[0m\n' "$1"; fi; }
+# Exit 77 means "could not run on this platform", not "passed". A check that cannot fail
+# must never be counted as one that passed, so the summary reports skips separately.
+check() {
+  "$@"; local rc=$?
+  case $rc in
+    0)  ;;
+    77) skipped=$((skipped + 1)) ;;
+    *)  fail=1; printf '\033[31m    FAILED: %s\033[0m\n' "$1" ;;
+  esac
+}
 
 step "bash -n"
 for f in scripts/*.sh; do
@@ -30,7 +40,7 @@ else
 fi
 
 step "duplication"
-check python3 tools/check-duplication.py
+check python3 tools/check-duplication.py --diff
 
 step "native-call guards"
 check python3 tools/check-powershell-native.py
@@ -40,6 +50,9 @@ check python3 tools/check-pipeline-assignments.py
 
 step "paste safety"
 check python3 tools/check-paste-safety.py
+
+step "no tail-position conditionals under set -e"
+check python3 tools/check-shell-tail-conditionals.py
 
 step "debug mode shows prompts"
 check python3 tests/test_prompt_visibility.py
@@ -96,6 +109,9 @@ fi
 printf '\n'
 if [[ $fail -eq 0 ]]; then
   printf '\033[32mall checks passed\033[0m — note this does NOT prove the .ps1 scripts work on Windows\n'
+  if [[ $skipped -gt 0 ]]; then
+    printf '\033[33m%d check(s) SKIPPED on this platform\033[0m - they did not pass, they did not run\n' "$skipped"
+  fi
 else
   printf '\033[31msome checks failed\033[0m\n'
 fi
