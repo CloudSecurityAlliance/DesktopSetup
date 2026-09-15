@@ -151,7 +151,7 @@ def posture(text: str) -> str:
 
 
 def unguarded(path: pathlib.Path) -> list[tuple[int, str]]:
-    text = path.read_text(errors="replace")
+    text = path.read_text(encoding="utf-8")
     lines = text.split("\n")
     if posture(text) != "stop":
         return []          # no promotion to guard against, for the reasons in posture()
@@ -193,7 +193,7 @@ INCOMPATIBLE = [
 
 def incompatible(path: pathlib.Path) -> list[tuple[int, str, str]]:
     found = []
-    for i, line in enumerate(path.read_text(errors="replace").split("\n"), start=1):
+    for i, line in enumerate(path.read_text(encoding="utf-8").split("\n"), start=1):
         stripped = line.strip()
         if not stripped or stripped.startswith("#"):
             continue
@@ -256,7 +256,7 @@ def self_test() -> int:
 
     with tempfile.TemporaryDirectory() as d:
         path = pathlib.Path(d) / "self-test.ps1"
-        path.write_text(SELF_TEST)
+        path.write_text(SELF_TEST, encoding="utf-8")
         found = {line for line, _ in unguarded(path)}
         incompat = {line for line, _, _ in incompatible(path)}
 
@@ -290,7 +290,7 @@ def main(argv: list[str] | None = None) -> int:
     total = 0
     for path in paths:
         found = unguarded(path)
-        text = path.read_text(errors="replace")
+        text = path.read_text(encoding="utf-8")
         available = sorted(wrappers_in(text))
         stance = {"continue": "script-wide 'Continue' - no per-call guard needed",
                   "stop": f"wrappers defined: {', '.join(available) or 'NONE'}",

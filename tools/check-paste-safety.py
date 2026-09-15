@@ -43,7 +43,7 @@ def main() -> int:
     if not TARGET.is_file():
         print(f"no such file: {TARGET}")
         return 1
-    found = offenders(TARGET.read_text())
+    found = offenders(TARGET.read_text(encoding="utf-8"))
     for line, lines in found:
         print(f"    README.md:{line}: a powershell block with {len(lines)} commands")
         for text in lines:

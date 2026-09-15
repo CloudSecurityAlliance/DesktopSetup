@@ -35,9 +35,59 @@ from __future__ import annotations
 import os
 import pathlib
 import re
+import shutil
 import subprocess
 import sys
 import tempfile
+
+
+def _posix_bash() -> str:
+    r"""Absolute path to a POSIX bash. Resolved once, absolutely, for two reasons.
+
+    These tests replace PATH with a stub-only directory, so a bare "bash" could not be
+    found there. And on Windows a bare "bash" is resolved by CreateProcess against the
+    PARENT process's PATH, which finds C:\Windows\System32\bash.exe -- the WSL launcher,
+    not a shell. It exits 1 with a UTF-16LE "no installed distributions" message, so the
+    failure reads as this test failing rather than as bash being absent.
+
+    Git Bash counts as POSIX for our purposes: measured on MINGW64_NT-10.0-26200, it
+    resolves and runs a shebang'd stub off PATH even though Windows cannot set the exec
+    bit (chmod(0o755) leaves mode 0o666) and `test -x` on that stub reports false.
+    """
+    override = os.environ.get("CSA_TEST_BASH")
+    if override:
+        return override
+    if os.name != "nt":
+        return "/bin/bash"
+    for candidate in (r"C:\Program Files\Git\bin\bash.exe",
+                      r"C:\Program Files\Git\usr\bin\bash.exe"):
+        if os.path.exists(candidate):
+            return candidate
+    found = shutil.which("bash")
+    if found and "System32" not in found:      # never the WSL launcher
+        return found
+    raise SystemExit("no POSIX bash found - install Git for Windows, or set CSA_TEST_BASH")
+
+
+BASH = _posix_bash()
+
+
+# Windows needs these to locate its own per-user directories. Handing subprocess a minimal
+# env is reasonable on POSIX and actively dangerous here: without LOCALAPPDATA the Python
+# Install Manager roots itself at "Python" RELATIVE TO THE WORKING DIRECTORY, decides no
+# interpreter is installed, and installs a 167 MB one into the repo -- while the test passes.
+# Keep these; control only PATH and HOME, which is what these tests are actually about.
+_KEEP_NT = ("SystemRoot", "SystemDrive", "ComSpec", "PATHEXT",
+            "LOCALAPPDATA", "APPDATA", "USERPROFILE", "TEMP", "TMP")
+
+
+def base_env() -> dict[str, str]:
+    """Platform floor an env= dict must start from. Empty on POSIX, by design."""
+    if os.name != "nt":
+        return {}
+    return {k: os.environ[k] for k in _KEEP_NT if k in os.environ}
+
+
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 # (script, function) — macos-update.sh and macos-plugins.sh name theirs differently on purpose;
@@ -50,7 +100,7 @@ TARGETS = [
 
 
 def extract(source: pathlib.Path, name: str) -> str:
-    text = source.read_text()
+    text = source.read_text(encoding="utf-8")
     m = (re.search(rf"^{re.escape(name)}\(\) \{{.*?^\}}", text, re.S | re.M)
          or re.search(rf"^{re.escape(name)}\(\) \{{.*\}}$", text, re.M))
     if not m:
@@ -81,8 +131,8 @@ def run(script: str, func: str, claude: str) -> tuple[str, int]:
         tmp = pathlib.Path(td)
         binm = tmp / "bin"
         binm.mkdir()
-        (binm / "claude").write_text(claude)
-        (binm / "gh").write_text("#!/bin/sh\nexit 0\n")
+        (binm / "claude").write_text(claude, encoding="utf-8")
+        (binm / "gh").write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
         for f in binm.iterdir():
             f.chmod(0o755)
 
@@ -99,9 +149,9 @@ plugin_marketplace_repo() {{ echo "CloudSecurityAlliance/csa-plugins"; }}
 echo "SURVIVED"
 """
         h = tmp / "harness.sh"
-        h.write_text(harness)
-        env = {"PATH": f"{binm}:/usr/bin:/bin", "HOME": str(tmp)}
-        p = subprocess.run(["/bin/bash", str(h)], capture_output=True, text=True, env=env)
+        h.write_text(harness, encoding="utf-8")
+        env = {**base_env(), "PATH": f"{binm}:/usr/bin:/bin", "HOME": str(tmp)}
+        p = subprocess.run([BASH, str(h)], capture_output=True, text=True, env=env)
         return (p.stdout + p.stderr), p.returncode
 
 
@@ -135,8 +185,8 @@ def main() -> int:
         tmp = pathlib.Path(td)
         binm = tmp / "bin"
         binm.mkdir()
-        (binm / "claude").write_text(CLAUDE_STUB)
-        (binm / "gh").write_text("#!/bin/sh\nexit 0\n")
+        (binm / "claude").write_text(CLAUDE_STUB, encoding="utf-8")
+        (binm / "gh").write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
         for f in binm.iterdir():
             f.chmod(0o755)
         harness = ("#!/usr/bin/env bash\nset -euo pipefail\n"
@@ -146,9 +196,9 @@ def main() -> int:
                      'CSA_MARKETPLACES=(CloudSecurityAlliance/csa-plugins)\n'
                    + broken + "\nsetup_plugin_marketplaces\necho SURVIVED\n")
         h = tmp / "h.sh"
-        h.write_text(harness)
-        p = subprocess.run(["/bin/bash", str(h)], capture_output=True, text=True,
-                           env={"PATH": f"{binm}:/usr/bin:/bin", "HOME": str(tmp)})
+        h.write_text(harness, encoding="utf-8")
+        p = subprocess.run([BASH, str(h)], capture_output=True, text=True,
+                           env={**base_env(), "PATH": f"{binm}:/usr/bin:/bin", "HOME": str(tmp)})
         check("SURVIVED" not in (p.stdout + p.stderr) and p.returncode == 1,
               f"unguarded version dies silently with exit 1 (got rc={p.returncode})")
 

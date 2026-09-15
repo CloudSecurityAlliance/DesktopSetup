@@ -56,7 +56,7 @@ def functions(path: pathlib.Path) -> dict[str, str]:
     comments and constants that sit between functions, which reports drift that is not there.
     That mistake was made first, and it inflated the count from 12 to 38.
     """
-    text = path.read_text(errors="replace")
+    text = path.read_text(encoding="utf-8")
     pattern = FUNC_PS if path.suffix == ".ps1" else FUNC_SH
     found: dict[str, str] = {}
     for match in pattern.finditer(text):

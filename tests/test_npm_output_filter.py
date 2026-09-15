@@ -39,9 +39,42 @@ from __future__ import annotations
 import os
 import pathlib
 import re
+import shutil
 import subprocess
 import sys
 import tempfile
+
+
+def _posix_bash() -> str:
+    r"""Absolute path to a POSIX bash. Resolved once, absolutely, for two reasons.
+
+    These tests replace PATH with a stub-only directory, so a bare "bash" could not be
+    found there. And on Windows a bare "bash" is resolved by CreateProcess against the
+    PARENT process's PATH, which finds C:\Windows\System32\bash.exe -- the WSL launcher,
+    not a shell. It exits 1 with a UTF-16LE "no installed distributions" message, so the
+    failure reads as this test failing rather than as bash being absent.
+
+    Git Bash counts as POSIX for our purposes: measured on MINGW64_NT-10.0-26200, it
+    resolves and runs a shebang'd stub off PATH even though Windows cannot set the exec
+    bit (chmod(0o755) leaves mode 0o666) and `test -x` on that stub reports false.
+    """
+    override = os.environ.get("CSA_TEST_BASH")
+    if override:
+        return override
+    if os.name != "nt":
+        return "/bin/bash"
+    for candidate in (r"C:\Program Files\Git\bin\bash.exe",
+                      r"C:\Program Files\Git\usr\bin\bash.exe"):
+        if os.path.exists(candidate):
+            return candidate
+    found = shutil.which("bash")
+    if found and "System32" not in found:      # never the WSL launcher
+        return found
+    raise SystemExit("no POSIX bash found - install Git for Windows, or set CSA_TEST_BASH")
+
+
+BASH = _posix_bash()
+
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 SCRIPTS = [
@@ -98,7 +131,7 @@ def extract(text: str, name: str) -> str:
 def run(source: pathlib.Path, *, debug: bool, npm_exit: int, output: str = "warnings",
         override: str | None = None) -> tuple[str, int]:
     """Run the extracted csa_npm against a stubbed npm. Returns (merged output, exit status)."""
-    text = source.read_text()
+    text = source.read_text(encoding="utf-8")
     csa_npm = override if override is not None else extract(text, "csa_npm")
     # "warnings": a normal noisy success.  "error": npm actually failed.
     # "silent":   npm succeeded but printed ONLY lines the filter removes — the pipefail trap.
@@ -142,7 +175,7 @@ echo "CSA_TEST_EXIT=$status"
     env = {"PATH": os.environ.get("PATH", "/usr/bin:/bin"), "HOME": "/tmp"}
     if debug:
         env["CSA_DEBUG"] = "1"
-    proc = subprocess.run(["bash", path], capture_output=True, text=True, env=env)
+    proc = subprocess.run([BASH, path], capture_output=True, text=True, env=env)
     merged = proc.stdout + proc.stderr
     match = re.search(r"CSA_TEST_EXIT=(\d+)", merged)
     return merged, int(match.group(1)) if match else -1

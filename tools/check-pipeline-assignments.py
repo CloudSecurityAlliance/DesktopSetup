@@ -61,7 +61,7 @@ def logical_lines(text: str) -> list[tuple[int, str]]:
 
 
 def offenders(path: pathlib.Path) -> list[tuple[int, str]]:
-    text = path.read_text()
+    text = path.read_text(encoding="utf-8")
     # Only scripts that actually run under both settings can hit this.
     if "pipefail" not in text or "set -e" not in text.replace("set -euo", "set -e"):
         return []
@@ -110,11 +110,11 @@ def self_test() -> None:
     import tempfile
     with tempfile.TemporaryDirectory() as td:
         bad = pathlib.Path(td) / "bad.sh"
-        bad.write_text(FIXTURE_BAD)
+        bad.write_text(FIXTURE_BAD, encoding="utf-8")
         if not offenders(bad):
             raise SystemExit("SELF-TEST FAILED: the unguarded fixture was not flagged")
         ok = pathlib.Path(td) / "ok.sh"
-        ok.write_text(FIXTURE_OK)
+        ok.write_text(FIXTURE_OK, encoding="utf-8")
         found = offenders(ok)
         if found:
             raise SystemExit(f"SELF-TEST FAILED: guarded fixture flagged anyway: {found}")

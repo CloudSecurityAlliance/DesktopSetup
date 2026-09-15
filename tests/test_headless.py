@@ -28,9 +28,60 @@ from __future__ import annotations
 
 import pathlib
 import re
+import os
+import shutil
 import subprocess
 import sys
 import tempfile
+
+
+def _posix_bash() -> str:
+    r"""Absolute path to a POSIX bash. Resolved once, absolutely, for two reasons.
+
+    These tests replace PATH with a stub-only directory, so a bare "bash" could not be
+    found there. And on Windows a bare "bash" is resolved by CreateProcess against the
+    PARENT process's PATH, which finds C:\Windows\System32\bash.exe -- the WSL launcher,
+    not a shell. It exits 1 with a UTF-16LE "no installed distributions" message, so the
+    failure reads as this test failing rather than as bash being absent.
+
+    Git Bash counts as POSIX for our purposes: measured on MINGW64_NT-10.0-26200, it
+    resolves and runs a shebang'd stub off PATH even though Windows cannot set the exec
+    bit (chmod(0o755) leaves mode 0o666) and `test -x` on that stub reports false.
+    """
+    override = os.environ.get("CSA_TEST_BASH")
+    if override:
+        return override
+    if os.name != "nt":
+        return "/bin/bash"
+    for candidate in (r"C:\Program Files\Git\bin\bash.exe",
+                      r"C:\Program Files\Git\usr\bin\bash.exe"):
+        if os.path.exists(candidate):
+            return candidate
+    found = shutil.which("bash")
+    if found and "System32" not in found:      # never the WSL launcher
+        return found
+    raise SystemExit("no POSIX bash found - install Git for Windows, or set CSA_TEST_BASH")
+
+
+BASH = _posix_bash()
+
+
+# Windows needs these to locate its own per-user directories. Handing subprocess a minimal
+# env is reasonable on POSIX and actively dangerous here: without LOCALAPPDATA the Python
+# Install Manager roots itself at "Python" RELATIVE TO THE WORKING DIRECTORY, decides no
+# interpreter is installed, and installs a 167 MB one into the repo -- while the test passes.
+# Keep these; control only PATH and HOME, which is what these tests are actually about.
+_KEEP_NT = ("SystemRoot", "SystemDrive", "ComSpec", "PATHEXT",
+            "LOCALAPPDATA", "APPDATA", "USERPROFILE", "TEMP", "TMP")
+
+
+def base_env() -> dict[str, str]:
+    """Platform floor an env= dict must start from. Empty on POSIX, by design."""
+    if os.name != "nt":
+        return {}
+    return {k: os.environ[k] for k in _KEEP_NT if k in os.environ}
+
+
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 SCRIPTS = sorted((ROOT / "scripts").glob("macos-*.sh"))
@@ -51,11 +102,11 @@ def run(body: str, *, stdin: str, tty: bool = False, env_extra: dict | None = No
     with tempfile.NamedTemporaryFile("w", suffix=".sh", delete=False) as fh:
         fh.write(script)
         path = fh.name
-    env = {"PATH": "/usr/bin:/bin", "HOME": "/tmp"}
+    env = {**base_env(), "PATH": "/usr/bin:/bin", "HOME": "/tmp"}
     if env_extra:
         env.update(env_extra)
     # A pipe for stdin: not a TTY, which is exactly the tier-2 condition.
-    p = subprocess.run(["/bin/bash", path], input=stdin, capture_output=True, text=True, env=env)
+    p = subprocess.run([BASH, path], input=stdin, capture_output=True, text=True, env=env)
     return (p.stdout + p.stderr), p.returncode
 
 
@@ -68,7 +119,7 @@ def main() -> int:
             failures.append(label)
 
     for source in SCRIPTS:
-        text = source.read_text()
+        text = source.read_text(encoding="utf-8")
         print(f"\n{source.name}")
 
         block = AUTODETECT.search(text)

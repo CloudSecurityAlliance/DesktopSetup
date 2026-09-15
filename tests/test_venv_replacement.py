@@ -31,16 +31,66 @@ from __future__ import annotations
 import os
 import pathlib
 import re
+import shutil
 import subprocess
 import sys
 import tempfile
+
+
+def _posix_bash() -> str:
+    r"""Absolute path to a POSIX bash. Resolved once, absolutely, for two reasons.
+
+    These tests replace PATH with a stub-only directory, so a bare "bash" could not be
+    found there. And on Windows a bare "bash" is resolved by CreateProcess against the
+    PARENT process's PATH, which finds C:\Windows\System32\bash.exe -- the WSL launcher,
+    not a shell. It exits 1 with a UTF-16LE "no installed distributions" message, so the
+    failure reads as this test failing rather than as bash being absent.
+
+    Git Bash counts as POSIX for our purposes: measured on MINGW64_NT-10.0-26200, it
+    resolves and runs a shebang'd stub off PATH even though Windows cannot set the exec
+    bit (chmod(0o755) leaves mode 0o666) and `test -x` on that stub reports false.
+    """
+    override = os.environ.get("CSA_TEST_BASH")
+    if override:
+        return override
+    if os.name != "nt":
+        return "/bin/bash"
+    for candidate in (r"C:\Program Files\Git\bin\bash.exe",
+                      r"C:\Program Files\Git\usr\bin\bash.exe"):
+        if os.path.exists(candidate):
+            return candidate
+    found = shutil.which("bash")
+    if found and "System32" not in found:      # never the WSL launcher
+        return found
+    raise SystemExit("no POSIX bash found - install Git for Windows, or set CSA_TEST_BASH")
+
+
+BASH = _posix_bash()
+
+
+# Windows needs these to locate its own per-user directories. Handing subprocess a minimal
+# env is reasonable on POSIX and actively dangerous here: without LOCALAPPDATA the Python
+# Install Manager roots itself at "Python" RELATIVE TO THE WORKING DIRECTORY, decides no
+# interpreter is installed, and installs a 167 MB one into the repo -- while the test passes.
+# Keep these; control only PATH and HOME, which is what these tests are actually about.
+_KEEP_NT = ("SystemRoot", "SystemDrive", "ComSpec", "PATHEXT",
+            "LOCALAPPDATA", "APPDATA", "USERPROFILE", "TEMP", "TMP")
+
+
+def base_env() -> dict[str, str]:
+    """Platform floor an env= dict must start from. Empty on POSIX, by design."""
+    if os.name != "nt":
+        return {}
+    return {k: os.environ[k] for k in _KEEP_NT if k in os.environ}
+
+
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 AI = ROOT / "scripts" / "macos-ai-tools.sh"
 
 
 def extract(name: str) -> str:
-    text = AI.read_text()
+    text = AI.read_text(encoding="utf-8")
     if name == "CSA_PYTHON_MIN":
         m = re.search(r'^CSA_PYTHON_MIN="[^"]*"$', text, re.M)
     else:
@@ -56,9 +106,9 @@ def make_venv(path: pathlib.Path, *, clears_floor: bool, marker: str) -> None:
     carries a marker file so a test can tell the original from a replacement."""
     (path / "bin").mkdir(parents=True, exist_ok=True)
     py = path / "bin" / "python3"
-    py.write_text("#!/bin/sh\nexit %d\n" % (0 if clears_floor else 1))
+    py.write_text("#!/bin/sh\nexit %d\n" % (0 if clears_floor else 1), encoding="utf-8")
     py.chmod(0o755)
-    (path / "MARKER").write_text(marker)
+    (path / "MARKER").write_text(marker, encoding="utf-8")
 
 
 def run(tmp: pathlib.Path, *, venv_clears_floor: bool | None, builder_works: bool,
@@ -83,7 +133,7 @@ def run(tmp: pathlib.Path, *, venv_clears_floor: bool | None, builder_works: boo
         "#!/bin/sh\n"
         'if [ "$1" = "-c" ]; then exit 1; fi\n'   # deps are never already satisfied
         + build
-        + "exit 0\n")
+        + "exit 0\n", encoding="utf-8")
     py.chmod(0o755)
 
     harness = f"""#!/usr/bin/env bash
@@ -102,11 +152,11 @@ install_doc_python_deps
 echo "RC=$?"
 """
     script = tmp / "harness.sh"
-    script.write_text(harness)
-    env = {"PATH": os.environ.get("PATH", "/usr/bin:/bin"), "HOME": str(tmp)}
+    script.write_text(harness, encoding="utf-8")
+    env = {**base_env(), "PATH": os.environ.get("PATH", "/usr/bin:/bin"), "HOME": str(tmp)}
     if active:
         env["VIRTUAL_ENV"] = str(venv)
-    p = subprocess.run(["/bin/bash", str(script)], capture_output=True, text=True, env=env)
+    p = subprocess.run([BASH, str(script)], capture_output=True, text=True, env=env)
     return (p.stdout + p.stderr), p.returncode, venv
 
 
@@ -140,7 +190,7 @@ def main() -> int:
 
     def marker(v: pathlib.Path) -> str:
         f = v / "MARKER"
-        return f.read_text().strip() if f.exists() else "<absent>"
+        return f.read_text(encoding="utf-8").strip() if f.exists() else "<absent>"
 
     def stale_copies(v: pathlib.Path) -> list[pathlib.Path]:
         return sorted(v.parent.glob(v.name + ".pre-*"))
