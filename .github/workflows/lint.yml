@@ -104,6 +104,18 @@ jobs:
           if ($results) { $results | Format-Table -AutoSize; exit 1 }
           Write-Host 'no errors'
 
+      - name: Pester and the analyser must not change the working tree (#72)
+        if: success() || failure()
+        shell: pwsh
+        run: |
+          $dirty = git status --porcelain --untracked-files=all
+          if ($dirty) {
+            Write-Host "::error::the checks changed the working tree"
+            $dirty | ForEach-Object { Write-Host $_ }
+            exit 1
+          }
+          Write-Host 'working tree unchanged'
+
   duplication:
     name: duplication
     runs-on: ubuntu-latest
@@ -125,6 +137,12 @@ jobs:
       - name: No tail-position conditionals under set -e
         run: python3 tools/check-shell-tail-conditionals.py
 
+      - name: Every macOS script has a Windows counterpart with matching steps
+        run: python3 tools/check-parity.py
+
+      - name: TODO.md cites functions that exist, never line numbers
+        run: python3 tools/check-todo-citations.py
+
       - name: Debug mode must not swallow interactive prompts
         run: python3 tests/test_prompt_visibility.py
 
@@ -142,3 +160,17 @@ jobs:
 
       - name: A failing tool must not kill the installer (#51)
         run: python3 tests/test_survives_tool_failure.py
+
+      - name: The checks must not change the working tree (#72)
+        # A fresh checkout is clean, so "empty at the end" is the CI form of check-all.sh's
+        # before/after comparison. Runs even when a test step failed, because a test that
+        # writes where it should not is often also one that fails.
+        if: success() || failure()
+        run: |
+          dirty="$(git status --porcelain --untracked-files=all)"
+          if [ -n "$dirty" ]; then
+            echo "::error::the checks changed the working tree"
+            printf '%s\n' "$dirty"
+            exit 1
+          fi
+          echo "working tree unchanged"

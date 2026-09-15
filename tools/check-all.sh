@@ -23,7 +23,15 @@ check() {
     77) skipped=$((skipped + 1)) ;;
     *)  fail=1; printf '\033[31m    FAILED: %s\033[0m\n' "$1" ;;
   esac
+  # Return the command's own status. Without this, check() returned printf's 0 on failure, so
+  # `check shellcheck … && echo clean` printed FAILED and then "clean" on the same run.
+  return $rc
 }
+
+# Taken BEFORE any check runs, so the comparison at the end is "what did the suite change",
+# not "is the tree clean" — the latter fails for anyone running this mid-edit, which is
+# everyone, and a check that fails during normal work gets commented out (#72).
+tree_before="$(git status --porcelain --untracked-files=all 2>/dev/null)"
 
 step "bash -n"
 for f in scripts/*.sh; do
@@ -53,6 +61,12 @@ check python3 tools/check-paste-safety.py
 
 step "no tail-position conditionals under set -e"
 check python3 tools/check-shell-tail-conditionals.py
+
+step "every macOS script has a Windows counterpart with matching steps"
+check python3 tools/check-parity.py
+
+step "TODO.md cites functions that exist, never line numbers"
+check python3 tools/check-todo-citations.py
 
 step "debug mode shows prompts"
 check python3 tests/test_prompt_visibility.py
@@ -104,6 +118,22 @@ if command -v pwsh >/dev/null; then
     Invoke-Pester -Configuration $c'
 else
   printf '\n\033[33m==> powershell checks skipped — brew install powershell\033[0m\n'
+fi
+
+# Last, so it sees everything the steps above did. Every assertion in the suite can pass while
+# the run itself does damage: test_version_floors.py once installed a 167 MB Python into the
+# repo on every Windows run and reported success (#67), found by `git status`, not by this
+# script. --untracked-files=all because that is exactly the shape it took — a new directory.
+# Known limit: a file that was ALREADY modified before the run and is modified again shows the
+# same porcelain line both times, so an edit to an already-dirty file is not detected.
+step "the checks must not change the working tree"
+tree_after="$(git status --porcelain --untracked-files=all 2>/dev/null)"
+if [[ "$tree_before" == "$tree_after" ]]; then
+  echo "    unchanged"
+else
+  fail=1
+  printf '\033[31m    FAILED: the checks changed the working tree:\033[0m\n'
+  diff <(printf '%s\n' "$tree_before") <(printf '%s\n' "$tree_after") | sed -n 's/^[<>] /      /p'
 fi
 
 printf '\n'
