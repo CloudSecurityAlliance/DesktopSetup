@@ -1,0 +1,1078 @@
+# Cloud Security Alliance — Windows Update Script
+#
+# Windows counterpart of macos-update.sh. Updates everything the two installers put on the
+# machine:
+#   1. winget packages (Git, Node.js, desktop apps, …) — everything winget manages
+#   2. Global npm packages (Codex, Gemini, Wrangler)
+#   3. pip itself and every outdated pip package
+#   4. Claude Code — via `claude update`
+#   5. CSA plugin marketplaces, default plugins, and the CSA MCP server
+#   6. CSA-internal MCP servers, for accounts with CSA-Internal access
+#
+# Before updating, saves a snapshot of installed versions to:
+#   %LOCALAPPDATA%\CSA-DesktopSetup\pre-update-<timestamp>.txt
+#
+# Usage:
+#   irm https://raw.githubusercontent.com/CloudSecurityAlliance/DesktopSetup/HEAD/scripts/windows-update.ps1 -Headers @{'Cache-Control'='no-cache'} | iex
+
+$ErrorActionPreference = 'Stop'
+
+$ScriptVersion = "2026.09151446"
+
+# ── Snapshot location ───────────────────────────────────────
+
+$LogDir        = Join-Path $env:LOCALAPPDATA 'CSA-DesktopSetup'
+$SnapshotStamp = Get-Date -Format 'yyyyMMdd-HHmmss'
+$SnapshotFile  = Join-Path $LogDir "pre-update-$SnapshotStamp.txt"
+$PipFreezeFile = Join-Path $LogDir "pre-update-$SnapshotStamp-pip-freeze.txt"
+
+# ── CSA plugin marketplaces ─────────────────────────────────────────
+# Registered in Setup-PluginMarketplaces regardless of whether
+# Install-Plugins pulls anything from them. Keeps zero-plugin
+# marketplaces browsable after this script runs.
+#
+# KEEP IN SYNC: This array is duplicated in
+#   scripts/macos-ai-tools.sh      (installer, macOS)
+#   scripts/macos-update.sh        (full updater, macOS)
+#   scripts/macos-plugins.sh       (standalone plugins, macOS)
+#   scripts/windows-ai-tools.ps1   (installer, Windows)
+#   scripts/windows-plugins.ps1    (standalone plugins, Windows)
+# All six files hard-code the same list. When adding or removing a
+# marketplace, update every file and bump each file's SCRIPT_VERSION /
+# $ScriptVersion — otherwise the scripts will drift.
+$CSA_MARKETPLACES = @(
+    "CloudSecurityAlliance-Internal/Accounting-Plugins"
+    "CloudSecurityAlliance-Internal/CINO-Plugins"
+    "CloudSecurityAlliance-Internal/CSA-Plugins"
+    "CloudSecurityAlliance-Internal/Research-Plugins"
+    "CloudSecurityAlliance-Internal/Training-Plugins"
+    "CloudSecurityAlliance/csa-plugins-official"
+)
+
+# Marketplace name -> GitHub repo. See macos-ai-tools.sh for full
+# rationale.
+#
+# KEEP IN SYNC: duplicated as plugin_marketplace_repo in
+#   scripts/macos-ai-tools.sh
+#   scripts/macos-update.sh
+#   scripts/macos-plugins.sh
+# and as $PluginMarketplaceRepos in
+#   scripts/windows-ai-tools.ps1
+#   scripts/windows-plugins.ps1
+$PluginMarketplaceRepos = @{
+    'claude-plugins-official'  = 'anthropics/claude-plugins-official'
+    'anthropic-agent-skills'   = 'anthropics/skills'
+    'accounting-plugins'       = 'CloudSecurityAlliance-Internal/Accounting-Plugins'
+    'csa-cino-plugins'         = 'CloudSecurityAlliance-Internal/CINO-Plugins'
+    'csa-plugins'              = 'CloudSecurityAlliance-Internal/CSA-Plugins'
+    'csa-research-plugins'     = 'CloudSecurityAlliance-Internal/Research-Plugins'
+    'csa-training-plugins'     = 'CloudSecurityAlliance-Internal/Training-Plugins'
+    'csa-plugins-official'     = 'CloudSecurityAlliance/csa-plugins-official'
+}
+
+# ── CSA MCP server ──────────────────────────────────────────────────
+# See scripts/macos-ai-tools.sh for full rationale. Keep these constants
+# and the Register-CSAMcpServer function in sync across all six scripts.
+$CSA_MCP_NAME      = 'csa-mcp'
+$CSA_MCP_URL       = 'https://cloudsecurityalliance.org/mcp'
+$CSA_MCP_GATE_REPO = 'CloudSecurityAlliance-Internal/CSA-Plugins'
+
+# ── Output helpers ──────────────────────────────────────────────────
+
+function Write-Info    { param([string]$Message) Write-Host "==> $Message" -ForegroundColor Cyan }
+function Write-Success { param([string]$Message) Write-Host "==> $Message" -ForegroundColor Green }
+function Write-Warn    { param([string]$Message) Write-Host "Warning: $Message" -ForegroundColor Yellow }
+function Write-Err     { param([string]$Message) Write-Host "Error: $Message" -ForegroundColor Red }
+function Abort         { param([string]$Message) Write-Err $Message; exit 1 }
+
+# ── Debug logging ───────────────────────────────────────────────────
+#
+# CSA_DEBUG=1 records every native command, its output and its exit code to a timestamped
+# file, and prints the path. Off by default.
+#
+#   $env:CSA_DEBUG = '1'
+#
+# An environment variable rather than a -Debug switch because the documented invocation is
+# `irm ... | iex`, which gives the script no argument vector at all (NONINTERACTIVE already
+# works this way). CSA_LOG is exported so anything this script invokes - notably the
+# CSA-internal setup, fetched and run as a scriptblock - appends to the SAME file. One file
+# per run: the person debugging is being asked to send a log, and "send both of them, and
+# mind the timestamps" is how half a report goes missing.
+#
+# Nothing needs to be added at the call sites. Every native command in these scripts already
+# goes through Invoke-Native* (check-powershell-native.py enforces it), so the wrappers are
+# the one place that has to know about this.
+# Accepts either spelling, because both are things people actually type:
+#
+#   $env:CSA_DEBUG = '1'      # the documented one
+#   $CSA_DEBUG = '1'          # the one you type when you forget `$env:`
+#
+# The second works because `iex` and `& ([ScriptBlock]::Create(...))` both run this text in a
+# scope that can see the caller's variables (measured, both shapes). Accepting only the first
+# would mean a forgotten `$env:` silently produces no log at all - and the person then reports
+# "I ran it with debug on and there was nothing", which is the worst possible outcome for a
+# switch whose entire job is producing evidence.
+#
+# NOT a -Debug parameter: there is no parameter to pass. `irm ... | iex` fetches text and
+# executes it, so the script never sees an argument vector. Worth knowing what the plausible
+# guesses actually do, since neither is inert in the way you would hope:
+#   irm ... --Debug   fails outright - "a positional parameter cannot be found"
+#   irm ... -Debug    is a real parameter ON IRM: it sets the debug stream for the DOWNLOAD
+#                     and has nothing to do with the script iex then runs. Silent no-op.
+function Test-CsaDebugRequested {
+    $plain = Get-Variable -Name CSA_DEBUG -ValueOnly -ErrorAction SilentlyContinue
+    foreach ($value in @($env:CSA_DEBUG, $plain)) {
+        if ($null -eq $value) { continue }
+        if ($value -is [bool]) { if ($value) { return $true } else { continue } }
+        if ("$value".Trim() -match '^(1|true|yes|on)$') { return $true }
+    }
+    return $false
+}
+
+$SCRIPT_LABEL = 'windows-plugins.ps1'
+$CsaRawBase = 'https://raw.githubusercontent.com/CloudSecurityAlliance/DesktopSetup/HEAD/scripts'
+$CsaDebug = Test-CsaDebugRequested
+# Normalise it into the environment, so a child process inherits the setting whichever way it
+# was given. The CSA-internal setup is a separate process and reads $env:CSA_DEBUG only.
+if ($CsaDebug) { $env:CSA_DEBUG = '1' }
+$CsaLog = $null
+if ($CsaDebug) {
+    if ($env:CSA_LOG) {
+        $CsaLog = $env:CSA_LOG
+    } else {
+        $CsaLog = Join-Path $env:USERPROFILE ("desktopsetup-{0}.log" -f (Get-Date -Format 'yyyyMMdd-HHmmss'))
+        $env:CSA_LOG = $CsaLog
+    }
+}
+
+# Redacted by shape, keeping the key so the line stays diagnostic: `client_secret: <redacted>`
+# still tells you which line failed, `<redacted>` does not. EVERY pattern must define the
+# 'keep' group even when it captures nothing - .NET leaves an unknown group reference in the
+# replacement as LITERAL TEXT, so a pattern without one writes '${keep}' into the log.
+#
+# The key/value pattern tolerates the JSON shape ("client_secret": "..."), because the quote
+# between key and colon otherwise breaks the match - and that is exactly how a credentials
+# file is written.
+$CsaSecretPatterns = @(
+    '(?<keep>(oauth_token|client_secret|refresh_token|access_token|private_key)"?\s*[:=]\s*"?)[^\s,}"]+',
+    '(?<keep>)(gh[pousr]_[A-Za-z0-9]{16,}|github_pat_[A-Za-z0-9_]{20,})',
+    '(?<keep>"?temp_clone_token"?\s*[:=]\s*"?)[A-Za-z0-9]{16,}',
+    '(?<keep>Bearer\s+)\S{16,}',
+    '(?<keep>)ya29\.[A-Za-z0-9._-]{20,}'
+)
+
+function Write-CsaLog {
+    param([string]$Line, [string]$Kind = 'log')
+    if (-not $CsaLog) { return }
+    $redacted = $Line
+    foreach ($pattern in $CsaSecretPatterns) {
+        $redacted = [regex]::Replace($redacted, $pattern, '${keep}<redacted>',
+                                     [Text.RegularExpressions.RegexOptions]::IgnoreCase)
+    }
+    try {
+        if (-not (Test-Path $CsaLog)) {
+            "=== DesktopSetup $(Get-Date -Format o) ===" | Set-Content $CsaLog -Encoding UTF8
+            "This log is REDACTED for known credential shapes, but review it before sharing." |
+                Add-Content $CsaLog -Encoding UTF8
+            "PowerShell $($PSVersionTable.PSVersion) $($PSVersionTable.PSEdition) on $env:COMPUTERNAME" |
+                Add-Content $CsaLog -Encoding UTF8
+            # A bare native call piped to Out-Null. Not through a wrapper: the wrappers call
+            # THIS, and the recursion would be unbounded.
+            icacls $CsaLog /inheritance:r /grant:r "$($env:USERNAME):(R,W)" | Out-Null
+        }
+        "{0:HH:mm:ss} [{1}] {2}" -f (Get-Date), $Kind, $redacted | Add-Content $CsaLog -Encoding UTF8
+    } catch { }   # a log that cannot be written must never stop the install
+}
+
+# What a wrapper records. Kept in one place so all four agree: the command as written, its
+# exit code, and its output - the last being the part that matters, since a discarded stderr
+# is a discarded diagnosis.
+# Printed at the end of every run, either way. The moment somebody needs the logging
+# incantation is the moment the run went wrong - not later, in a README they are not reading.
+function Show-CsaDebugHint {
+    if ($CsaLog) {
+        Write-Info "debug log: $CsaLog  (redacted, but review before sharing)"
+    } else {
+        # The exact command, on ONE line joined with ';'. Not "the same command": somebody
+        # reading this has just watched something go wrong, and asking them to reconstruct
+        # what they typed is asking them to give up. One line because pasting two at once
+        # has been observed to close the console - see the README.
+        Write-Host "  if anything above went wrong, re-run with logging on and send the log:" -ForegroundColor DarkGray
+        Write-Host "    `$env:CSA_DEBUG = '1'; irm $CsaRawBase/$SCRIPT_LABEL -Headers @{'Cache-Control'='no-cache'} | iex" -ForegroundColor DarkGray
+    }
+}
+
+# A scriptblock's source text, plus the values of any variables in it.
+#
+# $Call.ToString() is the SOURCE, so a real log said `winget list --exact --id $pkg.Id` and
+# `gh api "repos/$CSA_MCP_GATE_REPO"` - true, and useless for answering "which package?" or
+# "which repo?". The values are reachable, because PowerShell resolves variables dynamically:
+# a wrapper called from a loop can see that loop's $pkg.
+#
+# It ANNOTATES rather than substitutes, and that is the whole design. Rewriting the command
+# with values filled in was tried first, via ExpandString, and every version of it produced
+# log lines that misrepresented what ran:
+#
+#   $pkg.Id                 ->  --id @{Id=Git.Git}.Id   (object stringified, `.Id` left as text)
+#   $pkg.Id.ToUpper()       ->  echo r()                (the regex ate a prefix of the chain)
+#   $doesNotExist.Thing     ->  echo                    (reads as "ran with no argument")
+#
+# A log that says the wrong thing is worse than one that says a vague thing, and each guard
+# added revealed another hole. Appending cannot have that failure mode: the command is
+# reproduced verbatim, and a value that cannot be resolved is simply not mentioned. Nothing is
+# ever executed to produce it either - properties are walked through psobject, so a method
+# call in the source is data, not something to run.
+function Expand-CsaCommandText {
+    param([scriptblock]$Call)
+    $text = $Call.ToString().Trim() -replace '\s+', ' '
+    $seen = @{}
+    $parts = @()
+    foreach ($match in [regex]::Matches($text, '\$(\w+(?:\.\w+)*)')) {
+        $path = $match.Groups[1].Value
+        if ($seen.ContainsKey($path)) { continue }
+        $seen[$path] = $true
+        $names = $path -split '\.'
+        $value = Get-Variable -Name $names[0] -ValueOnly -ErrorAction SilentlyContinue
+        # `1..($names.Count - 1)` is NOT empty for a single-element path: 1..0 counts DOWN in
+        # PowerShell, giving {1, 0}. So a plain `$py` walked to $names[1] (null) and then back
+        # to $names[0], resolved to nothing, and was silently dropped - which is why the plain
+        # variables, the most useful ones, were the only ones not annotated.
+        $rest = @()
+        if ($names.Count -gt 1) { $rest = $names[1..($names.Count - 1)] }
+        foreach ($name in $rest) {
+            if ($null -eq $value) { break }
+            $property = $value.psobject.Properties[$name]
+            if (-not $property) { $value = $null; break }
+            $value = $property.Value
+        }
+        # Scalars only, and short ones. A hashtable or an object renders as @{...} or a type
+        # name, which is noise, and a long value belongs in the output lines rather than in
+        # the command line.
+        if ($null -eq $value -or $value -is [System.Collections.IEnumerable] -and $value -isnot [string]) { continue }
+        $rendered = "$value"
+        if (-not $rendered -or $rendered.Length -gt 120) { continue }
+        $parts += "$path=$rendered"
+    }
+    if ($parts.Count) { return "$text  [" + ($parts -join '; ') + "]" }
+    return $text
+}
+
+function Write-CsaNativeLog {
+    param([scriptblock]$Call, [int]$Code, [string]$Output)
+    if (-not $CsaLog) { return }
+    Write-CsaLog ("{0} -> exit {1}" -f (Expand-CsaCommandText $Call), $Code) 'run'
+    if ($Output) { foreach ($line in ($Output -split "`r?`n")) { Write-CsaLog $line 'out' } }
+}
+
+# AFTER the definitions above, not up where $CsaLog is decided. PowerShell does not hoist
+# functions: a call placed earlier in the file than its `function` statement fails at runtime
+# with "the term 'Write-CsaLog' is not recognized" - which is exactly what the first version
+# of this did, and nothing local caught it. The parse check only parses, and the Pester tests
+# load each function on its own. It took a run on a real Windows machine.
+if ($CsaDebug -and $CsaLog) {
+    Write-Info "debug logging to $CsaLog"
+    # Decode native output as UTF-8 while logging. [Console]::OutputEncoding was measured at
+    # cp437 (IBM437) on a real machine, and PowerShell decodes a native command's stdout with
+    # it - so gh's UTF-8 checkmark arrived as three cp437 characters and reached the log as the
+    # bytes 47 A3 F4. The corruption happens at DECODE, so writing the file as UTF-8 alone
+    # would faithfully record the wrong characters.
+    #
+    # Only under CSA_DEBUG, and deliberately not restored: a normal run is untouched, so this
+    # cannot affect anybody who did not ask for a log, and the process is about to end anyway.
+    try { [Console]::OutputEncoding = New-Object System.Text.UTF8Encoding $false } catch { }
+    # Create the file NOW rather than on the first command that gets logged. A script can
+    # abort before running anything - the Administrator guard and the preconditions both do -
+    # and then the path announced above names a file that does not exist. "Send me the log"
+    # then sends nothing, and the one fact worth having (which check refused to proceed) is
+    # lost with it.
+    Write-CsaLog ("{0} starting; CSA_DEBUG=1, no argument vector (irm|iex)" -f $SCRIPT_LABEL) 'info'
+}
+
+
+# ── Utility functions ───────────────────────────────────────────────
+
+function Has-Command {
+    param([string]$Name)
+    return [bool](Get-Command $Name -ErrorAction SilentlyContinue)
+}
+
+# Run a native command, swallow stderr, return stdout on success or $null
+# on failure. Same NativeCommandError shield as Invoke-NativeQuiet, but
+# preserves stdout so callers can capture values (e.g. `gh api user --jq`).
+# Note: `2>$null` alone does NOT prevent NativeCommandError promotion in
+# Windows PowerShell 5.1 — the try/catch is required.
+function Invoke-NativeOutput {
+    param([scriptblock]$Call)
+    # $ErrorActionPreference='Continue' for the duration, not just a try/catch. Under
+    # Windows PowerShell 5.1 the catch alone still turns a SUCCESSFUL command that wrote
+    # to stderr into a failure — measured: this returned $null on 5.1 and the real value
+    # on pwsh 7 for the same input. Callers use these as probes (`if ($x -and ...)`), so
+    # that silently reported 'not installed' for anything winget or npm was chatty about.
+    $prev = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+    try {
+        $result = & $Call 2>$null
+        $code = $LASTEXITCODE
+        Write-CsaNativeLog $Call $code ($result | Out-String)
+        if ($code -ne 0) { return $null }
+        return $result
+    } catch {
+        Write-CsaNativeLog $Call 1 $_.Exception.Message
+        return $null
+    } finally {
+        $ErrorActionPreference = $prev
+    }
+}
+
+# Run a native command with its output VISIBLE, shielded against NativeCommandError,
+# returning the exit code. The fourth member of this family, for the case the other
+# three cannot serve: an installer or download whose progress the user should see.
+#
+# Why it is needed at all: a bare native call is unsafe under
+# $ErrorActionPreference='Stop'. npm prints deprecation warnings to stderr as a matter
+# of routine and winget occasionally does too, and either terminates the script BEFORE
+# the caller's `if ($LASTEXITCODE -ne 0)` can run — so the script's own error handling
+# becomes unreachable exactly when it is needed. Setting 'Continue' for the duration
+# suppresses the promotion without hiding anything.
+#
+# Callers keep using `if ($LASTEXITCODE -ne 0)` after this: $LASTEXITCODE is global and
+# is still the native command's, because nothing between it and the caller runs another
+# native command. Assign the result to $null rather than letting it fall out, or the
+# exit code prints into the transcript.
+function Invoke-NativeShow {
+    param([scriptblock]$Call)
+    $prev = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+    try {
+        # Output goes to the console, so with logging off there is nothing to intercept and
+        # this stays a plain pass-through. With logging on it is teed, not captured, because
+        # this wrapper's whole purpose is that the user sees the command work.
+        if ($CsaLog) {
+            $captured = & $Call 2>&1 | ForEach-Object {
+                if ($_ -is [System.Management.Automation.ErrorRecord]) { $_.Exception.Message } else { $_ }
+            } | Tee-Object -Variable teed | Out-String
+            $code = $LASTEXITCODE
+            Write-CsaNativeLog $Call $code $captured
+            return $code
+        }
+        & $Call
+        return $LASTEXITCODE
+    }
+    catch { Write-CsaNativeLog $Call 1 $_.Exception.Message; return 1 }
+    finally { $ErrorActionPreference = $prev }
+}
+
+# Run a native command, swallow stdout+stderr, return its exit code.
+# Shields against NativeCommandError promotion under
+# $ErrorActionPreference='Stop'.
+function Invoke-NativeQuiet {
+    param([scriptblock]$Call)
+    # $ErrorActionPreference='Continue' for the duration, not just a try/catch. Under
+    # Windows PowerShell 5.1 the catch alone still turns a SUCCESSFUL command that wrote
+    # to stderr into a failure — measured: this returned $null on 5.1 and the real value
+    # on pwsh 7 for the same input. Callers use these as probes (`if ($x -and ...)`), so
+    # that silently reported 'not installed' for anything winget or npm was chatty about.
+    $prev = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+    try {
+        # `*> $null` throws the output away, which is right for a probe and wrong for a
+        # debug log - the discarded text is the diagnosis. With logging on it is captured
+        # and written down instead; the caller still gets only the exit code either way.
+        if ($CsaLog) {
+            $captured = (& $Call 2>&1 | ForEach-Object {
+                if ($_ -is [System.Management.Automation.ErrorRecord]) { $_.Exception.Message } else { $_ }
+            } | Out-String).Trim()
+            $code = $LASTEXITCODE
+            Write-CsaNativeLog $Call $code $captured
+            return $code
+        }
+        & $Call *> $null
+        return $LASTEXITCODE
+    }
+    catch { Write-CsaNativeLog $Call 1 $_.Exception.Message; return 1 }
+    finally { $ErrorActionPreference = $prev }
+}
+
+# Run a native command, shield against NativeCommandError, and return
+# both the merged stdout+stderr output (as a trimmed string) and the
+# exit code.
+function Invoke-NativeCapture {
+    param([scriptblock]$Call)
+    # $ErrorActionPreference='Continue' for the duration, not just a try/catch. Under
+    # Windows PowerShell 5.1 the catch alone still turns a SUCCESSFUL command that wrote
+    # to stderr into a failure — measured: this returned $null on 5.1 and the real value
+    # on pwsh 7 for the same input. Callers use these as probes (`if ($x -and ...)`), so
+    # that silently reported 'not installed' for anything winget or npm was chatty about.
+    $prev = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+    try {
+        # Unwrap the ErrorRecords `2>&1` makes of stderr. Without this the capture carries
+        # PowerShell's decoration - "At line:N char:M", the source line, CategoryInfo -
+        # ahead of the message. NOT .TargetObject, which is null for these records and
+        # produced an entirely EMPTY capture when tried (measured on 5.1.26100).
+        $output = (& $Call 2>&1 | ForEach-Object {
+            if ($_ -is [System.Management.Automation.ErrorRecord]) { $_.Exception.Message } else { $_ }
+        } | Out-String).Trim()
+        $code = $LASTEXITCODE
+        Write-CsaNativeLog $Call $code $output
+        return [pscustomobject]@{ ExitCode = $code; Output = $output }
+    } catch {
+        Write-CsaNativeLog $Call 1 $_.Exception.Message
+        return [pscustomobject]@{ ExitCode = 1; Output = $_.Exception.Message }
+    } finally {
+        $ErrorActionPreference = $prev
+    }
+}
+
+function Confirm-Step {
+    param([string]$Message)
+    if ($env:NONINTERACTIVE -eq '1') { return $true }
+    $reply = Read-Host "$Message [Y/n]"
+    return ($reply -eq '' -or $reply -match '^[Yy]')
+}
+
+# ── Non-interactive detection ───────────────────────────────────────
+
+function Detect-NonInteractive {
+    if ($env:NONINTERACTIVE -eq '1') { return }
+    if ($env:CI) {
+        Write-Warn "Non-interactive mode: `$CI is set."
+        $env:NONINTERACTIVE = "1"
+    } elseif (-not [Environment]::UserInteractive) {
+        Write-Warn "Non-interactive mode: session is not interactive."
+        $env:NONINTERACTIVE = "1"
+    }
+}
+
+# ── Preconditions ───────────────────────────────────────────────────
+
+
+# ── Plugin install ──────────────────────────────────────────────────
+
+$PluginListUrlPublic   = 'https://raw.githubusercontent.com/CloudSecurityAlliance/DesktopSetup/HEAD/scripts/csa-plugins.txt'
+$PluginListUrlInternal = 'https://raw.githubusercontent.com/CloudSecurityAlliance/DesktopSetup/HEAD/scripts/csa-plugins-internal.txt'
+
+function Get-PluginMarketplaceKind {
+    param([string]$Name)
+    if ($Name -eq 'claude-plugins-official' -or $Name -eq 'anthropic-agent-skills') {
+        return 'public'
+    }
+    return 'csa'
+}
+
+function Get-PluginListEntries {
+    param([string]$Text)
+    if (-not $Text) { return @() }
+    return $Text -split "`r?`n" | Where-Object {
+        $_ -and ($_ -notmatch '^\s*(#|$)')
+    }
+}
+
+function Show-PluginsPreview {
+    try {
+        $publicList = Invoke-RestMethod -Uri $PluginListUrlPublic -Headers @{ 'Cache-Control' = 'no-cache' } -ErrorAction Stop
+    } catch { $publicList = '' }
+    try {
+        $internalList = Invoke-RestMethod -Uri $PluginListUrlInternal -Headers @{ 'Cache-Control' = 'no-cache' } -ErrorAction Stop
+    } catch { $internalList = '' }
+
+    if (-not $publicList -and -not $internalList) {
+        Write-Host "  Plugins              (skipped: couldn't fetch plugin lists)"
+        return
+    }
+
+    $installedPlugins = @()
+    if (Has-Command claude) {
+        $pluginListing = (Invoke-NativeCapture { claude plugin list }).Output
+        foreach ($m in [regex]::Matches([string]$pluginListing, '[A-Za-z0-9._-]+@[A-Za-z0-9._-]+')) {
+            $installedPlugins += $m.Value
+        }
+    }
+
+    $allEntries = @()
+    $allEntries += Get-PluginListEntries $publicList
+    $allEntries += Get-PluginListEntries $internalList
+
+    $total = $allEntries.Count
+    $already = 0
+    foreach ($entry in $allEntries) {
+        if ($installedPlugins -contains $entry) { $already += 1 }
+    }
+    $new = $total - $already
+
+    if ($total -eq 0) {
+        Write-Host "  Plugins              (list files empty)"
+    } elseif ($new -eq 0) {
+        Write-Host "  Plugins              all $already defaults already installed"
+    } elseif ($already -eq 0) {
+        Write-Host "  Plugins              install up to $total defaults from csa-plugins*.txt"
+    } else {
+        Write-Host "  Plugins              install up to $new new ($already already present)"
+    }
+}
+
+function Install-Plugins {
+    if (-not (Has-Command claude)) { return }
+
+    try {
+        $publicList = Invoke-RestMethod -Uri $PluginListUrlPublic -Headers @{ 'Cache-Control' = 'no-cache' } -ErrorAction Stop
+    } catch { $publicList = '' }
+    try {
+        $internalList = Invoke-RestMethod -Uri $PluginListUrlInternal -Headers @{ 'Cache-Control' = 'no-cache' } -ErrorAction Stop
+    } catch { $internalList = '' }
+
+    if (-not $publicList -and -not $internalList) { return }
+
+    # Already-registered marketplaces and already-installed plugins.
+    $registeredRepos = @()
+    $listing = Invoke-NativeOutput { claude plugin marketplace list }
+    foreach ($line in $listing) {
+        if ($line -match 'GitHub \(([^)]+)\)') { $registeredRepos += $matches[1] }
+    }
+    $installedPlugins = @()
+            # Parse name@marketplace tokens rather than anchoring on the leading '❯'
+            # glyph. Windows consoles routinely misdecode non-ASCII from `claude` (the
+            # same mangling that shows '×' as '├ù' in transcripts), so a glyph-anchored
+            # match silently finds nothing — every plugin then looks uninstalled and all
+            # 43 are reinstalled on every run. Token matching is ASCII and survives
+            # bullets, colour codes and format changes.
+    # Capture regardless of exit code: a chatty-but-working `claude plugin list` must
+    # not be read as "nothing is installed".
+    $pluginListing = (Invoke-NativeCapture { claude plugin list }).Output
+    foreach ($m in [regex]::Matches([string]$pluginListing, '[A-Za-z0-9._-]+@[A-Za-z0-9._-]+')) {
+        $installedPlugins += $m.Value
+    }
+
+    $ghAuthed = (Has-Command gh) -and ((Invoke-NativeQuiet { gh auth status }) -eq 0)
+
+    $added = @()
+    $failed = @()
+
+    $allEntries = @()
+    $allEntries += Get-PluginListEntries $publicList
+    $allEntries += Get-PluginListEntries $internalList
+
+    $seenMarkets   = @{}
+    $marketUsable  = @{}
+    $seenPlugins   = @{}   # dedup guard across list files
+
+    # Pass 1: ensure each referenced marketplace is registered.
+    foreach ($entry in $allEntries) {
+        $parts = $entry -split '@', 2
+        if ($parts.Count -ne 2) { continue }
+        $market = $parts[1]
+
+        if ($seenMarkets.ContainsKey($market)) { continue }
+        $seenMarkets[$market] = $true
+
+        $repo = $PluginMarketplaceRepos[$market]
+        if (-not $repo) {
+            # Unknown marketplace in list file -- developer mistake.
+            Write-Warn "Plugin list references unknown marketplace '$market' -- update `$PluginMarketplaceRepos"
+            continue
+        }
+
+        if ($registeredRepos -contains $repo) {
+            $marketUsable[$market] = $true
+            continue
+        }
+
+        if ((Get-PluginMarketplaceKind $market) -eq 'csa') {
+            if (-not $ghAuthed) { continue }
+            if ((Invoke-NativeQuiet { gh api "repos/$repo" }) -ne 0) { continue }
+        }
+
+        $result = Invoke-NativeCapture { claude plugin marketplace add $repo }
+        if ($result.ExitCode -eq 0) {
+            $added += $repo
+            $marketUsable[$market] = $true
+        } else {
+            $failed += [pscustomobject]@{
+                What   = "marketplace $repo"
+                Output = if ($result.Output) { $result.Output } else { '<no stderr output>' }
+            }
+        }
+    }
+
+    if ($added.Count -gt 0) {
+        Write-Success "Registered plugin marketplaces:"
+        $added | ForEach-Object { Write-Host "  + $_" }
+    }
+
+    # Pass 2: collect plugins to install (in usable marketplace, not already
+    # installed, deduped across list files).
+    $pendingInstalls = @()
+    foreach ($entry in $allEntries) {
+        $parts = $entry -split '@', 2
+        if ($parts.Count -ne 2) { continue }
+        $name = $parts[0]
+        $market = $parts[1]
+
+        $key = "$name@$market"
+        if ($seenPlugins.ContainsKey($key)) { continue }
+        $seenPlugins[$key] = $true
+
+        if (-not $marketUsable.ContainsKey($market)) { continue }
+        if ($installedPlugins -contains $key) { continue }
+
+        $pendingInstalls += $key
+    }
+
+    # Pass 3: announce, then install each pending plugin with per-item
+    # progress so the user sees forward motion instead of a silent wait.
+    if ($pendingInstalls.Count -gt 0) {
+        Write-Info "Installing $($pendingInstalls.Count) plugin(s):"
+        foreach ($plugin in $pendingInstalls) {
+            $result = Invoke-NativeCapture { claude plugin install $plugin }
+            if ($result.ExitCode -eq 0) {
+                Write-Host "  + $plugin"
+            } else {
+                $out = if ($result.Output) { $result.Output } else { '<no stderr output>' }
+                $failed += [pscustomobject]@{
+                    What   = "plugin $plugin"
+                    Output = $out
+                }
+                Write-Host "  ! $plugin"
+                Write-Host "      $out"
+            }
+        }
+    }
+
+    if ($failed.Count -gt 0) {
+        Write-Warn "Plugin install finished with $($failed.Count) failure(s) (details above)."
+    }
+}
+
+# ── CSA marketplace registration ────────────────────────────────────
+
+function Setup-PluginMarketplaces {
+    if (-not (Has-Command claude)) { return }
+    if (-not (Has-Command gh))     { return }
+
+    if ((Invoke-NativeQuiet { gh auth status }) -ne 0) { return }
+
+    # Snapshot already-registered marketplaces (single call).
+    # list format: "    Source: GitHub (ORG/REPO)"
+    $listing = Invoke-NativeOutput { claude plugin marketplace list }
+    $alreadyAdded = @()
+    foreach ($line in $listing) {
+        if ($line -match 'GitHub \(([^)]+)\)') {
+            $alreadyAdded += $matches[1]
+        }
+    }
+
+    $added = @()
+    $failed = @()
+
+    foreach ($repo in $CSA_MARKETPLACES) {
+        # Already registered, or not accessible to this account -- silently skip.
+        if ($alreadyAdded -contains $repo) { continue }
+        if ((Invoke-NativeQuiet { gh api "repos/$repo" }) -ne 0) { continue }
+
+        # Capture stderr so a real failure (e.g. schema-invalid manifest)
+        # surfaces its reason instead of a generic "Failed to register".
+        $result = Invoke-NativeCapture { claude plugin marketplace add $repo }
+        if ($result.ExitCode -eq 0) {
+            $added += $repo
+        } else {
+            $failed += [pscustomobject]@{
+                Repo   = $repo
+                Output = if ($result.Output) { $result.Output } else { '<no stderr output>' }
+            }
+        }
+    }
+
+    if ($added.Count -gt 0) {
+        Write-Success "Registered Claude Code plugin marketplaces:"
+        $added | ForEach-Object { Write-Host "  + $_" }
+    }
+    if ($failed.Count -gt 0) {
+        Write-Warn "Failed to register $($failed.Count) marketplace(s):"
+        foreach ($f in $failed) {
+            Write-Host "  ! $($f.Repo)"
+            Write-Host "      $($f.Output)"
+        }
+    }
+}
+
+# Register the CSA MCP server (csa-mcp) with Claude Code if missing.
+# See scripts/windows-ai-tools.ps1 Register-CSAMcpServer for full rationale --
+# silent unless we actually register, gh-probed CSA-Internal access gate,
+# does not clobber existing OAuth sessions.
+function Register-CSAMcpServer {
+    if (-not (Has-Command claude)) { return }
+    if (-not (Has-Command gh))     { return }
+    if ((Invoke-NativeQuiet { gh auth status }) -ne 0) { return }
+
+    $listing = Invoke-NativeOutput { claude mcp list }
+    foreach ($line in $listing) {
+        if ($line -match "^${CSA_MCP_NAME}[: ]") { return }
+    }
+
+    if ((Invoke-NativeQuiet { gh api "repos/$CSA_MCP_GATE_REPO" }) -ne 0) { return }
+
+    $result = Invoke-NativeCapture { claude mcp add --transport http --scope user $CSA_MCP_NAME $CSA_MCP_URL }
+    if ($result.ExitCode -eq 0) {
+        Write-Success "Registered Claude Code MCP server: $CSA_MCP_NAME"
+        Write-Info "Run /mcp inside Claude Code to authenticate with the CSA MCP server."
+    } else {
+        Write-Warn "Failed to register Claude Code MCP server '$CSA_MCP_NAME':"
+        $msg = if ($result.Output) { $result.Output } else { '<no stderr output>' }
+        Write-Host "      $msg"
+    }
+}
+
+
+# Run npm with its output visible but its install-scripts noise removed — the PowerShell half
+# of the bash `csa_npm`, and the same reasoning (see macos-ai-tools.sh). npm 11.19+ ends every
+# global install with five lines of `npm warn install-scripts`, announcing that a FUTURE npm
+# will run native packages' install scripts only from an allowlist. They still run today; the
+# block is a pre-announcement. The people running this installer do not use npm and cannot tell
+# that from a failure, which is what issue #51 was.
+#
+# The $CsaLog branch deliberately does NOT filter: the moment anyone is actually debugging an
+# npm problem, those are the lines that diagnose it.
+#
+# Where the bash side has to choose `sed` over `grep -v` to keep npm's exit status, the hazard
+# on this side is the one this whole family exists for. Filtering means piping, and a pipe is
+# no safer than a bare call under $ErrorActionPreference='Stop' — a SUCCESSFUL npm that wrote
+# to stderr still terminates the caller on 5.1. 'Continue' goes on first, as in the siblings.
+# $LASTEXITCODE survives the pipeline because ForEach-Object and Where-Object are cmdlets, not
+# native commands, so nothing between npm and the caller resets it.
+function Invoke-NativeNpm {
+    param([scriptblock]$Call)
+    $noise = '^npm warn install-scripts|looking for funding$|run `npm fund` for details$'
+    $prev = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+    try {
+        if ($CsaLog) {
+            $captured = & $Call 2>&1 | ForEach-Object {
+                if ($_ -is [System.Management.Automation.ErrorRecord]) { $_.Exception.Message } else { $_ }
+            } | Tee-Object -Variable teed | Out-String
+            $code = $LASTEXITCODE
+            Write-CsaNativeLog $Call $code $captured
+            return $code
+        }
+        & $Call 2>&1 | ForEach-Object {
+            if ($_ -is [System.Management.Automation.ErrorRecord]) { $_.Exception.Message } else { $_ }
+        } | Where-Object { $_ -notmatch $noise }
+        return $LASTEXITCODE
+    }
+    catch { Write-CsaNativeLog $Call 1 $_.Exception.Message; return 1 }
+    finally { $ErrorActionPreference = $prev }
+}
+
+# Run CSA-internal setup that cannot live in this public repo (it carries CSA's OAuth
+# client). Gated exactly like Register-CSAMcpServer: probe CloudSecurityAlliance-Internal
+# with gh and silently do nothing without access, so external users of this public repo
+# see no chatter. The fetched script is idempotent and reports for itself.
+function Invoke-CSAInternalSetup {
+    if (-not (Has-Command 'gh')) { return }
+    if ((Invoke-NativeQuiet { gh auth status }) -ne 0) { return }
+    if ((Invoke-NativeQuiet { gh api "repos/$CSA_MCP_GATE_REPO" }) -ne 0) { return }
+
+    # One entry per internal MCP server, mirroring setup_csa_internal_tools() in the bash
+    # scripts. A list rather than a copied block, so a third server is one line.
+    #
+    # Both scripts exist in the gate repo. The list is still the right shape for a script
+    # that is absent - `continue` below skips one the repo does not carry - which is how
+    # csa-skilljar was carried between the day it was listed here and the day its .ps1
+    # landed, with no change needed in this file.
+    $setups = @(
+        'csa-google-workspace-setup.ps1',
+        'csa-skilljar-setup.ps1'
+    )
+
+    foreach ($name in $setups) {
+        $encoded = Invoke-NativeOutput { gh api "repos/$CSA_MCP_GATE_REPO/contents/internal-setup/$name" --jq '.content' }
+        # `continue`, not `return`: a setup script that is absent - not merged yet, or
+        # renamed - must not stop the ones after it. The earlier single-script form
+        # returned, so a rename would have silently disabled every server that followed.
+        if ($LASTEXITCODE -ne 0 -or -not $encoded) { continue }
+
+        try {
+            $script = [System.Text.Encoding]::UTF8.GetString(
+                [System.Convert]::FromBase64String(($encoded -replace '\s', '')))
+        } catch { continue }
+
+        # CSA_NESTED tells the fetched script that it is running inside another CSA installer, so
+        # it should leave the closing summary to this one. Without it both printed "if anything
+        # above went wrong, re-run with logging on", one after the other.
+        $prevNested = $env:CSA_NESTED
+        $env:CSA_NESTED = '1'
+        try { & ([ScriptBlock]::Create($script)) }
+        catch { Write-Warn "CSA internal setup ($name) reported a problem: $_" }
+        finally { $env:CSA_NESTED = $prevNested }
+    }
+}
+
+# ── Preconditions ───────────────────────────────────────────────────
+
+# Deliberately lighter than the installers'. An update run has work to do even when half the
+# toolchain is absent - each Update-* below returns early when its tool is missing - so a
+# missing winget or claude is not a reason to refuse to update npm. PER_SCRIPT sanctions the
+# difference from the installer versions.
+function Test-Preconditions {
+    $osVersion = [System.Environment]::OSVersion.Version
+    if ($osVersion.Major -lt 10) {
+        Abort "This script requires Windows 10 or later."
+    }
+
+    $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
+    $principal = New-Object Security.Principal.WindowsPrincipal($identity)
+    if ($principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
+        Abort "Don't run this as Administrator. Run from a normal PowerShell prompt."
+    }
+
+    $policy = Get-ExecutionPolicy -Scope CurrentUser
+    if ($policy -eq 'Restricted' -or $policy -eq 'AllSigned') {
+        Abort "Execution policy is '$policy'. Fix with: Set-ExecutionPolicy RemoteSigned -Scope CurrentUser"
+    }
+}
+
+# ── Snapshot ────────────────────────────────────────────────────────
+
+# Written BEFORE anything is upgraded, because the whole value of it is answering "what did
+# I have an hour ago" after an upgrade broke something. %LOCALAPPDATA% rather than $HOME:
+# it is the Windows counterpart of ~/Library/Logs, and it is excluded from roaming profiles,
+# so a 200-line version dump does not follow the user onto every machine they sign in to.
+# Invoke-NativeOutput hands back a string ARRAY for multi-line output, and
+# List[string].Add() coerces an array into one space-joined line. Measured: that turned a
+# 50 KB `winget list` into a single line, and made the pip-freeze file unusable by the
+# `pip install -r` command written at the top of it. Append element by element instead.
+function Add-SnapshotLines {
+    param($Target, $Value, [string]$Empty = '(none)')
+    if (-not $Value) { $Target.Add($Empty); return }
+    foreach ($line in @($Value)) { $Target.Add([string]$line) }
+}
+
+function Save-Snapshot {
+    if (-not (Test-Path $LogDir)) { New-Item -ItemType Directory -Path $LogDir -Force | Out-Null }
+
+    Write-Info "Saving pre-update snapshot"
+
+    $lines = New-Object System.Collections.Generic.List[string]
+    $lines.Add("=== CSA DesktopSetup Pre-Update Snapshot ===")
+    $lines.Add("Date: $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')")
+    $lines.Add("Windows: $([System.Environment]::OSVersion.Version)")
+    $lines.Add("")
+
+    $lines.Add("---- winget Packages ----")
+    if (Has-Command winget) {
+        Add-SnapshotLines $lines (Invoke-NativeOutput { winget list --accept-source-agreements })
+    } else {
+        $lines.Add("(winget not installed)")
+    }
+    $lines.Add("")
+
+    $lines.Add("---- npm Global Packages ----")
+    if (Has-Command npm) {
+        Add-SnapshotLines $lines (Invoke-NativeOutput { npm list -g --depth=0 })
+    } else {
+        $lines.Add("(npm not installed)")
+    }
+    $lines.Add("")
+
+    $lines.Add("---- pip Packages ----")
+    if (Has-Command python) {
+        $lines.Add("Python: $(Invoke-NativeOutput { python --version })")
+        $lines.Add("")
+        Add-SnapshotLines $lines (Invoke-NativeOutput { python -m pip list })
+    } else {
+        $lines.Add("(Python not available)")
+    }
+    $lines.Add("")
+
+    # UTF8 without a BOM. Set-Content -Encoding utf8 writes a BOM under Windows PowerShell
+    # 5.1 and none under 7 - the same divergence the Invoke-Native* wrappers exist for, and
+    # the one that broke csa-google-workspace's OAuth login when a BOM reached a JSON file.
+    [System.IO.File]::WriteAllLines($SnapshotFile, $lines, (New-Object System.Text.UTF8Encoding $false))
+
+    # pip freeze separately, because it is the only one of these that can be fed straight
+    # back in to restore a working set.
+    if (Has-Command python) {
+        $freeze = New-Object System.Collections.Generic.List[string]
+        $freeze.Add("# CSA DesktopSetup pip snapshot - $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')")
+        $freeze.Add("# Python: $(Invoke-NativeOutput { python --version })")
+        $freeze.Add("# Restore with: python -m pip install -r $(Split-Path -Leaf $PipFreezeFile)")
+        $freeze.Add("")
+        Add-SnapshotLines $freeze (Invoke-NativeOutput { python -m pip freeze }) ''
+
+        [System.IO.File]::WriteAllLines($PipFreezeFile, $freeze, (New-Object System.Text.UTF8Encoding $false))
+    }
+
+    Write-Success "Snapshot saved: $SnapshotFile"
+}
+
+# ── Updaters ────────────────────────────────────────────────────────
+
+# `winget upgrade --all` is the counterpart of `brew upgrade`: everything the package manager
+# manages, not just what CSA installed. Same scope, same reasoning - a user running "update
+# everything" means everything, and a curated list would silently leave the rest to rot.
+function Update-Winget {
+    if (-not (Has-Command winget)) { return }
+
+    Write-Info "Refreshing winget sources"
+    $null = Invoke-NativeShow { winget source update }
+
+    Write-Info "Upgrading winget packages"
+    $null = Invoke-NativeShow { winget upgrade --all --accept-package-agreements --accept-source-agreements }
+    # winget exits non-zero when there was simply nothing to upgrade, so a non-zero here is
+    # not news. Real failures are visible in the output above, and in the log under CSA_DEBUG.
+}
+
+function Update-Npm {
+    if (-not (Has-Command npm)) { return }
+
+    Write-Info "Updating global npm packages"
+    $code = Invoke-NativeNpm { npm update -g }
+    if ($code -ne 0) { Write-Warn "npm update -g failed; continuing" }
+}
+
+# No venv here, unlike macOS. macos-ai-tools.sh puts the document-pipeline deps in
+# ~/.default_venv because brew's python3 is PEP 668 externally-managed; the winget Python is
+# not, so windows-ai-tools.ps1 installs them straight into it and there is no second
+# environment to refresh.
+function Update-Python {
+    if (-not (Has-Command python)) { return }
+
+    Write-Info "Updating pip itself"
+    $null = Invoke-NativeShow { python -m pip install --upgrade pip }
+    if ($LASTEXITCODE -ne 0) { Write-Warn "pip upgrade failed; continuing" }
+
+    Write-Info "Updating pip packages"
+    $outdated = Invoke-NativeOutput { python -m pip list --outdated --format=json }
+    if (-not $outdated) { Write-Host "  All pip packages are up to date"; return }
+
+    $names = @()
+    try {
+        $parsed = $outdated | ConvertFrom-Json
+        if ($parsed) { $names = @($parsed | ForEach-Object { $_.name }) }
+    } catch {
+        Write-Warn "could not read the outdated-package list; skipping pip package upgrades"
+        return
+    }
+
+    if ($names.Count -eq 0) { Write-Host "  All pip packages are up to date"; return }
+
+    foreach ($pkg in $names) {
+        Write-Info "  Upgrading $pkg"
+        $null = Invoke-NativeQuiet { python -m pip install --upgrade $pkg }
+        if ($LASTEXITCODE -ne 0) { Write-Warn "Failed to upgrade $pkg; continuing" }
+    }
+}
+
+function Update-ClaudeCode {
+    if (-not (Has-Command claude)) { return }
+
+    Write-Info "Updating Claude Code"
+    $null = Invoke-NativeShow { claude update }
+    if ($LASTEXITCODE -ne 0) { Write-Warn "claude update failed; continuing" }
+}
+
+# ── Preflight ───────────────────────────────────────────────────────
+
+function Show-Preflight {
+    Write-Host ""
+    Write-Info "Update plan:"
+    Write-Host ""
+
+    if (Has-Command winget) { Write-Host "  winget packages    : upgrade all" }
+    else                    { Write-Host "  winget packages    : skipped (winget not installed)" }
+    if (Has-Command npm)    { Write-Host "  npm globals        : npm update -g" }
+    else                    { Write-Host "  npm globals        : skipped (npm not installed)" }
+    if (Has-Command python) { Write-Host "  pip packages       : upgrade pip, then every outdated package" }
+    else                    { Write-Host "  pip packages       : skipped (Python not installed)" }
+    if (Has-Command claude) { Write-Host "  Claude Code        : claude update" }
+    else                    { Write-Host "  Claude Code        : skipped (claude not installed)" }
+
+    Write-Host "  Plugin marketplaces: refresh registered, add accessible CSA repos"
+    Show-PluginsPreview
+    Write-Host "  CSA MCP server     : register $CSA_MCP_NAME if your GitHub account has CSA-Internal access"
+
+    Write-Host ""
+    Write-Host "  Snapshot           : $SnapshotFile"
+    Write-Host ""
+}
+
+# ── Summary ─────────────────────────────────────────────────────────
+
+function Show-Summary {
+    Write-Host ""
+    Write-Success "Update complete!"
+    Write-Host ""
+
+    Write-Info "Current versions:"
+    Write-Host ""
+
+    $probes = @(
+        @{ Label = "Node.js ..........."; Cmd = 'node';   Call = { node --version } },
+        @{ Label = "npm ..............."; Cmd = 'npm';    Call = { npm --version } },
+        @{ Label = "Git ..............."; Cmd = 'git';    Call = { git --version } },
+        @{ Label = "Python ............"; Cmd = 'python'; Call = { python --version } },
+        @{ Label = "pip ..............."; Cmd = 'python'; Call = { python -m pip --version } },
+        @{ Label = "Claude Code ......."; Cmd = 'claude'; Call = { claude --version } },
+        @{ Label = "Codex CLI ........."; Cmd = 'codex';  Call = { codex --version } },
+        @{ Label = "Gemini CLI ........"; Cmd = 'gemini'; Call = { gemini --version } }
+    )
+    foreach ($p in $probes) {
+        if (-not (Has-Command $p.Cmd)) { continue }
+        $v = Invoke-NativeOutput $p.Call
+        if ($v) { Write-Host "  $($p.Label) $(($v -split "`n")[0].Trim())" }
+    }
+
+    Write-Host ""
+    Write-Info "Snapshot files (for rollback):"
+    Write-Host "  $SnapshotFile"
+    if (Test-Path $PipFreezeFile) { Write-Host "  $PipFreezeFile" }
+    Write-Host ""
+    Write-Host "  Rollback examples:"
+    Write-Host "    winget install --id <package> --version <version>"
+    Write-Host "    npm install -g <package>@<version>"
+    if (Test-Path $PipFreezeFile) { Write-Host "    python -m pip install -r $PipFreezeFile" }
+    Write-Host ""
+}
+
+# ── Main ────────────────────────────────────────────────────────────
+
+function Main {
+    Write-Info "Cloud Security Alliance - Windows Update v$ScriptVersion"
+
+    Detect-NonInteractive
+    Test-Preconditions
+    Save-Snapshot
+    Show-Preflight
+
+    if (-not (Confirm-Step "Proceed with updates?")) {
+        Abort "Aborted."
+    }
+
+    Write-Host ""
+    Update-Winget
+    Update-Npm
+    Update-Python
+    Update-ClaudeCode
+    Setup-PluginMarketplaces
+    Install-Plugins
+    Register-CSAMcpServer
+
+    # Guarded, unlike the plugin-only script: that one aborts in Test-Preconditions when
+    # claude is missing, this one does not, so the command has to check for itself.
+    if (Has-Command claude) {
+        Write-Info "Refreshing plugin marketplaces"
+        $result = Invoke-NativeCapture { claude plugin marketplace update }
+        if ($result.ExitCode -ne 0) {
+            Write-Warn "marketplace update failed; continuing"
+            if ($result.Output) { Write-Host "      $($result.Output)" }
+        }
+    }
+
+    Show-Summary
+    # Runs LAST, after the summary, so the internal setup's own output - including the
+    # "you still need to log in" banner - is the final thing on screen instead of being
+    # buried under a wall of install output the user has stopped reading.
+    Invoke-CSAInternalSetup
+}
+
+Main
+Show-CsaDebugHint

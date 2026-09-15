@@ -20,7 +20,7 @@
 
 $ErrorActionPreference = 'Stop'
 
-$ScriptVersion = "2026.09061330"
+$ScriptVersion = "2026.09151446"
 
 # ── CSA plugin marketplaces ─────────────────────────────────────────
 # Plugin marketplaces to register with Claude Code. Each entry is an
@@ -33,7 +33,8 @@ $ScriptVersion = "2026.09061330"
 #   scripts/macos-update.sh        (full updater, macOS)
 #   scripts/macos-plugins.sh       (standalone plugins, macOS)
 #   scripts/windows-plugins.ps1    (standalone plugins, Windows)
-# All five files hard-code the same list. When adding or removing a
+#   scripts/windows-update.ps1     (full updater, Windows)
+# All six files hard-code the same list. When adding or removing a
 # marketplace, update every file and bump each file's SCRIPT_VERSION /
 # $ScriptVersion -- otherwise the scripts will drift.
 $CSA_MARKETPLACES = @(
@@ -54,6 +55,7 @@ $CSA_MARKETPLACES = @(
 #   scripts/macos-plugins.sh
 # and as $PluginMarketplaceRepos in
 #   scripts/windows-plugins.ps1
+#   scripts/windows-update.ps1
 $PluginMarketplaceRepos = @{
     'claude-plugins-official'  = 'anthropics/claude-plugins-official'
     'anthropic-agent-skills'   = 'anthropics/skills'
@@ -77,6 +79,7 @@ $PluginMarketplaceRepos = @{
 #   scripts/macos-update.sh
 #   scripts/macos-plugins.sh
 #   scripts/windows-plugins.ps1
+#   scripts/windows-update.ps1
 $CSA_MCP_NAME      = 'csa-mcp'
 $CSA_MCP_URL       = 'https://cloudsecurityalliance.org/mcp'
 $CSA_MCP_GATE_REPO = 'CloudSecurityAlliance-Internal/CSA-Plugins'
