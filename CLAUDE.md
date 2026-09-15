@@ -41,7 +41,7 @@ scripts/
   csa-plugins-internal.txt  # CSA-internal default plugin list (fetched from HEAD at runtime)
 tools/
   check-all.sh              # Everything CI runs, locally, in one command
-  check-*.py                # Repo-specific static checks — all five also run in CI
+  check-*.py                # Repo-specific static checks — all seven also run in CI
   sweep-csa-sources.sh      # Weekly drift sweep (network + gh, NOT in check-all.sh)
 tests/
   test_*.py                 # Standalone executables — run one directly with python3
@@ -50,7 +50,7 @@ archives/                   # Previous script versions for reference
 docs/
   periodic-sweep.md         # Weekly sweep runbook — what drifts and where to fix it
   mcp-servers.md            # Historical MCP config reference (third-party servers)
-TODO.md                     # Audit findings, priority-grouped with file:line citations
+TODO.md                     # Audit findings, priority-grouped; cites functions, never line numbers
 .github/
   ISSUE_TEMPLATE/           # Issue templates for contributions
   rulesets/                 # Branch protection rules
@@ -89,9 +89,11 @@ TODO.md                     # Audit findings, priority-grouped with file:line ci
 All scripts declare a version string near the top — `SCRIPT_VERSION="YYYY.MMDDHHSS"` in the bash scripts, `$ScriptVersion = "YYYY.MMDDHHSS"` in the PowerShell scripts. Update this value when making changes — use the current date/time in that format.
 
 ### Shared boilerplate
-**These are checked now, not just documented.** `.github/workflows/lint.yml` runs on every PR: `bash -n` + shellcheck on the `.sh` files, and — because GitHub runners have `pwsh` and the authoring machine does not — a **parse check and PSScriptAnalyzer on the `.ps1` files**, which had never been verified anywhere before. Plus five repo-specific checks in `tools/` (`check-duplication.py`, `check-powershell-native.py`, `check-pipeline-assignments.py`, `check-paste-safety.py`, `check-shell-tail-conditionals.py`), the first two of which are worth explaining:
+**These are checked now, not just documented.** `.github/workflows/lint.yml` runs on every PR: `bash -n` + shellcheck on the `.sh` files, and — because GitHub runners have `pwsh` and the authoring machine does not — a **parse check and PSScriptAnalyzer on the `.ps1` files**, which had never been verified anywhere before. Plus seven repo-specific checks in `tools/` (`check-duplication.py`, `check-parity.py`, `check-powershell-native.py`, `check-pipeline-assignments.py`, `check-paste-safety.py`, `check-shell-tail-conditionals.py`, `check-todo-citations.py`), of which these are worth explaining:
 
 - **`check-duplication.py`** — a function duplicated across scripts must be byte-identical in behaviour (comments and whitespace ignored). Names that are *meant* to differ live in its `PER_SCRIPT` map with a reason, so allowing a difference is a deliberate act. This turns the instruction below from a discipline into a check; when it was first run, twelve functions had already drifted.
+- **`check-parity.py`** — the complement: it catches what `check-duplication.py` structurally cannot, a function that is **absent**. Every macOS script must have a Windows counterpart, and the two `main()` step lists must match once mapped through its `EQUIV` table (`setup_git_identity` ↔ `Setup-GitIdentity`). Compared as sets, since the platforms order their base layers differently. A step on one side only goes in `PLATFORM_ONLY` or `PER_PAIR` with a reason — Xcode tools and Homebrew are macOS-only, `Set-LongPathSupport` is Windows-only — and an allowlist entry that matches nothing is itself reported, because an exception for a step that no longer exists has stopped checking without failing. Run against the scripts as they stood before #69 it reports exactly three problems, which are exactly the three gaps that shipped: no `windows-update.ps1`, no internal setup in `windows-plugins.ps1`, no Git identity in `windows-work-tools.ps1`. It exists because the scripts are silent by default, so *absent* and *nothing to do* look identical at the terminal and an omission never gets reported. **When you add a step to either platform's `main()`, this check will make you say what its counterpart is.**
+- **`check-todo-citations.py`** — `TODO.md` cites findings by function name (`` (`macos-update.sh`, `update_pip`) ``), never by line number, and every cited function must still exist. The original `file:line` citations had all rotted within seven months, C2 by 243 lines — onto unrelated code about the same topic, which is worse than an obviously wrong citation. Re-anchoring them is also how H5 turned out to be fixed while still marked open.
 - **`check-powershell-native.py`** — a native command (`winget`, `npm`, `gh`, `claude`, `git`, `icacls`, …) invoked in a script that sets `$ErrorActionPreference = 'Stop'` must go through a wrapper that sets `'Continue'`, or a `try/catch`. When first run this found 14 unguarded calls, 13 of them in `windows-work-tools.ps1`, including every `winget install/upgrade` and `npm install -g`; npm writes deprecation warnings to stderr routinely, so that script terminated on a *successful* run.
 
   **The full behaviour, measured on 5.1.26100** — in the shape these scripts actually run in, `& ([ScriptBlock]::Create(…))` invoked from a `'Stop'` session, which is how one script here runs another:
@@ -275,7 +277,9 @@ All macOS scripts follow the same pattern: `main` → preconditions → prefligh
 - `tests/test_survives_tool_failure.py` — one failing tool must not kill the installer (#51)
 - `tests/NativeWrappers.Tests.ps1` — the five `Invoke-Native*` wrappers' contract, run under pwsh 7 locally and under real Windows PowerShell 5.1 in CI
 
-Every one of these extracts the code under test out of the shipping script rather than copying it, so a test cannot drift from what runs. The lower-level checks:
+Every one of these extracts the code under test out of the shipping script rather than copying it, so a test cannot drift from what runs.
+
+`check-all.sh` ends by asserting **the checks did not change the working tree** — `git status --porcelain --untracked-files=all` compared before and after, so it passes mid-edit and fails only on what the run itself did. Every assertion in the suite once passed while `test_version_floors.py` installed a 167 MB Python into the repo on each Windows run (#67); `git status` found it, not the suite. CI runs the same guard at the end of the `duplication` and `powershell` jobs. Known limit: a file already modified before the run and modified again shows the same porcelain line both times. The lower-level checks:
 ```bash
 # macOS — syntax check
 bash -n scripts/macos-work-tools.sh
