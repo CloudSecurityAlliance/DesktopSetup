@@ -25,7 +25,7 @@
 
 set -euo pipefail
 
-SCRIPT_VERSION="2026.09152343"
+SCRIPT_VERSION="2026.09152355"
 
 # ── CSA plugin marketplaces ─────────────────────────────────────────
 # Plugin marketplaces to register with Claude Code. Each entry is an
@@ -452,11 +452,15 @@ preflight() {
     echo "  Homebrew .......... install"
   fi
 
-  # Node.js
-  if has_command node; then
+  # Node.js. The unversioned formula is REPLACED by node@24, and a plan that does not say so
+  # is a plan that hides the only destructive step in this script - `has_command brew` guard
+  # because preflight runs before install_homebrew on a fresh machine (TODO H2's class).
+  if has_command brew && brew list --formula node >/dev/null 2>&1; then
+    echo "  Node.js ........... $(get_version node --version) — replace with the LTS line: install node@24, remove the unversioned formula"
+  elif has_command node; then
     echo "  Node.js ........... installed ($(get_version node --version))"
   else
-    echo "  Node.js ........... install via Homebrew"
+    echo "  Node.js ........... install node@24 (LTS) via Homebrew"
   fi
 
   # uv
@@ -473,9 +477,9 @@ preflight() {
   if py_found="$(find_usable_python)"; then
     echo "  Python ............ installed ($(get_version "$py_found" --version))"
   elif has_command python3; then
-    echo "  Python ............ $(get_version python3 --version) is below ${CSA_PYTHON_MIN} — install via Homebrew"
+    echo "  Python ............ $(get_version python3 --version) is below ${CSA_PYTHON_MIN} — install ${CSA_PYTHON_PREFERRED} via uv (Homebrew as fallback)"
   else
-    echo "  Python ............ install via Homebrew"
+    echo "  Python ............ install ${CSA_PYTHON_PREFERRED} via uv (Homebrew as fallback)"
   fi
 
   # Document toolchain (document-pipeline plugin: Markdown -> tagged PDF)
