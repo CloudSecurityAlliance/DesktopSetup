@@ -1,8 +1,7 @@
 name: probe-brew-node
-# TEMPORARY - deleted before merge. v4 runs the REAL install_node from the shipping script on
-# a Mac, from the state an existing CSA machine is in: unversioned Homebrew node, plus a
-# globally npm-installed CLI. Windows changes were verified by running the real functions; the
-# macOS half should not be held to a lower standard just because the author is on Windows.
+# TEMPORARY - deleted before merge. v5: exact exit codes. v4 showed brew printing a successful
+# Summary and Caveats and STILL returning non-zero, which is the whole reason install_node
+# aborted. Guessing at why would repeat the mistake; this measures it.
 on:
   workflow_dispatch:
   push:
@@ -13,44 +12,29 @@ jobs:
   probe:
     runs-on: macos-latest
     steps:
-      - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955  # v4.3.0
-      - name: Put the machine in the state an existing CSA Mac is in
+      - name: State an existing CSA Mac is in
         run: |
           brew uninstall --ignore-dependencies node node@24 node@22 2>/dev/null || true
-          hash -r
-          brew install node >/dev/null 2>&1
-          hash -r
-          npm install -g wrangler >/dev/null 2>&1 || echo "PROBE npm-setup-failed"
-          hash -r
-          echo "PROBE before-node: $(node --version)"
-          echo "PROBE before-formulas: $(brew list --formula | grep -E '^node' | tr '\n' ' ')"
-          echo "PROBE before-wrangler: $(wrangler --version 2>/dev/null | head -1 || echo MISSING)"
-      - name: Run the real install_node from scripts/macos-ai-tools.sh
-        env:
-          NONINTERACTIVE: '1'
+          hash -r; brew install node >/dev/null 2>&1; hash -r
+          npm install -g wrangler >/dev/null 2>&1 || true
+          echo "PROBE start: $(node --version) wrangler=$(wrangler --version 2>/dev/null | head -1)"
+      - name: Exit codes, step by step
         run: |
-          # Strip the trailing `main "$@"` and source the rest, so the shipping code runs
-          # without the whole installer - the same trick the Windows verification used.
-          sed 's/^main "\$@"$//' scripts/macos-ai-tools.sh > /tmp/lib.sh
           set +e
-          . /tmp/lib.sh
-          echo "PROBE csa-node-min: ${CSA_NODE_MIN}"
-          install_node
-          echo "PROBE install_node-rc: $?"
+          brew uninstall --ignore-dependencies node >/dev/null 2>&1
+          echo "PROBE uninstall-rc: $?"
           hash -r
-          echo "PROBE after-node: $(node --version 2>/dev/null || echo FAILED)"
-          echo "PROBE after-major: $(node --version 2>/dev/null | sed 's/^v//; s/\..*//')"
-          echo "PROBE after-formulas: $(brew list --formula | grep -E '^node' | tr '\n' ' ')"
-          echo "PROBE after-wrangler: $(wrangler --version 2>/dev/null | head -1 || echo STRANDED)"
-          echo "PROBE after-npm: $(npm --version 2>/dev/null || echo FAILED)"
-      - name: Idempotence - run it a second time
-        env:
-          NONINTERACTIVE: '1'
-        run: |
-          sed 's/^main "\$@"$//' scripts/macos-ai-tools.sh > /tmp/lib.sh
-          set +e
-          . /tmp/lib.sh
-          install_node
-          echo "PROBE second-run-rc: $?"
+          out="$(brew install node@24 2>&1)"; rc=$?
+          echo "PROBE install-rc: $rc"
+          echo "PROBE install-tail: $(echo "$out" | tail -4 | tr '\n' '|')"
           hash -r
-          echo "PROBE second-node: $(node --version 2>/dev/null || echo FAILED)"
+          echo "PROBE which-after-install: $(which node 2>/dev/null || echo NOT-ON-PATH)"
+          brew link --overwrite --force node@24 >/dev/null 2>&1
+          echo "PROBE link-rc: $?"
+          hash -r
+          echo "PROBE which-after-link: $(which node 2>/dev/null || echo NOT-ON-PATH)"
+          echo "PROBE node-after-link: $(node --version 2>/dev/null || echo FAILED)"
+          echo "PROBE wrangler-after: $(wrangler --version 2>/dev/null | head -1 || echo STRANDED)"
+          echo "PROBE npm-after: $(npm --version 2>/dev/null || echo FAILED)"
+          brew install node@24 >/dev/null 2>&1
+          echo "PROBE reinstall-when-present-rc: $?"
