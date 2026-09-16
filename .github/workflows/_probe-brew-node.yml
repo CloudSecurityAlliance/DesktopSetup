@@ -1,0 +1,45 @@
+name: probe-brew-node
+# TEMPORARY. Measures how Homebrew's keg-only node@24 behaves on a real Mac, because the
+# authoring machine is Windows and guessing at brew behaviour is how installer changes break
+# a colleague's laptop. Deleted before this branch merges.
+on:
+  workflow_dispatch:
+  push:
+    branches: [fix/node-lts-parity-and-floor]
+permissions:
+  contents: read
+jobs:
+  probe:
+    runs-on: macos-latest
+    steps:
+      - name: Facts about node formulas
+        run: |
+          set -x
+          brew --version | head -1
+          echo "--- before ---"
+          which node || true; node --version || true
+          brew list --formula | grep -E '^node' || echo "(no node formula installed)"
+      - name: brew install node@24, then check PATH WITHOUT linking
+        run: |
+          brew install node@24
+          echo "=== after install, before link ==="
+          which node || echo "  node NOT on PATH"
+          node --version || echo "  node --version failed"
+          echo "prefix: $(brew --prefix node@24)"
+          ls "$(brew --prefix node@24)/bin" || true
+      - name: brew link --overwrite --force node@24
+        run: |
+          brew link --overwrite --force node@24 || echo "LINK FAILED rc=$?"
+          echo "=== after link ==="
+          which node || echo "  node NOT on PATH"
+          node --version || echo "  node --version failed"
+          npm --version || echo "  npm missing"
+      - name: What happens if unversioned node is also installed
+        run: |
+          brew install node || echo "install node rc=$?"
+          echo "--- both installed; which wins? ---"
+          which node; node --version
+          brew list --formula | grep -E '^node' || true
+          echo "--- relink node@24 over it ---"
+          brew link --overwrite --force node@24 || echo "relink rc=$?"
+          which node; node --version
