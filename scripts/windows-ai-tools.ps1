@@ -20,7 +20,7 @@
 
 $ErrorActionPreference = 'Stop'
 
-$ScriptVersion = "2026.09152343"
+$ScriptVersion = "2026.09152355"
 
 # ── CSA plugin marketplaces ─────────────────────────────────────────
 # Plugin marketplaces to register with Claude Code. Each entry is an
@@ -670,7 +670,16 @@ function Show-Preflight {
         $pyVer = Get-ToolVersion python3 '--version'
         Write-Host "  Python ............ installed ($pyVer)"
     } else {
-        Write-Host "  Python ............ install via winget"
+        Write-Host "  Python ............ install $CsaPythonPreferred via uv (winget as fallback)"
+    }
+
+    # uv - provides Python on both platforms since #60. It ran without ever appearing in the
+    # plan, the same defect as the Python line above: the plan named the fallback rather than
+    # the thing that actually happens.
+    if (Has-Command uv) {
+        Write-Host "  uv ................ installed ($(Get-ToolVersion uv '--version'))"
+    } else {
+        Write-Host "  uv ................ install via winget"
     }
 
     # Node.js
@@ -678,7 +687,7 @@ function Show-Preflight {
         $nodeVer = Get-ToolVersion node '--version'
         Write-Host "  Node.js ........... installed ($nodeVer)"
     } else {
-        Write-Host "  Node.js ........... install via winget"
+        Write-Host "  Node.js ........... install the LTS line (OpenJS.NodeJS.LTS) via winget"
     }
 
     # Document toolchain (document-pipeline plugin: Markdown -> tagged PDF)
@@ -691,6 +700,17 @@ function Show-Preflight {
         Write-Host "  typst ............. installed ($(Get-ToolVersion typst '--version'))"
     } else {
         Write-Host "  typst ............. install via winget"
+    }
+
+    # The document-pipeline preflight deps. Install-DocPythonDeps runs them in Main, but the
+    # plan never said so - macOS has shown this line all along. Straight into the winget
+    # Python, not a venv: that Python is not PEP 668 externally-managed, so unlike macOS there
+    # is no second environment to name here.
+    $pyForDeps = if (Has-Command python) { 'python' } elseif (Has-Command python3) { 'python3' } else { $null }
+    if ($pyForDeps -and (Invoke-NativeQuiet { & $pyForDeps -c 'import yaml, pymupdf' }) -eq 0) {
+        Write-Host "  Preflight deps .... installed (pyyaml, pymupdf)"
+    } else {
+        Write-Host "  Preflight deps .... install pyyaml + pymupdf"
     }
 
     # 1Password (GUI app — needed for biometric CLI unlock)
