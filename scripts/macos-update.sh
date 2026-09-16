@@ -17,7 +17,7 @@
 
 set -euo pipefail
 
-SCRIPT_VERSION="2026.09151446"
+SCRIPT_VERSION="2026.09152343"
 
 # ── CSA plugin marketplaces ─────────────────────────────────────────
 # Each update run will add any entries from this list that aren't yet
@@ -464,6 +464,7 @@ preflight() {
     echo "  Plugin marketplaces: refresh registered, add accessible CSA repos"
     install_plugins_preview
     echo "  CSA MCP server     : register $CSA_MCP_NAME if your GitHub account has CSA-Internal access"
+    echo "                       sign in with a free CSA account - https://cloudsecurityalliance.org/ (click 'Sign in or Sign Up')"
     echo ""
   fi
 }
@@ -606,6 +607,7 @@ setup_csa_mcp_server() {
   if add_err="$(claude mcp add --transport http --scope user "$CSA_MCP_NAME" "$CSA_MCP_URL" 2>&1 >/dev/null)"; then
     success "Registered Claude Code MCP server: $CSA_MCP_NAME"
     info "Run /mcp inside Claude Code to authenticate with the CSA MCP server."
+    info "  sign in with a free CSA account - https://cloudsecurityalliance.org/ (click 'Sign in or Sign Up')"
   else
     warn "Failed to register Claude Code MCP server '$CSA_MCP_NAME':"
     printf '      %s\n' "${add_err:-<no stderr output>}"
