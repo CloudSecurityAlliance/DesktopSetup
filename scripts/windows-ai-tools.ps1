@@ -20,7 +20,7 @@
 
 $ErrorActionPreference = 'Stop'
 
-$ScriptVersion = "2026.09152355"
+$ScriptVersion = "2026.09160003"
 
 # ── CSA plugin marketplaces ─────────────────────────────────────────
 # Plugin marketplaces to register with Claude Code. Each entry is an
@@ -1762,7 +1762,7 @@ function Show-Summary {
     Write-Info "Next steps:"
     if (Has-Command gh) {
         if ((Invoke-NativeQuiet { gh auth status }) -ne 0) {
-            Write-Host "  - Run 'gh auth login --git-protocol https' to authenticate with GitHub"
+            Write-Host "  - Run 'gh auth login' to authenticate with GitHub"
         }
     }
     $summaryGitName  = Invoke-NativeOutput { git config --global user.name }

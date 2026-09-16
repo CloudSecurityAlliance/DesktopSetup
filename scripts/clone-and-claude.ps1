@@ -373,7 +373,7 @@ if ($LASTEXITCODE -ne 0) {
     Write-Host ""
     Write-Host "  Run this to log in:"
     Write-Host ""
-    Write-Host "    gh auth login --git-protocol https"
+    Write-Host "    gh auth login"
     Write-Host ""
     Write-Host "  Then re-run this script."
     exit 1
