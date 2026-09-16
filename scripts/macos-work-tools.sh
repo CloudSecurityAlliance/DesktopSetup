@@ -24,7 +24,7 @@
 
 set -euo pipefail
 
-SCRIPT_VERSION="2026.09081530"
+SCRIPT_VERSION="2026.09151854"
 
 # ── Output helpers ──────────────────────────────────────────────────
 

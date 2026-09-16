@@ -22,7 +22,7 @@
 
 $ErrorActionPreference = 'Stop'
 
-$ScriptVersion = "2026.09151550"
+$ScriptVersion = "2026.09151854"
 
 # ── App sets ────────────────────────────────────────────────────────
 # ONE list per profile, read by Select-Profile, Show-Preflight, Install-Core/Install-Dev,

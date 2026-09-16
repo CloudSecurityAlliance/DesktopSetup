@@ -107,6 +107,15 @@ def extract(source: pathlib.Path, name: str) -> str:
     return m.group(0)
 
 
+def extract_assignment(source: pathlib.Path, name: str) -> str:
+    """The literal `NAME=value` line from a script, so no test hardcodes a floor."""
+    text = source.read_text(encoding="utf-8")
+    match = re.search(rf"^{re.escape(name)}=\S+", text, re.M)
+    if not match:
+        raise SystemExit(f"could not find {name} in {source.name}")
+    return match.group(0)
+
+
 def floor() -> tuple[int, ...]:
     raw = extract(AI, "CSA_PYTHON_MIN").split('"')[1]
     return tuple(int(p) for p in raw.split("."))
@@ -238,6 +247,15 @@ def main() -> int:
     nf = extract(AI, "node_meets_floor")
     check(nf == extract(WORK, "node_meets_floor"),
           "node_meets_floor is identical in both scripts")
+    # The floor moved out of the function body into CSA_NODE_MIN, so it has to be extracted
+    # too -- without it `min` is empty and the comparison rejects every version, which is how
+    # this test caught the change. Extracted rather than hardcoded, for the usual reason: a
+    # copy of the number here could disagree with the script and still pass.
+    node_min = extract_assignment(AI, "CSA_NODE_MIN")
+    check(extract_assignment(WORK, "CSA_NODE_MIN") == node_min,
+          f"CSA_NODE_MIN is the same in both scripts ({node_min})")
+    check(int(node_min.split("=")[1]) >= 22,
+          "node floor is at least 22 (what wrangler's engines.node asks for)")
     with tempfile.TemporaryDirectory() as td:
         # v20 and v21 now FAIL: wrangler needs >= 22, and Node is the Workers/TypeScript
         # runtime here, not only an AI-CLI dependency. v26 is Current, v24 is LTS; both pass.
@@ -249,7 +267,7 @@ def main() -> int:
             f = d / "node"
             f.write_text(f"#!/bin/sh\necho '{version}'\n", encoding="utf-8")
             f.chmod(0o755)
-            _, rc = bash(f"{nf}\nif node_meets_floor; then exit 0; else exit 1; fi",
+            _, rc = bash(f"{node_min}\n{nf}\nif node_meets_floor; then exit 0; else exit 1; fi",
                          path=f"{d}:/usr/bin:/bin")
             check((rc == 0) == expected,
                   f"node {version or '(no output)'!r} -> {'accepted' if expected else 'rejected'}")
