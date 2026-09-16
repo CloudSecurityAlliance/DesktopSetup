@@ -18,6 +18,8 @@
 
 set -euo pipefail
 
+SCRIPT_VERSION="2026.09160011"
+
 # ── Output helpers ──────────────────────────────────────────────────
 
 if [[ -t 1 ]]; then
@@ -207,7 +209,7 @@ fi
 ORG="${REPO_SLUG%%/*}"
 REPO="${REPO_SLUG##*/}"
 
-info "Cloud Security Alliance — Clone & Claude"
+info "Cloud Security Alliance — Clone & Claude v${SCRIPT_VERSION}"
 echo ""
 echo "  Repository: $REPO_SLUG"
 echo ""

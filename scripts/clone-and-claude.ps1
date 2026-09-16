@@ -16,6 +16,8 @@
 
 $ErrorActionPreference = 'Stop'
 
+$ScriptVersion = "2026.09160011"
+
 # ── Output helpers ──────────────────────────────────────────────────
 
 function Write-Info    { param([string]$Message) Write-Host "==> $Message" -ForegroundColor Cyan }
@@ -334,7 +336,7 @@ $Repo = $RepoSlug.Split('/')[1]
 # which is the runtime this script targets.
 $DefaultBase = Join-Path (Join-Path $HOME "GitHub") $Org
 
-Write-Info "Cloud Security Alliance - Clone & Claude"
+Write-Info "Cloud Security Alliance - Clone & Claude v$ScriptVersion"
 Write-Host ""
 Write-Host "  Repository: $RepoSlug"
 Write-Host ""

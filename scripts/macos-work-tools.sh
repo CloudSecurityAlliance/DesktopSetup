@@ -24,7 +24,7 @@
 
 set -euo pipefail
 
-SCRIPT_VERSION="2026.09151854"
+SCRIPT_VERSION="2026.09160011"
 
 # ── Output helpers ──────────────────────────────────────────────────
 
@@ -211,8 +211,8 @@ has_command() { command -v "$1" >/dev/null 2>&1; }
 
 # npm 11.19+ ends a global install with an `npm warn install-scripts` block: native dependencies
 # (node-pty and @github/keytar, under the Gemini CLI) declare install scripts that a future npm
-# will run only from an allowlist. Measured on npm 11.19.0 / node 26.8.1 — what Homebrew ships,
-# so what a clean machine gets — the scripts still RUN: `node-pty/build/` holds the node-gyp
+# will run only from an allowlist. Measured on npm 11.19.0 / node 26.8.1 (Homebrew's unversioned
+# node, which is what a clean machine got before #74 pinned node@24) — the scripts still RUN: `node-pty/build/` holds the node-gyp
 # Makefiles afterwards and both modules load. It is a pre-announcement, not a failure.
 #
 # It does not read like one (issue #51). This installer is run by people who do not use npm, on
