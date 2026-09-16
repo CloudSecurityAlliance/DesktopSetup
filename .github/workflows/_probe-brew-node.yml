@@ -1,7 +1,7 @@
 name: probe-brew-node
-# TEMPORARY. Measures how Homebrew's keg-only node@24 behaves on a real Mac, because the
-# authoring machine is Windows and guessing at brew behaviour is how installer changes break
-# a colleague's laptop. Deleted before this branch merges.
+# TEMPORARY - deleted before this branch merges. v1 was confounded: the runner image ships
+# node@24 already installed AND linked, so "it was on PATH" proved nothing. This starts by
+# removing both node formulas to get the state a staff Mac is actually in.
 on:
   workflow_dispatch:
   push:
@@ -12,34 +12,38 @@ jobs:
   probe:
     runs-on: macos-latest
     steps:
-      - name: Facts about node formulas
+      - name: Clean slate
         run: |
-          set -x
-          brew --version | head -1
-          echo "--- before ---"
-          which node || true; node --version || true
-          brew list --formula | grep -E '^node' || echo "(no node formula installed)"
-      - name: brew install node@24, then check PATH WITHOUT linking
+          brew uninstall --ignore-dependencies node node@24 node@22 2>/dev/null || true
+          hash -r
+          echo "PROBE which-node-after-uninstall: $(which node 2>/dev/null || echo NONE)"
+          echo "PROBE formulas: $(brew list --formula 2>/dev/null | grep -E '^node' | tr '\n' ' ' || echo none)"
+      - name: Fresh install of keg-only node@24
         run: |
-          brew install node@24
-          echo "=== after install, before link ==="
-          which node || echo "  node NOT on PATH"
-          node --version || echo "  node --version failed"
-          echo "prefix: $(brew --prefix node@24)"
-          ls "$(brew --prefix node@24)/bin" || true
-      - name: brew link --overwrite --force node@24
+          brew install node@24 >/dev/null 2>&1 || echo "PROBE install-failed"
+          hash -r
+          echo "PROBE which-node-after-install: $(which node 2>/dev/null || echo 'NOT-ON-PATH')"
+          echo "PROBE symlink: $(ls -l /opt/homebrew/bin/node 2>/dev/null || echo 'no /opt/homebrew/bin/node')"
+          echo "PROBE prefix-bin: $(ls /opt/homebrew/opt/node@24/bin 2>/dev/null | tr '\n' ' ')"
+      - name: Plain brew link (expected to refuse for a keg-only formula)
         run: |
-          brew link --overwrite --force node@24 || echo "LINK FAILED rc=$?"
-          echo "=== after link ==="
-          which node || echo "  node NOT on PATH"
-          node --version || echo "  node --version failed"
-          npm --version || echo "  npm missing"
-      - name: What happens if unversioned node is also installed
+          out="$(brew link node@24 2>&1)"; rc=$?
+          echo "PROBE plain-link-rc: $rc"
+          echo "PROBE plain-link-out: $(echo "$out" | tr '\n' '|' | cut -c1-200)"
+      - name: brew link --overwrite --force
         run: |
-          brew install node || echo "install node rc=$?"
-          echo "--- both installed; which wins? ---"
-          which node; node --version
-          brew list --formula | grep -E '^node' || true
-          echo "--- relink node@24 over it ---"
-          brew link --overwrite --force node@24 || echo "relink rc=$?"
-          which node; node --version
+          out="$(brew link --overwrite --force node@24 2>&1)"; rc=$?
+          hash -r
+          echo "PROBE force-link-rc: $rc"
+          echo "PROBE which-node-after-force-link: $(which node 2>/dev/null || echo 'NOT-ON-PATH')"
+          echo "PROBE node-version: $(node --version 2>/dev/null || echo 'FAILED')"
+          echo "PROBE npm-version: $(npm --version 2>/dev/null || echo 'FAILED')"
+      - name: Does the unversioned formula then conflict?
+        run: |
+          brew install node >/dev/null 2>&1 || echo "PROBE node-install-failed"
+          hash -r
+          echo "PROBE after-installing-unversioned: $(node --version 2>/dev/null || echo FAILED) at $(which node)"
+          out="$(brew link --overwrite --force node@24 2>&1)"; rc=$?
+          hash -r
+          echo "PROBE relink-rc: $rc"
+          echo "PROBE after-relink: $(node --version 2>/dev/null || echo FAILED)"
