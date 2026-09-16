@@ -20,7 +20,7 @@
 
 $ErrorActionPreference = 'Stop'
 
-$ScriptVersion = "2026.09151446"
+$ScriptVersion = "2026.09151854"
 
 # ── CSA plugin marketplaces ─────────────────────────────────────────
 # Plugin marketplaces to register with Claude Code. Each entry is an
@@ -1093,7 +1093,7 @@ function Install-Python {
     }
 
     Write-Info "Installing Python via winget"
-    $null = Invoke-NativeShow { winget install Python.Python.3.13 --accept-package-agreements --accept-source-agreements }
+    $null = Invoke-NativeShow { winget install "Python.Python.$CsaPythonPreferred" --accept-package-agreements --accept-source-agreements }
     if ($LASTEXITCODE -ne 0) { Abort "Failed to install Python." }
     Refresh-Path
 }
@@ -1157,23 +1157,42 @@ function Install-DocPythonDeps {
     }
 }
 
+# Wrangler's engines.node asks for the most of anything installed here (">=22.0.0"), so the
+# floor is derived, not chosen - see the same constant and rationale in the bash scripts.
+# Windows had NO floor check at all until this: an existing non-winget Node of any age was
+# accepted with "already installed", and Wrangler then failed at use time on a machine the
+# installer had just called ready. macOS has checked this since #53.
+$CsaNodeMin = 22
+
+function Test-NodeFloor {
+    if (-not (Has-Command node)) { return $false }
+    $raw = Invoke-NativeOutput { node --version }
+    if (-not $raw) { return $false }
+    $match = [regex]::Match(([string]$raw).Trim(), '^v(\d+)\.')
+    if (-not $match.Success) { return $false }
+    return ([int]$match.Groups[1].Value -ge $CsaNodeMin)
+}
+
 function Install-Node {
     if (Has-Command node) {
-        # Check if managed by winget and try to upgrade
         $wingetNode = Invoke-NativeOutput { winget list --id OpenJS.NodeJS.LTS --accept-source-agreements }
         if ($wingetNode -and ($wingetNode | Select-String 'OpenJS.NodeJS.LTS')) {
             Write-Info "Upgrading Node.js via winget"
             $null = Invoke-NativeShow { winget upgrade --id OpenJS.NodeJS.LTS --accept-package-agreements --accept-source-agreements }
-            # winget upgrade returns non-zero if already up to date — that's fine
-        } else {
-            $nodeVer = Get-ToolVersion node '--version'
-            Write-Info "Node.js already installed (non-winget): $nodeVer"
+            Refresh-Path
+            return
         }
+        if (Test-NodeFloor) {
+            Write-Info "Node.js already installed (non-winget): $(Get-ToolVersion node '--version')"
+            Refresh-Path
+            return
+        }
+        Write-Info "Node.js is $(Get-ToolVersion node '--version'), below the v$CsaNodeMin Wrangler needs - installing Node.js LTS via winget"
     } else {
         Write-Info "Installing Node.js LTS via winget"
-        $null = Invoke-NativeShow { winget install OpenJS.NodeJS.LTS --accept-package-agreements --accept-source-agreements }
-        if ($LASTEXITCODE -ne 0) { Abort "Failed to install Node.js." }
     }
+    $null = Invoke-NativeShow { winget install OpenJS.NodeJS.LTS --accept-package-agreements --accept-source-agreements }
+    if ($LASTEXITCODE -ne 0) { Abort "Failed to install Node.js." }
     Refresh-Path
 }
 
