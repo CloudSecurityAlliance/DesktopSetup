@@ -17,7 +17,7 @@
 
 $ErrorActionPreference = 'Stop'
 
-$ScriptVersion = "2026.09151446"
+$ScriptVersion = "2026.09152343"
 
 # ── Snapshot location ───────────────────────────────────────
 
@@ -715,6 +715,7 @@ function Register-CSAMcpServer {
     if ($result.ExitCode -eq 0) {
         Write-Success "Registered Claude Code MCP server: $CSA_MCP_NAME"
         Write-Info "Run /mcp inside Claude Code to authenticate with the CSA MCP server."
+        Write-Info "  sign in with a free CSA account - https://cloudsecurityalliance.org/ (click 'Sign in or Sign Up')"
     } else {
         Write-Warn "Failed to register Claude Code MCP server '$CSA_MCP_NAME':"
         $msg = if ($result.Output) { $result.Output } else { '<no stderr output>' }
@@ -989,6 +990,7 @@ function Show-Preflight {
     Write-Host "  Plugin marketplaces: refresh registered, add accessible CSA repos"
     Show-PluginsPreview
     Write-Host "  CSA MCP server     : register $CSA_MCP_NAME if your GitHub account has CSA-Internal access"
+    Write-Host "                       sign in with a free CSA account - https://cloudsecurityalliance.org/ (click 'Sign in or Sign Up')"
 
     Write-Host ""
     Write-Host "  Snapshot           : $SnapshotFile"

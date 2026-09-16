@@ -25,7 +25,7 @@
 
 set -euo pipefail
 
-SCRIPT_VERSION="2026.09151854"
+SCRIPT_VERSION="2026.09152343"
 
 # ── CSA plugin marketplaces ─────────────────────────────────────────
 # Plugin marketplaces to register with Claude Code. Each entry is an
@@ -607,6 +607,7 @@ preflight() {
   echo "  Plugin marketplaces  probe ${#CSA_MARKETPLACES[@]} CSA repos, add any your GitHub account can access"
   install_plugins_preview
   echo "  CSA MCP server       register $CSA_MCP_NAME if your GitHub account has CSA-Internal access"
+  echo "                       sign in with a free CSA account - https://cloudsecurityalliance.org/ (click 'Sign in or Sign Up')"
   # Announced, because it was not: setup_csa_internal_tools installs and upgrades
   # csa-google-workspace, and a plan that does not mention it means somebody reading the plan
   # cannot tell whether their Google Workspace server was touched. Same gh-probe gate as the
@@ -1353,6 +1354,7 @@ setup_csa_mcp_server() {
   if add_err="$(claude mcp add --transport http --scope user "$CSA_MCP_NAME" "$CSA_MCP_URL" 2>&1 >/dev/null)"; then
     success "Registered Claude Code MCP server: $CSA_MCP_NAME"
     info "Run /mcp inside Claude Code to authenticate with the CSA MCP server."
+    info "  sign in with a free CSA account - https://cloudsecurityalliance.org/ (click 'Sign in or Sign Up')"
   else
     warn "Failed to register Claude Code MCP server '$CSA_MCP_NAME':"
     printf '      %s\n' "${add_err:-<no stderr output>}"
