@@ -1,7 +1,8 @@
 name: probe-brew-node
-# TEMPORARY - deleted before merge. v3: does switching to node@24 strand npm globals?
-# Codex, Gemini and Wrangler are installed with `npm -g`, so where the global prefix lives
-# decides whether the LTS switch quietly removes three CLIs from a colleague's Mac.
+# TEMPORARY - deleted before merge. v4 runs the REAL install_node from the shipping script on
+# a Mac, from the state an existing CSA machine is in: unversioned Homebrew node, plus a
+# globally npm-installed CLI. Windows changes were verified by running the real functions; the
+# macOS half should not be held to a lower standard just because the author is on Windows.
 on:
   workflow_dispatch:
   push:
@@ -12,30 +13,44 @@ jobs:
   probe:
     runs-on: macos-latest
     steps:
-      - name: Start from the state a CSA Mac is in - unversioned node, with a global package
+      - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955  # v4.3.0
+      - name: Put the machine in the state an existing CSA Mac is in
         run: |
           brew uninstall --ignore-dependencies node node@24 node@22 2>/dev/null || true
           hash -r
           brew install node >/dev/null 2>&1
           hash -r
-          npm install -g wrangler >/dev/null 2>&1 || echo "PROBE npm-install-failed"
+          npm install -g wrangler >/dev/null 2>&1 || echo "PROBE npm-setup-failed"
           hash -r
-          echo "PROBE start-node: $(node --version)"
-          echo "PROBE start-prefix: $(npm prefix -g)"
-          echo "PROBE start-wrangler: $(which wrangler 2>/dev/null || echo MISSING) $(wrangler --version 2>/dev/null | head -1)"
-      - name: Install node@24 and force-link it, leaving unversioned node installed
+          echo "PROBE before-node: $(node --version)"
+          echo "PROBE before-formulas: $(brew list --formula | grep -E '^node' | tr '\n' ' ')"
+          echo "PROBE before-wrangler: $(wrangler --version 2>/dev/null | head -1 || echo MISSING)"
+      - name: Run the real install_node from scripts/macos-ai-tools.sh
+        env:
+          NONINTERACTIVE: '1'
         run: |
-          brew install node@24 >/dev/null 2>&1
-          brew link --overwrite --force node@24 >/dev/null 2>&1
+          # Strip the trailing `main "$@"` and source the rest, so the shipping code runs
+          # without the whole installer - the same trick the Windows verification used.
+          sed 's/^main "\$@"$//' scripts/macos-ai-tools.sh > /tmp/lib.sh
+          set +e
+          . /tmp/lib.sh
+          echo "PROBE csa-node-min: ${CSA_NODE_MIN}"
+          install_node
+          echo "PROBE install_node-rc: $?"
           hash -r
-          echo "PROBE after-node: $(node --version)"
-          echo "PROBE after-prefix: $(npm prefix -g)"
-          echo "PROBE after-wrangler: $(which wrangler 2>/dev/null || echo STRANDED) $(wrangler --version 2>/dev/null | head -1)"
-      - name: And if the unversioned formula is removed entirely
+          echo "PROBE after-node: $(node --version 2>/dev/null || echo FAILED)"
+          echo "PROBE after-major: $(node --version 2>/dev/null | sed 's/^v//; s/\..*//')"
+          echo "PROBE after-formulas: $(brew list --formula | grep -E '^node' | tr '\n' ' ')"
+          echo "PROBE after-wrangler: $(wrangler --version 2>/dev/null | head -1 || echo STRANDED)"
+          echo "PROBE after-npm: $(npm --version 2>/dev/null || echo FAILED)"
+      - name: Idempotence - run it a second time
+        env:
+          NONINTERACTIVE: '1'
         run: |
-          brew uninstall --ignore-dependencies node >/dev/null 2>&1 || echo "PROBE uninstall-failed"
-          brew link --overwrite --force node@24 >/dev/null 2>&1
+          sed 's/^main "\$@"$//' scripts/macos-ai-tools.sh > /tmp/lib.sh
+          set +e
+          . /tmp/lib.sh
+          install_node
+          echo "PROBE second-run-rc: $?"
           hash -r
-          echo "PROBE final-node: $(node --version 2>/dev/null || echo FAILED)"
-          echo "PROBE final-prefix: $(npm prefix -g 2>/dev/null || echo FAILED)"
-          echo "PROBE final-wrangler: $(which wrangler 2>/dev/null || echo STRANDED) $(wrangler --version 2>/dev/null | head -1)"
+          echo "PROBE second-node: $(node --version 2>/dev/null || echo FAILED)"

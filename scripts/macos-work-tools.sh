@@ -462,8 +462,10 @@ install_homebrew() {
 # rule as CSA_PYTHON_MIN. Measured 2026-09-06: wrangler >= 22.0.0, gemini-cli >= 20, typescript
 # >= 16.20, codex >= 16. Wrangler binds, because Node here is not just an AI-CLI dependency:
 # it is the runtime for building Cloudflare Workers and TypeScript.
+CSA_NODE_MIN=22
+
 node_meets_floor() {
-  local min=22 major
+  local min="$CSA_NODE_MIN" major
   # `|| major=""` is not decoration: under pipefail a missing or broken `node` makes this
   # pipeline non-zero, the assignment inherits it, and set -e kills the caller. That is the
   # #51 class, and tools/check-pipeline-assignments.py now fails on it.
@@ -477,22 +479,47 @@ node_meets_floor() {
 install_node() {
   ensure_brew_in_path
 
+  # Pin the LTS line so both platforms run the same Node major; Windows installs
+  # OpenJS.NodeJS.LTS (#56). node@24 is a versioned, keg-only formula, so rather than reason
+  # about what that means, three things were measured on a macos-latest runner (2026-09-16):
+  #   - a fresh `brew install node@24` DOES put node on PATH, keg-only notwithstanding;
+  #   - it does NOT take over from an already-linked unversioned `node` - which every Mac this
+  #     script has run on has, because this script used to install exactly that. Hence the
+  #     explicit force-link below;
+  #   - npm's global prefix is the Homebrew prefix in every one of those states, so wrangler,
+  #     codex and gemini installed with `npm -g` keep working across the switch. Verified by
+  #     installing wrangler first and checking it still ran afterwards.
+  # The unversioned formula is removed rather than merely left unlinked: `brew upgrade` in
+  # macos-update.sh upgrades and relinks whatever is installed, so leaving it would flip the
+  # machine back to Current on the next update run, silently.
   if brew list --formula node >/dev/null 2>&1; then
-    if brew outdated node 2>/dev/null | grep -q node; then
+    info "Replacing the unversioned Homebrew Node.js with the LTS line (node@24)"
+    brew uninstall --ignore-dependencies node >/dev/null 2>&1 \
+      || warn "Could not remove the unversioned node formula; continuing"
+  fi
+
+  if brew list --formula node@24 >/dev/null 2>&1; then
+    if brew outdated node@24 2>/dev/null | grep -q node@24; then
       info "Upgrading Node.js"
-      brew upgrade node || abort "Failed to upgrade Node.js"
+      brew upgrade node@24 || abort "Failed to upgrade Node.js"
     else
       info "Node.js already current: $(get_version node --version)"
     fi
   elif has_command node && node_meets_floor; then
     info "Node.js already installed (non-Homebrew): $(get_version node --version)"
+    return 0
   else
     if has_command node; then
-      info "Node.js is $(get_version node --version), below the v22 Wrangler needs - installing Homebrew Node.js"
+      info "Node.js is $(get_version node --version), below the v${CSA_NODE_MIN} Wrangler needs - installing Homebrew Node.js"
     fi
-    info "Installing Node.js"
-    brew install node || abort "Failed to install Node.js"
+    info "Installing Node.js LTS (node@24)"
+    brew install node@24 || abort "Failed to install Node.js"
   fi
+
+  # keg-only: without this, an unversioned node installed later silently wins.
+  brew link --overwrite --force node@24 >/dev/null 2>&1 \
+    || warn "Could not link node@24 - run: brew link --overwrite --force node@24"
+  return 0
 }
 
 install_formula() {
