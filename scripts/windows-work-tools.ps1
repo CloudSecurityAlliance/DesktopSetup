@@ -22,7 +22,7 @@
 
 $ErrorActionPreference = 'Stop'
 
-$ScriptVersion = "2026.09151854"
+$ScriptVersion = "2026.09160003"
 
 # ── App sets ────────────────────────────────────────────────────────
 # ONE list per profile, read by Select-Profile, Show-Preflight, Install-Core/Install-Dev,
@@ -965,7 +965,7 @@ function Show-Summary {
     if (Has-Command gh) {
         $authCheck = (Invoke-NativeCapture { gh auth status }).Output
         if ($LASTEXITCODE -ne 0) {
-            Write-Host "  - Run 'gh auth login --git-protocol https' to authenticate with GitHub"
+            Write-Host "  - Run 'gh auth login' to authenticate with GitHub"
         }
     }
     if ($script:InstallDev) {

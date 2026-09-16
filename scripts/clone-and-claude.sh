@@ -253,7 +253,7 @@ if ! gh auth status >/dev/null 2>&1; then
   echo ""
   echo "  Run this to log in:"
   echo ""
-  echo "    gh auth login --git-protocol https"
+  echo "    gh auth login"
   echo ""
   echo "  Then re-run this script."
   exit 1
