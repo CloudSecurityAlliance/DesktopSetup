@@ -1,7 +1,7 @@
 name: probe-brew-node
-# TEMPORARY - deleted before merge. v5: exact exit codes. v4 showed brew printing a successful
-# Summary and Caveats and STILL returning non-zero, which is the whole reason install_node
-# aborted. Guessing at why would repeat the mistake; this measures it.
+# TEMPORARY - deleted before merge. v6: acceptance test. Runs the corrected install_node from
+# the shipping script on a Mac, from the state an existing CSA machine is in, and asserts the
+# outcome instead of eyeballing logs.
 on:
   workflow_dispatch:
   push:
@@ -12,29 +12,39 @@ jobs:
   probe:
     runs-on: macos-latest
     steps:
-      - name: State an existing CSA Mac is in
+      - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955  # v4.3.0
+      - name: State an existing CSA Mac is in - unversioned node + an npm global
         run: |
           brew uninstall --ignore-dependencies node node@24 node@22 2>/dev/null || true
           hash -r; brew install node >/dev/null 2>&1; hash -r
           npm install -g wrangler >/dev/null 2>&1 || true
-          echo "PROBE start: $(node --version) wrangler=$(wrangler --version 2>/dev/null | head -1)"
-      - name: Exit codes, step by step
+          echo "PROBE before: node=$(node --version) wrangler=$(wrangler --version 2>/dev/null | head -1)"
+      - name: Run the real install_node, then ASSERT the outcome
+        env: { NONINTERACTIVE: '1' }
         run: |
-          set +e
-          brew uninstall --ignore-dependencies node >/dev/null 2>&1
-          echo "PROBE uninstall-rc: $?"
+          sed 's/^main "\$@"$//' scripts/macos-ai-tools.sh > /tmp/lib.sh
+          . /tmp/lib.sh
+          install_node
           hash -r
-          out="$(brew install node@24 2>&1)"; rc=$?
-          echo "PROBE install-rc: $rc"
-          echo "PROBE install-tail: $(echo "$out" | tail -4 | tr '\n' '|')"
+          major="$(node --version 2>/dev/null | sed 's/^v//; s/\..*//')"
+          echo "PROBE after: node=$(node --version 2>/dev/null || echo FAILED) major=$major"
+          echo "PROBE formulas: $(brew list --formula | grep -E '^node' | tr '\n' ' ')"
+          echo "PROBE wrangler: $(wrangler --version 2>/dev/null | head -1 || echo STRANDED)"
+          echo "PROBE npm: $(npm --version 2>/dev/null || echo FAILED)"
+          fail=0
+          [ "$major" = "24" ] || { echo "PROBE ASSERT-FAIL: node major is $major, want 24"; fail=1; }
+          brew list --formula node@24 >/dev/null 2>&1 || { echo "PROBE ASSERT-FAIL: node@24 not installed"; fail=1; }
+          if brew list --formula node >/dev/null 2>&1; then echo "PROBE ASSERT-FAIL: unversioned node still installed"; fail=1; fi
+          wrangler --version >/dev/null 2>&1 || { echo "PROBE ASSERT-FAIL: wrangler stranded"; fail=1; }
+          [ "$fail" = "0" ] && echo "PROBE ASSERT: all outcome assertions passed"
+          exit $fail
+      - name: Idempotence - a second run must be a no-op and still succeed
+        env: { NONINTERACTIVE: '1' }
+        run: |
+          sed 's/^main "\$@"$//' scripts/macos-ai-tools.sh > /tmp/lib.sh
+          . /tmp/lib.sh
+          install_node
           hash -r
-          echo "PROBE which-after-install: $(which node 2>/dev/null || echo NOT-ON-PATH)"
-          brew link --overwrite --force node@24 >/dev/null 2>&1
-          echo "PROBE link-rc: $?"
-          hash -r
-          echo "PROBE which-after-link: $(which node 2>/dev/null || echo NOT-ON-PATH)"
-          echo "PROBE node-after-link: $(node --version 2>/dev/null || echo FAILED)"
-          echo "PROBE wrangler-after: $(wrangler --version 2>/dev/null | head -1 || echo STRANDED)"
-          echo "PROBE npm-after: $(npm --version 2>/dev/null || echo FAILED)"
-          brew install node@24 >/dev/null 2>&1
-          echo "PROBE reinstall-when-present-rc: $?"
+          echo "PROBE second-run: node=$(node --version) rc-ok"
+          [ "$(node --version | sed 's/^v//; s/\..*//')" = "24" ] || { echo "PROBE ASSERT-FAIL: second run changed node"; exit 1; }
+          echo "PROBE ASSERT: idempotent"

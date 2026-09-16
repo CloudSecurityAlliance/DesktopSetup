@@ -715,10 +715,9 @@ install_node() {
   # Pin the LTS line so both platforms run the same Node major; Windows installs
   # OpenJS.NodeJS.LTS (#56). node@24 is a versioned, keg-only formula, so rather than reason
   # about what that means, three things were measured on a macos-latest runner (2026-09-16):
-  #   - a fresh `brew install node@24` DOES put node on PATH, keg-only notwithstanding;
-  #   - it does NOT take over from an already-linked unversioned `node` - which every Mac this
-  #     script has run on has, because this script used to install exactly that. Hence the
-  #     explicit force-link below;
+  #   - `brew install node@24` exits 1 even when it succeeds, so its status cannot be trusted;
+  #   - keg-only is literal: immediately after a successful install there is NO `node` on PATH
+  #     at all, so the force-link below is required rather than defensive;
   #   - npm's global prefix is the Homebrew prefix in every one of those states, so wrangler,
   #     codex and gemini installed with `npm -g` keep working across the switch. Verified by
   #     installing wrangler first and checking it still ran afterwards.
@@ -734,7 +733,9 @@ install_node() {
   if brew list --formula node@24 >/dev/null 2>&1; then
     if brew outdated node@24 2>/dev/null | grep -q node@24; then
       info "Upgrading Node.js"
-      brew upgrade node@24 || abort "Failed to upgrade Node.js"
+      # Same reasoning as the install below: do not trust this exit status for a keg-only
+      # formula, and an out-of-date Node is not a reason to stop the whole installer anyway.
+      brew upgrade node@24 || warn "Could not upgrade Node.js; continuing with the installed version"
     else
       info "Node.js already current: $(get_version node --version)"
     fi
@@ -746,10 +747,17 @@ install_node() {
       info "Node.js is $(get_version node --version), below the v${CSA_NODE_MIN} Wrangler needs - installing Homebrew Node.js"
     fi
     info "Installing Node.js LTS (node@24)"
-    brew install node@24 || abort "Failed to install Node.js"
+    # Measured on macos-latest 2026-09-16: `brew install node@24` exits **1** even when it
+    # succeeds - it installs the formula, prints its Summary, then the keg-only caveat, and
+    # returns non-zero. `|| abort` on that exit status aborts a working install, which is
+    # exactly what the first version of this did. Check the outcome, not the status.
+    brew install node@24 || true
+    brew list --formula node@24 >/dev/null 2>&1 || abort "Failed to install Node.js"
   fi
 
-  # keg-only: without this, an unversioned node installed later silently wins.
+  # REQUIRED, not belt-and-braces: node@24 is keg-only, so Homebrew deliberately does not
+  # symlink it into the prefix. Measured - immediately after a successful install there is no
+  # `node` on PATH at all until this runs.
   brew link --overwrite --force node@24 >/dev/null 2>&1 \
     || warn "Could not link node@24 - run: brew link --overwrite --force node@24"
   return 0
