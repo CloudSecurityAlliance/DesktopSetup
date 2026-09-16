@@ -1,7 +1,7 @@
 name: probe-brew-node
-# TEMPORARY - deleted before this branch merges. v1 was confounded: the runner image ships
-# node@24 already installed AND linked, so "it was on PATH" proved nothing. This starts by
-# removing both node formulas to get the state a staff Mac is actually in.
+# TEMPORARY - deleted before merge. v3: does switching to node@24 strand npm globals?
+# Codex, Gemini and Wrangler are installed with `npm -g`, so where the global prefix lives
+# decides whether the LTS switch quietly removes three CLIs from a colleague's Mac.
 on:
   workflow_dispatch:
   push:
@@ -12,38 +12,30 @@ jobs:
   probe:
     runs-on: macos-latest
     steps:
-      - name: Clean slate
+      - name: Start from the state a CSA Mac is in - unversioned node, with a global package
         run: |
           brew uninstall --ignore-dependencies node node@24 node@22 2>/dev/null || true
           hash -r
-          echo "PROBE which-node-after-uninstall: $(which node 2>/dev/null || echo NONE)"
-          echo "PROBE formulas: $(brew list --formula 2>/dev/null | grep -E '^node' | tr '\n' ' ' || echo none)"
-      - name: Fresh install of keg-only node@24
-        run: |
-          brew install node@24 >/dev/null 2>&1 || echo "PROBE install-failed"
+          brew install node >/dev/null 2>&1
           hash -r
-          echo "PROBE which-node-after-install: $(which node 2>/dev/null || echo 'NOT-ON-PATH')"
-          echo "PROBE symlink: $(ls -l /opt/homebrew/bin/node 2>/dev/null || echo 'no /opt/homebrew/bin/node')"
-          echo "PROBE prefix-bin: $(ls /opt/homebrew/opt/node@24/bin 2>/dev/null | tr '\n' ' ')"
-      - name: Plain brew link (expected to refuse for a keg-only formula)
-        run: |
-          out="$(brew link node@24 2>&1)"; rc=$?
-          echo "PROBE plain-link-rc: $rc"
-          echo "PROBE plain-link-out: $(echo "$out" | tr '\n' '|' | cut -c1-200)"
-      - name: brew link --overwrite --force
-        run: |
-          out="$(brew link --overwrite --force node@24 2>&1)"; rc=$?
+          npm install -g wrangler >/dev/null 2>&1 || echo "PROBE npm-install-failed"
           hash -r
-          echo "PROBE force-link-rc: $rc"
-          echo "PROBE which-node-after-force-link: $(which node 2>/dev/null || echo 'NOT-ON-PATH')"
-          echo "PROBE node-version: $(node --version 2>/dev/null || echo 'FAILED')"
-          echo "PROBE npm-version: $(npm --version 2>/dev/null || echo 'FAILED')"
-      - name: Does the unversioned formula then conflict?
+          echo "PROBE start-node: $(node --version)"
+          echo "PROBE start-prefix: $(npm prefix -g)"
+          echo "PROBE start-wrangler: $(which wrangler 2>/dev/null || echo MISSING) $(wrangler --version 2>/dev/null | head -1)"
+      - name: Install node@24 and force-link it, leaving unversioned node installed
         run: |
-          brew install node >/dev/null 2>&1 || echo "PROBE node-install-failed"
+          brew install node@24 >/dev/null 2>&1
+          brew link --overwrite --force node@24 >/dev/null 2>&1
           hash -r
-          echo "PROBE after-installing-unversioned: $(node --version 2>/dev/null || echo FAILED) at $(which node)"
-          out="$(brew link --overwrite --force node@24 2>&1)"; rc=$?
+          echo "PROBE after-node: $(node --version)"
+          echo "PROBE after-prefix: $(npm prefix -g)"
+          echo "PROBE after-wrangler: $(which wrangler 2>/dev/null || echo STRANDED) $(wrangler --version 2>/dev/null | head -1)"
+      - name: And if the unversioned formula is removed entirely
+        run: |
+          brew uninstall --ignore-dependencies node >/dev/null 2>&1 || echo "PROBE uninstall-failed"
+          brew link --overwrite --force node@24 >/dev/null 2>&1
           hash -r
-          echo "PROBE relink-rc: $rc"
-          echo "PROBE after-relink: $(node --version 2>/dev/null || echo FAILED)"
+          echo "PROBE final-node: $(node --version 2>/dev/null || echo FAILED)"
+          echo "PROBE final-prefix: $(npm prefix -g 2>/dev/null || echo FAILED)"
+          echo "PROBE final-wrangler: $(which wrangler 2>/dev/null || echo STRANDED) $(wrangler --version 2>/dev/null | head -1)"
