@@ -24,7 +24,7 @@
 
 set -euo pipefail
 
-SCRIPT_VERSION="2026.09160011"
+SCRIPT_VERSION="2026.09262300"
 
 # ── Output helpers ──────────────────────────────────────────────────
 
@@ -265,7 +265,41 @@ confirm() {
   esac
 }
 
+# An unaccepted Xcode license makes EVERY Homebrew command fail with the same error, and
+# `xcode-select -p` cannot see it: "the tools are installed" and "the license is accepted" are
+# independent states, and a machine fresh from `xcode-select --install` has the first without
+# the second.
+#
+# Without this gate one root cause became five symptoms (#87): `brew update`, pandoc, typst and
+# the document preflight deps each warned and continued, and only the fifth - Git - aborted. So
+# the one actionable line, which Homebrew itself printed, scrolled past four CSA messages that
+# each described a consequence ("document rendering stays broken") instead of the cause.
+#
+# Keyed on the literal refusal text, not on a predictive probe of the license state: a state
+# probe has to special-case CLT-only machines against ones with full Xcode (`xcodebuild -version`
+# answers differently on each) and goes stale as Xcode changes, whereas a string this specific
+# cannot stop a run that would otherwise have worked.
+#
+# `/usr/bin/git` is the probe because it is a Command Line Tools shim present on every Mac, so it
+# refuses in exactly the way every `brew` subprocess is about to - no extra dependency, and no
+# assumption that Homebrew is installed yet.
+csa_xcode_license_checked=0
+csa_require_xcode_license() {
+  if [[ "$csa_xcode_license_checked" == 1 ]]; then return 0; fi
+  csa_xcode_license_checked=1
+  local probe
+  probe="$(/usr/bin/git --version 2>&1 || true)"
+  case "$probe" in
+    *"agreed to the Xcode"*|*"Xcode/iOS license"*) ;;
+    *) return 0 ;;
+  esac
+  error "The Xcode license has not been accepted, so Homebrew cannot install anything."
+  printf '  Run this, then re-run this script:\n    sudo xcodebuild -license accept\n' >&2
+  exit 1
+}
+
 ensure_brew_in_path() {
+  csa_require_xcode_license
   if has_command brew; then return 0; fi
   if [[ -x /opt/homebrew/bin/brew ]]; then
     eval "$(/opt/homebrew/bin/brew shellenv)"
