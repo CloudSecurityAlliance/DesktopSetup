@@ -356,9 +356,14 @@ What CSA's servers give that the built-ins do not:
   | | |
   |---|---|
   | incoming, saved to | `~/Downloads` |
-  | outgoing, attached from | `~/Documents/CSA-Outbox` (created on first start) |
+  | outgoing, attached from | `~/Documents/CSA-Outbox` |
 
-  Put a file in the Outbox to send it. `CSA_GGC_DOWNLOAD_DIR` and `CSA_GGC_ATTACH_DIR` move them.
+  **Neither is created for you.** `~/Downloads` already exists, so receiving works immediately;
+  **making the Outbox directory is how you turn outgoing attachments on**, and until you do, the
+  server says so at startup rather than failing. That is the right way round — the more dangerous
+  direction is the one that needs a deliberate gesture. `CSA_GGC_DOWNLOAD_DIR` and
+  `CSA_GGC_ATTACH_DIR` move them.
+
   The outgoing one is deliberately **not** `~/Downloads`: that is where a stranger's attachment
   lands, and a send-side directory reading from it is the overlap the server refuses.
 - **Disclosed transformations.** Message bodies are converted and defanged — HTML to Markdown,
