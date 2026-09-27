@@ -17,7 +17,7 @@
 
 set -euo pipefail
 
-SCRIPT_VERSION="2026.09262200"
+SCRIPT_VERSION="2026.09262300"
 
 # ── CSA plugin marketplaces ─────────────────────────────────────────
 # Each update run will add any entries from this list that aren't yet
@@ -303,7 +303,41 @@ confirm() {
   esac
 }
 
+# An unaccepted Xcode license makes EVERY Homebrew command fail with the same error, and
+# `xcode-select -p` cannot see it: "the tools are installed" and "the license is accepted" are
+# independent states, and a machine fresh from `xcode-select --install` has the first without
+# the second.
+#
+# Without this gate one root cause became five symptoms (#87): `brew update`, pandoc, typst and
+# the document preflight deps each warned and continued, and only the fifth - Git - aborted. So
+# the one actionable line, which Homebrew itself printed, scrolled past four CSA messages that
+# each described a consequence ("document rendering stays broken") instead of the cause.
+#
+# Keyed on the literal refusal text, not on a predictive probe of the license state: a state
+# probe has to special-case CLT-only machines against ones with full Xcode (`xcodebuild -version`
+# answers differently on each) and goes stale as Xcode changes, whereas a string this specific
+# cannot stop a run that would otherwise have worked.
+#
+# `/usr/bin/git` is the probe because it is a Command Line Tools shim present on every Mac, so it
+# refuses in exactly the way every `brew` subprocess is about to - no extra dependency, and no
+# assumption that Homebrew is installed yet.
+csa_xcode_license_checked=0
+csa_require_xcode_license() {
+  if [[ "$csa_xcode_license_checked" == 1 ]]; then return 0; fi
+  csa_xcode_license_checked=1
+  local probe
+  probe="$(/usr/bin/git --version 2>&1 || true)"
+  case "$probe" in
+    *"agreed to the Xcode"*|*"Xcode/iOS license"*) ;;
+    *) return 0 ;;
+  esac
+  error "The Xcode license has not been accepted, so Homebrew cannot install anything."
+  printf '  Run this, then re-run this script:\n    sudo xcodebuild -license accept\n' >&2
+  exit 1
+}
+
 ensure_brew_in_path() {
+  csa_require_xcode_license
   if has_command brew; then return 0; fi
   if [[ -x /opt/homebrew/bin/brew ]]; then
     eval "$(/opt/homebrew/bin/brew shellenv)"
@@ -526,9 +560,41 @@ update_pip() {
   # explicitly or those deps silently rot.
   if [[ -x "$HOME/.default_venv/bin/python3" ]]; then
     info "Updating packages in ~/.default_venv"
-    "$HOME/.default_venv/bin/python3" -m pip install --quiet --upgrade pip pyyaml pymupdf \
+    # Same three packages macos-ai-tools.sh installs there. csa-google-workspace was missing
+    # from this list, so the one CSA-authored package of the three was the one that never got
+    # updated after install - it is here now.
+    csa_venv_pip_install "$HOME/.default_venv/bin/python3" pyyaml pymupdf csa-google-workspace \
       || warn "Failed to update ~/.default_venv packages; continuing"
   fi
+}
+
+# Install packages into a venv that may not contain pip.
+#
+# `"$venv/bin/python3" -m pip` assumed pip was there and failed with "No module named pip" on a
+# real machine (#86), leaving csa-preflight broken while the warning named the packages rather
+# than the cause. A venv created by `uv venv` has NO pip - uv omits it by design - and this
+# script installs uv itself a few steps earlier, so a uv-made venv is an ordinary state here,
+# not an exotic one. The `[[ ! -x ... ]]` guard above exists precisely to accept a venv this
+# script did not create, which is the case that has no pip.
+#
+# `uv pip install --python <interpreter>` targets an existing venv without needing pip inside it,
+# and is substantially faster. `ensurepip` is the fallback for a machine where the uv install
+# failed; a venv built by `python3 -m venv` already has pip and takes neither path.
+#
+# $1 venv python   $2... packages
+csa_venv_pip_install() {
+  local vpy="$1"; shift
+  if has_command uv; then
+    if uv pip install --quiet --python "$vpy" "$@"; then return 0; fi
+    warn "uv could not install into $vpy - falling back to pip"
+  fi
+  if ! "$vpy" -m pip --version >/dev/null 2>&1; then
+    if ! "$vpy" -m ensurepip --upgrade >/dev/null 2>&1; then
+      warn "$vpy has no pip and ensurepip failed - cannot install $*"
+      return 1
+    fi
+  fi
+  "$vpy" -m pip install --quiet --upgrade "$@"
 }
 
 update_claude_code() {
