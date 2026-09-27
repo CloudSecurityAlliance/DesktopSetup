@@ -350,7 +350,17 @@ What CSA's servers give that the built-ins do not:
   never requested unless permanent delete is explicitly enabled — verified against Google, not
   claimed.
 - **Bounded attachments.** Two separate directories, one for what outgoing mail may read and one
-  for what downloads may write, and the server refuses to start if they overlap.
+  for what downloads may write, and the server refuses to start if they overlap. Since 0.2.0 both
+  have defaults, so attachments work without configuring anything:
+
+  | | |
+  |---|---|
+  | incoming, saved to | `~/Downloads` |
+  | outgoing, attached from | `~/Documents/CSA-Outbox` (created on first start) |
+
+  Put a file in the Outbox to send it. `CSA_GGC_DOWNLOAD_DIR` and `CSA_GGC_ATTACH_DIR` move them.
+  The outgoing one is deliberately **not** `~/Downloads`: that is where a stranger's attachment
+  lands, and a send-side directory reading from it is the overlap the server refuses.
 - **Disclosed transformations.** Message bodies are converted and defanged — HTML to Markdown,
   bidirectional-override characters stripped — and every change is reported rather than applied
   silently.
