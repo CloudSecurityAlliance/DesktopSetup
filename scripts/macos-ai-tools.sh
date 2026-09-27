@@ -25,7 +25,7 @@
 
 set -euo pipefail
 
-SCRIPT_VERSION="2026.09262300"
+SCRIPT_VERSION="2026.09272200"
 
 # ── CSA plugin marketplaces ─────────────────────────────────────────
 # Plugin marketplaces to register with Claude Code. Each entry is an
@@ -1443,6 +1443,7 @@ setup_csa_internal_tools() {
     csa-google-workspace-setup.sh
     csa-google-gmail-calendar-setup.sh
     csa-skilljar-setup.sh
+    csa-zendesk-setup.sh
   )
 
   local name script
