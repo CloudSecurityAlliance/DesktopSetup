@@ -1467,7 +1467,8 @@ function Invoke-CSAInternalSetup {
     $setups = @(
         'csa-google-workspace-setup.ps1',
         'csa-google-gmail-calendar-setup.ps1',
-        'csa-skilljar-setup.ps1'
+        'csa-skilljar-setup.ps1',
+        'csa-zendesk-setup.ps1'
     )
 
     foreach ($name in $setups) {
