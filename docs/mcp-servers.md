@@ -321,6 +321,71 @@ launchctl load ~/Library/LaunchAgents/com.csa.workspace-mcp.plist
 
 ---
 
+## CSA's own Google servers, and the built-in connectors they replace
+
+CSA members get two MCP servers installed by the internal setup scripts:
+
+| server | covers | consent screen says |
+|---|---|---|
+| `csa-google-workspace` | Drive, Docs, Sheets, Slides | CSA Google Drive-Docs MCP |
+| `csa-google-gmail-calendar` | Gmail, Calendar | CSA Google Gmail-Calendar MCP |
+
+### Turn off the built-in Gmail, Calendar and Drive connectors
+
+In Claude's settings, **disable the built-in Google connectors** — Gmail, Google Calendar and
+Google Drive. Leave Slack, Notion and the rest alone: CSA has no equivalent for those, and turning
+them off removes capability nothing replaces.
+
+**Why, and it is not about which is better.** Two sets of tools for the same job is the problem.
+A model shown `search_emails` and `search_messages`, both plausible, both connected, picks one for
+reasons nobody can predict or reproduce — and the answer you get depends on which it happened to
+choose. That is worse than either tool alone, because the failure is silent and inconsistent.
+
+What CSA's servers give that the built-ins do not:
+
+- **Capability gating.** A disabled capability means the tool is *absent*, not present-and-
+  refusing. `mail.delete` and `calendar.delete` are off by default, so the tools that permanently
+  destroy things are not in the list at all.
+- **Scope minimisation.** The default posture requests six OAuth scopes. The full-mailbox scope is
+  never requested unless permanent delete is explicitly enabled — verified against Google, not
+  claimed.
+- **Bounded attachments.** Two separate directories, one for what outgoing mail may read and one
+  for what downloads may write, and the server refuses to start if they overlap.
+- **Disclosed transformations.** Message bodies are converted and defanged — HTML to Markdown,
+  bidirectional-override characters stripped — and every change is reported rather than applied
+  silently.
+- **It runs as you, on your machine.** No CSA service sits between you and Google, and no shared
+  credential reaches anyone's mail but their own.
+
+### Signing in
+
+Setup installs and registers the servers. **It deliberately does not sign you in** — authorizing
+grants read, write and send across your whole mailbox, and that decision should not be made while
+half-watching an installer that is also putting 40 other things on your laptop.
+
+When you are ready, in a terminal:
+
+```bash
+csa-google-workspace-mcp login          # Drive, Docs, Sheets, Slides
+csa-google-gmail-calendar login         # Gmail, Calendar
+```
+
+Each opens a browser. **Read the consent screen rather than clicking through it** — it is the
+clearest view you will ever get of what the server can reach, and the app name on it should match
+the table above. If it does not, stop and ask.
+
+### If you used these before September 2026
+
+The OAuth clients moved to new Google Cloud projects. Your existing sign-in keeps working for now,
+but it is bound to the old project and will stop when that project is retired. Re-run setup, then:
+
+```bash
+csa-google-workspace-mcp login --force
+```
+
+Setup will tell you if your sign-in is on the old project — it compares the two rather than merely
+checking that you are signed in at all.
+
 ## Script requirements summary
 
 What `macos-mcp-setup.sh` needs to handle:
