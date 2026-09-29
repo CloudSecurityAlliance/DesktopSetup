@@ -827,7 +827,17 @@ install_node() {
 # The floor is not ours to choose. CSA-Document-Pipeline's pyproject.toml declares
 # requires-python = ">=3.10", and csa-google-workspace - which document-pipeline's register
 # tools import - refuses to install below it.
-CSA_PYTHON_MIN="3.10"
+# Raised 3.10 -> 3.14 because the CONSUMERS raised theirs, which is the only reason this
+# number ever moves (DEC-012: "version floors are read from what the consumer declares
+# (requires-python), never invented by the installer"). All four CSA MCP servers now declare
+# `requires-python = ">=3.14"`, and install_doc_python_deps puts csa_google_workspace into
+# ~/.default_venv - so a venv built on 3.10 would be one this script cannot populate, failing
+# at the `import yaml, pymupdf, csa_google_workspace` check further down rather than here.
+#
+# CSA-Document-Pipeline still declares >=3.10 and is satisfied by 3.14, so the maximum across
+# consumers is 3.14. MIN and PREFERRED are now equal; the two-pass search below is therefore
+# degenerate today, and deliberately kept - they separate again the moment either moves.
+CSA_PYTHON_MIN="3.14"
 # The version uv provisions when nothing usable is present. A floor says what breaks; this says
 # what a fresh machine actually gets, and pinning it is what stops macOS and Windows drifting
 # apart the way brew's python (3.14) and winget's Python.Python.3.13 already had.

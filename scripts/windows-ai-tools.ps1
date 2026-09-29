@@ -1062,7 +1062,17 @@ function Setup-GitIdentity {
 # requires-python = ">=3.10", and csa-google-workspace refuses to install below it.
 # $CsaPythonPreferred is what a fresh machine gets when nothing usable is present - pinned so
 # Windows and macOS stop drifting apart the way winget's 3.13 and brew's 3.14 already had.
-$CsaPythonMin = '3.10'
+# Raised 3.10 -> 3.14 because the CONSUMERS raised theirs, which is the only reason this
+# number ever moves (DEC-012: "version floors are read from what the consumer declares
+# (requires-python), never invented by the installer"). All four CSA MCP servers now declare
+# `requires-python = ">=3.14"`, and install_doc_python_deps puts csa_google_workspace into
+# ~/.default_venv - so a venv built on 3.10 would be one this script cannot populate, failing
+# at the `import yaml, pymupdf, csa_google_workspace` check further down rather than here.
+#
+# CSA-Document-Pipeline still declares >=3.10 and is satisfied by 3.14, so the maximum across
+# consumers is 3.14. MIN and PREFERRED are now equal; the two-pass search below is therefore
+# degenerate today, and deliberately kept - they separate again the moment either moves.
+$CsaPythonMin = '3.14'
 $CsaPythonPreferred = '3.14'
 
 # Presence is not usability. This is the Windows half of DesktopSetup#53: the macOS script
