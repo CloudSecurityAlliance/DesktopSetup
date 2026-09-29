@@ -155,6 +155,9 @@ jobs:
       - name: Interpreter/runtime floors reject what the OS ships
         run: python3 tests/test_version_floors.py
 
+      - name: The internal-setup list agrees across all six copies
+        run: python3 tests/test_internal_setup_lists.py
+
       - name: Replacing the shared venv must not lose it
         run: python3 tests/test_venv_replacement.py
 
