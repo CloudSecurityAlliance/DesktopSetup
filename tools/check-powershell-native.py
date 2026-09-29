@@ -103,7 +103,7 @@ def _line_of(text: str, index: int) -> int:
     return text.count("\n", 0, index) + 1
 
 
-def guarded_lines(text: str) -> set[int]:
+def guarded_lines(text: str, guards: set[str]) -> set[int]:
     """Line numbers inside a `try { ... }`, or inside a Continue-setting wrapper.
 
     This used to be "is there a `try {` within 6 lines above?", which is wrong in the one way
@@ -115,6 +115,22 @@ def guarded_lines(text: str) -> set[int]:
 
     Brace-matching instead. Calls inside a wrapper's own body are guarded too, by the same
     'Continue' the wrapper exists to set.
+
+    A wrapper INVOCATION is brace-matched for the same reason. It used to be exempted by a
+    line-local test in unguarded() - "does the wrapper's name appear on this line?" - which
+    holds only for `Invoke-CsaNative { claude mcp list }` written on one line. CSA-Plugins
+    writes the scriptblock across lines:
+
+        $r = Invoke-CsaNative {
+            claude mcp add --scope user $McpName `
+                -- $McpBin
+        } 'claude mcp add'
+
+    and the `claude` call is then three lines below the only line carrying the wrapper name.
+    That was reported as unguarded on code that is guarded. Every script in THIS repo invokes
+    its wrappers on one line, so the miss was invisible here and only appeared when the check
+    was pointed at CSA-Plugins. A check that cries wolf gets switched off, which costs the
+    same as the check never existing.
     """
     safe: set[int] = set()
     for match in re.finditer(r"\btry\s*\{", text):
@@ -125,6 +141,13 @@ def guarded_lines(text: str) -> set[int]:
         open_at = text.index("{", match.start())
         end = _match_brace(text, open_at)
         if re.search(r"ErrorActionPreference\s*=\s*'Continue'", text[open_at:end]):
+            safe.update(range(_line_of(text, open_at), _line_of(text, end) + 1))
+    for name in guards:
+        # `[^\n{]*` requires the `{` on the wrapper's own line, which is the PowerShell
+        # idiom; a scriptblock opened on the next line is not a form these scripts use.
+        for match in re.finditer(r"\b" + re.escape(name) + r"\b[^\n{]*\{", text):
+            open_at = text.index("{", match.start())
+            end = _match_brace(text, open_at)
             safe.update(range(_line_of(text, open_at), _line_of(text, end) + 1))
     return safe
 
@@ -157,7 +180,7 @@ def unguarded(path: pathlib.Path) -> list[tuple[int, str]]:
         return []          # no promotion to guard against, for the reasons in posture()
 
     guards = set(WRAPPERS) | wrappers_in(text)
-    safe = guarded_lines(text)
+    safe = guarded_lines(text, guards)
 
     problems = []
     for i, line in enumerate(lines):
@@ -171,8 +194,6 @@ def unguarded(path: pathlib.Path) -> list[tuple[int, str]]:
         # the ones most likely to write to stderr.
         first = re.match(r"^(?:\$\w+\s*=\s*)?([A-Za-z][\w.-]*)", stripped)
         if not first or first.group(1) not in NATIVE:
-            continue
-        if any(w in line for w in guards):
             continue
         if (i + 1) in safe:
             continue
@@ -258,8 +279,13 @@ $v = gh api user --jq '.login'
 Invoke-NativeQuiet { claude mcp list }
 try { git pull --ff-only } catch { }
 $p = Join-Path $HOME "a" "b"
+$r = Invoke-NativeQuiet {
+    claude mcp add --scope user foo `
+        -- $McpBin
+} 'claude mcp add'
+npx create-thing
 """
-SELF_TEST_EXPECT_UNGUARDED = {8, 9, 10}     # bare, redirected, assigned
+SELF_TEST_EXPECT_UNGUARDED = {8, 9, 10, 18}  # bare, redirected, assigned, after-the-block
 SELF_TEST_EXPECT_INCOMPAT = {13}            # three-argument Join-Path
 
 
@@ -285,8 +311,9 @@ def self_test() -> int:
             print(f"  {problem}")
         print("  A miss here means real problems are being reported as 'all guarded'.")
         return 1
-    print("self-test: catches the bare call, the redirected call, the assignment, and the "
-          "three-arg Join-Path; exempts the wrapper body and the try/catch.")
+    print("self-test: catches the bare call, the redirected call, the assignment, the call "
+          "after a multi-line wrapper block, and the three-arg Join-Path; exempts the wrapper "
+          "body, the try/catch, and both wrapper-invocation shapes.")
     return 0
 
 
