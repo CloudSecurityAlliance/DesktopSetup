@@ -140,6 +140,7 @@ def run(tmp: pathlib.Path, *, venv_clears_floor: bool | None, builder_works: boo
 set -euo pipefail
 {extract("CSA_PYTHON_MIN")}
 {extract("has_command")}
+{extract("python_meets")}
 {extract("python_meets_floor")}
 info() {{ echo "INFO: $*"; }}
 warn() {{ echo "WARN: $*"; }}

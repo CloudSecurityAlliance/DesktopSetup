@@ -164,7 +164,22 @@ def main() -> int:
 
     # ---- python_meets_floor, against real interpreters ----
     print("\npython_meets_floor vs. real interpreters")
-    body = extract(AI, "CSA_PYTHON_MIN") + "\n" + extract(AI, "python_meets_floor")
+    # Four pieces now, not two. `python_meets_floor` became a one-line wrapper over the
+    # general `python_meets`, and `find_usable_python` gained a pass against
+    # CSA_PYTHON_PREFERRED - so extracting the old two would run a body whose helper and
+    # whose variable are both undefined. That failure mode is worth naming, because it is
+    # not a compile error in bash: the call simply returns non-zero, every interpreter
+    # "fails the floor", and this test reports a FAIL that looks like a version bug rather
+    # than a missing extraction. (Observed exactly that while making this change.)
+    #
+    # CSA_PYTHON_PREFERRED goes through extract_assignment, not extract: `extract` special-
+    # cases CSA_PYTHON_MIN by name and treats every other argument as a function.
+    body = "\n".join([
+        extract(AI, "CSA_PYTHON_MIN"),
+        extract_assignment(AI, "CSA_PYTHON_PREFERRED"),
+        extract(AI, "python_meets"),
+        extract(AI, "python_meets_floor"),
+    ])
     candidates = ["/usr/bin/python3", sys.executable]
     for name in ("python3", "python3.9", "python3.10", "python3.11", "python3.12", "python3.13"):
         from shutil import which

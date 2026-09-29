@@ -1062,34 +1062,64 @@ function Setup-GitIdentity {
 # requires-python = ">=3.10", and csa-google-workspace refuses to install below it.
 # $CsaPythonPreferred is what a fresh machine gets when nothing usable is present - pinned so
 # Windows and macOS stop drifting apart the way winget's 3.13 and brew's 3.14 already had.
-$CsaPythonMin = '3.10'
-$CsaPythonPreferred = '3.13'
+# Raised 3.10 -> 3.14 because the CONSUMERS raised theirs, which is the only reason this
+# number ever moves (DEC-012: "version floors are read from what the consumer declares
+# (requires-python), never invented by the installer"). All four CSA MCP servers now declare
+# `requires-python = ">=3.14"`, and install_doc_python_deps puts csa_google_workspace into
+# ~/.default_venv - so a venv built on 3.10 would be one this script cannot populate, failing
+# at the `import yaml, pymupdf, csa_google_workspace` check further down rather than here.
+#
+# CSA-Document-Pipeline still declares >=3.10 and is satisfied by 3.14, so the maximum across
+# consumers is 3.14. MIN and PREFERRED are now equal; the two-pass search below is therefore
+# degenerate today, and deliberately kept - they separate again the moment either moves.
+$CsaPythonMin = '3.14'
+$CsaPythonPreferred = '3.14'
 
 # Presence is not usability. This is the Windows half of DesktopSetup#53: the macOS script
 # accepted Apple's 3.9.6 because `has_command python3` was satisfied, and this one had the same
 # defect - `Has-Command python3` with no version check at all. Windows ships no python3 by
 # default so the blast radius is smaller, but an older Python already on the machine was
 # accepted exactly the same way.
-function Test-PythonMeetsFloor {
-    param([string]$Exe)
-    $code = "import sys; sys.exit(0 if sys.version_info >= tuple(map(int, '$CsaPythonMin'.split('.'))) else 1)"
+function Test-PythonMeets {
+    param([string]$Exe, [string]$Want)
+    $code = "import sys; sys.exit(0 if sys.version_info >= tuple(map(int, '$Want'.split('.'))) else 1)"
     $null = Invoke-NativeQuiet { & $Exe -c $code }
     return ($LASTEXITCODE -eq 0)
 }
 
-# Probe newest-first for an interpreter that clears the floor, then ask uv. As on macOS, uv
-# creates no PATH shims for the interpreters it manages, so it has to be asked directly.
+# Kept as a name because asking about the floor specifically is still a real question.
+function Test-PythonMeetsFloor {
+    param([string]$Exe)
+    return (Test-PythonMeets $Exe $CsaPythonMin)
+}
+
+# TWO PASSES, and the order is the whole point. The first asks for $CsaPythonPreferred;
+# only the second settles for $CsaPythonMin.
+#
+# One pass against the floor is how every CSA MCP server ended up on 3.10 while this script
+# had already provisioned something newer: 'python' is probed first, it cleared >=3.10, the
+# search stopped there and reported success. $CsaPythonPreferred was then consulted only
+# when NOTHING usable existed at all - so on any machine that already had an old Python, the
+# preference was dead code. A floor says what is tolerable; it should never be the thing
+# that decides what gets used.
+#
+# uv is asked inside each pass rather than after both. As on macOS it creates no PATH shims
+# for the interpreters it manages, so a uv-provisioned 3.14 is invisible to the name probe
+# above and would otherwise lose to a PATH 3.10 on the second pass - reintroducing the exact
+# bug this structure exists to remove.
 function Find-UsablePython {
-    foreach ($cand in @('python', 'python3', 'python3.14', 'python3.13', 'python3.12', 'python3.11', 'python3.10')) {
-        if (-not (Has-Command $cand)) { continue }
-        if ($cand -eq 'python' -and (Test-PythonStoreStub)) { continue }
-        if (Test-PythonMeetsFloor $cand) { return (Get-Command $cand).Source }
-    }
-    if (Has-Command uv) {
-        $found = Invoke-NativeCapture { uv python find ">=$CsaPythonMin" }
-        if ($found.ExitCode -eq 0 -and $found.Output) {
-            $exe = $found.Output.Trim()
-            if ($exe -and (Test-Path $exe) -and (Test-PythonMeetsFloor $exe)) { return $exe }
+    foreach ($want in @($CsaPythonPreferred, $CsaPythonMin)) {
+        foreach ($cand in @('python', 'python3', 'python3.14', 'python3.13', 'python3.12', 'python3.11', 'python3.10')) {
+            if (-not (Has-Command $cand)) { continue }
+            if ($cand -eq 'python' -and (Test-PythonStoreStub)) { continue }
+            if (Test-PythonMeets $cand $want) { return (Get-Command $cand).Source }
+        }
+        if (Has-Command uv) {
+            $found = Invoke-NativeCapture { uv python find ">=$want" }
+            if ($found.ExitCode -eq 0 -and $found.Output) {
+                $exe = $found.Output.Trim()
+                if ($exe -and (Test-Path $exe) -and (Test-PythonMeets $exe $want)) { return $exe }
+            }
         }
     }
     return $null
@@ -1499,11 +1529,25 @@ function Invoke-CSAInternalSetup {
         # CSA_NESTED tells the fetched script that it is running inside another CSA installer, so
         # it should leave the closing summary to this one. Without it both printed "if anything
         # above went wrong, re-run with logging on", one after the other.
+        # CSA_PYTHON_PREFERRED tells the fetched setup script which interpreter to install
+        # the server on, so `uv tool install --python` lands it there. Measured 2026-09-29:
+        # with no --python, uv picks its OWN managed default (3.12 on that box) and ignores
+        # both PATH (3.14.3 there) and anything this installer provisioned - which is how
+        # four CSA servers ended up on 3.10.20. Only the *-ai-tools orchestrator defines
+        # $CsaPythonPreferred; elsewhere this is $null, the variable goes out empty, and the
+        # setup script falls back to its own default. Set here regardless so all three
+        # copies of this function stay byte-identical, which tools/check-duplication.py
+        # enforces. See CSA-Plugins#133.
         $prevNested = $env:CSA_NESTED
+        $prevPyPref = $env:CSA_PYTHON_PREFERRED
         $env:CSA_NESTED = '1'
+        $env:CSA_PYTHON_PREFERRED = $CsaPythonPreferred
         try { & ([ScriptBlock]::Create($script)) }
         catch { Write-Warn "CSA internal setup ($name) reported a problem: $_" }
-        finally { $env:CSA_NESTED = $prevNested }
+        finally {
+            $env:CSA_NESTED = $prevNested
+            $env:CSA_PYTHON_PREFERRED = $prevPyPref
+        }
     }
 }
 
