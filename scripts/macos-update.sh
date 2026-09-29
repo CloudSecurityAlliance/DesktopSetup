@@ -721,11 +721,15 @@ setup_csa_internal_tools() {
     # earlier single-script form returned, so a rename would have silently disabled every
     # server that followed.
     #
+    # CSA_PYTHON_PREFERRED tells it which interpreter to install the server on. Only the
+    # *-ai-tools orchestrators set it; here it expands empty and the setup script falls
+    # back to its own default. Passed anyway so all three copies of this function stay
+    # byte-identical, which tools/check-duplication.py enforces. See CSA-Plugins#133.
     # CSA_NESTED tells the fetched script that it is running inside another CSA installer, so it
     # should leave the closing summary to this one. Without it both printed "if anything above
     # went wrong, re-run with logging on", one after the other, which reads like a stutter and
     # gives two different instructions for the same thing ("<this script>" vs "the same command").
-    CSA_NESTED=1 bash -c "$script" || warn "CSA internal setup ($name) reported a problem (see above)"
+    CSA_NESTED=1 CSA_PYTHON_PREFERRED="${CSA_PYTHON_PREFERRED:-}" bash -c "$script" || warn "CSA internal setup ($name) reported a problem (see above)"
   done
 }
 

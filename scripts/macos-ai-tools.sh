@@ -1489,11 +1489,17 @@ setup_csa_internal_tools() {
     # earlier single-script form returned, so a rename would have silently disabled every
     # server that followed.
     #
+    # CSA_PYTHON_PREFERRED tells it which interpreter this installer provisioned, so
+    # `uv tool install --python` lands the server on it. Measured 2026-09-29: with no
+    # --python, uv picks its OWN managed default and ignores both PATH and anything this
+    # script installed - which is how four CSA servers ended up on 3.10.20. Only the
+    # *-ai-tools scripts know a preference; the other orchestrators leave it unset and the
+    # setup scripts fall back to their own default. See CSA-Plugins#133.
     # CSA_NESTED tells the fetched script that it is running inside another CSA installer, so it
     # should leave the closing summary to this one. Without it both printed "if anything above
     # went wrong, re-run with logging on", one after the other, which reads like a stutter and
     # gives two different instructions for the same thing ("<this script>" vs "the same command").
-    CSA_NESTED=1 bash -c "$script" || warn "CSA internal setup ($name) reported a problem (see above)"
+    CSA_NESTED=1 CSA_PYTHON_PREFERRED="${CSA_PYTHON_PREFERRED:-}" bash -c "$script" || warn "CSA internal setup ($name) reported a problem (see above)"
   done
 }
 

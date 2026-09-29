@@ -801,11 +801,25 @@ function Invoke-CSAInternalSetup {
         # CSA_NESTED tells the fetched script that it is running inside another CSA installer, so
         # it should leave the closing summary to this one. Without it both printed "if anything
         # above went wrong, re-run with logging on", one after the other.
+        # CSA_PYTHON_PREFERRED tells the fetched setup script which interpreter to install
+        # the server on, so `uv tool install --python` lands it there. Measured 2026-09-29:
+        # with no --python, uv picks its OWN managed default (3.12 on that box) and ignores
+        # both PATH (3.14.3 there) and anything this installer provisioned - which is how
+        # four CSA servers ended up on 3.10.20. Only the *-ai-tools orchestrator defines
+        # $CsaPythonPreferred; elsewhere this is $null, the variable goes out empty, and the
+        # setup script falls back to its own default. Set here regardless so all three
+        # copies of this function stay byte-identical, which tools/check-duplication.py
+        # enforces. See CSA-Plugins#133.
         $prevNested = $env:CSA_NESTED
+        $prevPyPref = $env:CSA_PYTHON_PREFERRED
         $env:CSA_NESTED = '1'
+        $env:CSA_PYTHON_PREFERRED = $CsaPythonPreferred
         try { & ([ScriptBlock]::Create($script)) }
         catch { Write-Warn "CSA internal setup ($name) reported a problem: $_" }
-        finally { $env:CSA_NESTED = $prevNested }
+        finally {
+            $env:CSA_NESTED = $prevNested
+            $env:CSA_PYTHON_PREFERRED = $prevPyPref
+        }
     }
 }
 
