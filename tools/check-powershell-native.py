@@ -185,9 +185,21 @@ def unguarded(path: pathlib.Path) -> list[tuple[int, str]]:
 # does, and PSUseCompatibleSyntax checks language syntax rather than cmdlet binding. Both were
 # tried on the known-bad line and reported nothing.
 INCOMPATIBLE = [
-    (re.compile(r"\bJoin-Path\s+(?:[^\s|;()]+\s+){2,}[^\s|;()]+"),
+    # `{}` excluded as well as `()`: without it a two-path call that ENDS a braced
+    # expression - `... else { Join-Path $home 'Downloads' }` - counts the closing brace as
+    # a third path and reports a hazard that is not there. Three such false positives in
+    # CSA-Plugins, which is how it was found; a check that cries wolf gets read past.
+    (re.compile(r"\bJoin-Path\s+(?:[^\s|;(){}]+\s+){2,}[^\s|;(){}]+"),
      "Join-Path with three or more paths needs -AdditionalChildPath (PowerShell 6+). "
      "On 5.1: \"a positional parameter cannot be found\". Nest the calls instead."),
+    # Found the expensive way: two CSA-Plugins setup scripts used it, and on a real 5.1 box
+    # the failure surfaced as a catch reporting "the Claude Desktop config is unreadable" -
+    # which sends somebody to inspect a perfectly good JSON file. The two sibling scripts
+    # that shell out to python for the same job worked on the same machine.
+    (re.compile(r"\bConvertFrom-Json\b[^|;#]*\s-AsHashtable\b"),
+     "ConvertFrom-Json -AsHashtable is PowerShell 6+. On 5.1: \"a parameter cannot be "
+     "found that matches parameter name 'AsHashtable'\", which a surrounding try/catch "
+     "will report as an unreadable file. Shell out to python for JSON you must mutate."),
 ]
 
 
