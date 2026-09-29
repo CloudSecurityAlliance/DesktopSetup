@@ -138,6 +138,27 @@ def main() -> int:
           + ("" if not hard_coded else f" — {len(hard_coded)}: {hard_coded[0]}"))
 
     print()
+    # The negative check above passes VACUOUSLY on a script whose plan omits the servers
+    # entirely — which is what the three Windows scripts did. They installed four and named
+    # none, and "no line names a server by hand" was true of them in the worst possible way.
+    # A check that a defect satisfies is not a check; this is the positive half.
+    #
+    # Every script that both prints a plan and runs the setups must ENUMERATE them from the
+    # list, so the plan cannot describe a different installation from the one that runs.
+    missing = []
+    for name in COPIES:
+        text = (ROOT / name).read_text(encoding="utf-8")
+        # A PRINTED line, not a comment mentioning one — macos-plugins.sh discusses the plan
+        # in a header comment and prints it 470 lines later, and only the second is a plan.
+        if not re.search(r"^\s*(?:echo|Write-Host)\s+\"\s*CSA MCP server", text, re.M):
+            continue
+        if not re.search(r"(?:echo|Write-Host).*CSA_INTERNAL_SETUPS", text):
+            missing.append(name)
+    check(not missing,
+          "every plan enumerates the servers from the list"
+          + ("" if not missing else f" — silent about all of them: {missing}"))
+
+    print()
     if failures:
         print(f"FAILED: {len(failures)} check(s)")
         return 1
