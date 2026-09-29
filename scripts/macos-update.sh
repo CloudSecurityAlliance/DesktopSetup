@@ -33,6 +33,18 @@ SCRIPT_VERSION="2026.09272200"
 # All six files hard-code the same list. When adding or removing a
 # marketplace, update every file and bump each file's SCRIPT_VERSION /
 # $ScriptVersion — otherwise the scripts will drift.
+# One entry per internal MCP server. Top-level, beside CSA_MARKETPLACES, because
+# macos-ai-tools.sh's installation plan has to count it and a list local to the function that
+# runs it cannot be counted from the plan. It was local, that plan named two of these four by
+# hand, and two servers were installed the person had not been shown. Kept here in every script
+# carrying setup_csa_internal_tools so the shared function stays byte-identical.
+CSA_INTERNAL_SETUPS=(
+  csa-google-workspace-setup.sh
+  csa-google-gmail-calendar-setup.sh
+  csa-skilljar-setup.sh
+  csa-zendesk-setup.sh
+)
+
 CSA_MARKETPLACES=(
   "CloudSecurityAlliance-Internal/Accounting-Plugins"
   "CloudSecurityAlliance-Internal/CINO-Plugins"
@@ -690,17 +702,8 @@ setup_csa_internal_tools() {
   gh auth status >/dev/null 2>&1 || return 0
   gh api "repos/$CSA_MCP_GATE_REPO" >/dev/null 2>&1 || return 0
 
-  # One entry per internal MCP server. A list rather than a copied block: the second
-  # server was added by appending a name here, and the third should be too.
-  local setups=(
-    csa-google-workspace-setup.sh
-    csa-google-gmail-calendar-setup.sh
-    csa-skilljar-setup.sh
-    csa-zendesk-setup.sh
-  )
-
   local name script
-  for name in "${setups[@]}"; do
+  for name in "${CSA_INTERNAL_SETUPS[@]}"; do
     script="$(gh api "repos/$CSA_MCP_GATE_REPO/contents/internal-setup/$name" \
                 --jq '.content' 2>/dev/null | base64 --decode 2>/dev/null)" || continue
     [[ -n "$script" ]] || continue
