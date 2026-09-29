@@ -831,44 +831,64 @@ CSA_PYTHON_MIN="3.10"
 # The version uv provisions when nothing usable is present. A floor says what breaks; this says
 # what a fresh machine actually gets, and pinning it is what stops macOS and Windows drifting
 # apart the way brew's python (3.14) and winget's Python.Python.3.13 already had.
-CSA_PYTHON_PREFERRED="3.13"
+CSA_PYTHON_PREFERRED="3.14"
 
 # Presence is not usability. macOS ALWAYS ships /usr/bin/python3, and it is 3.9.6, so
 # `has_command python3` is satisfied on every stock Mac by an interpreter nothing here can
 # use. That is issue #53: the installer reported success, never installed Homebrew Python,
 # and the failure surfaced hundreds of lines into a pip resolver much later. The floor is
 # interpolated rather than hard-coded so it lives in exactly one place.
-python_meets_floor() {
-  "$1" -c "import sys; sys.exit(0 if sys.version_info >= tuple(map(int, '$CSA_PYTHON_MIN'.split('.'))) else 1)" >/dev/null 2>&1
+python_meets() {
+  # $1 interpreter, $2 the dotted version it must be at least.
+  "$1" -c "import sys; sys.exit(0 if sys.version_info >= tuple(map(int, '$2'.split('.'))) else 1)" >/dev/null 2>&1
 }
+
+# Kept as a name because four other call sites ask exactly this question.
+python_meets_floor() { python_meets "$1" "$CSA_PYTHON_MIN"; }
 
 # A usable interpreter is often already present as python3.13 without being first on PATH -
 # Homebrew installs it exactly that way. Probe newest-first before concluding anything is
 # missing: installing a second copy of what the machine already has is how a bootstrap earns
 # a reputation. Prints the resolved path; non-zero when nothing on PATH clears the floor.
 find_usable_python() {
-  local cand path
-  for cand in python3 python3.14 python3.13 python3.12 python3.11 python3.10; do
-    path="$(command -v "$cand" 2>/dev/null)" || continue
-    if python_meets_floor "$path"; then
-      printf '%s\n' "$path"
-      return 0
+  # uv is asked inside the loop, not after it. Measured on uv 0.12.10: `uv python install`
+  # creates NO PATH shims - an interpreter it manages lives under ~/.local/share/uv/python/
+  # and `command -v python3.14` does not find it. PATH probing alone would therefore miss a
+  # perfectly good uv-provisioned Python and reinstall one. That is fine for our purposes:
+  # install_doc_python_deps builds ~/.default_venv from whatever interpreter it is handed,
+  # and document-pipeline's launchers probe that venv - so uv can provide the interpreter
+  # without owning PATH.
+  local cand path want
+  # TWO PASSES, and the order is the whole point. The first asks for
+  # CSA_PYTHON_PREFERRED; only the second settles for CSA_PYTHON_MIN.
+  #
+  # One pass against the floor is how every CSA MCP server ended up on 3.10 while this
+  # script had already provisioned something newer: `python3` is probed first, it cleared
+  # >=3.10, the search stopped there and reported success. CSA_PYTHON_PREFERRED was then
+  # consulted only when NOTHING usable existed at all - so on any machine that already had
+  # an old Python, the preference was dead code. A floor says what is tolerable; it should
+  # never be the thing that decides what gets used.
+  for want in "$CSA_PYTHON_PREFERRED" "$CSA_PYTHON_MIN"; do
+    for cand in python3 python3.14 python3.13 python3.12 python3.11 python3.10; do
+      path="$(command -v "$cand" 2>/dev/null)" || continue
+      if python_meets "$path" "$want"; then
+        printf '%s\n' "$path"
+        return 0
+      fi
+    done
+    # Ask uv within this pass, before widening. uv-managed interpreters have no PATH
+    # shims (see above), so a uv-provisioned 3.14 is invisible to the loop above
+    # and would otherwise lose to a PATH 3.10 on the second pass - reintroducing the exact
+    # bug this two-pass structure exists to remove.
+    if has_command uv; then
+      path="$(uv python find ">=$want" 2>/dev/null)" || path=""
+      if [[ -n "$path" ]] && python_meets "$path" "$want"; then
+        printf '%s\n' "$path"
+        return 0
+      fi
     fi
   done
 
-  # Then ask uv. Measured on uv 0.12.10: `uv python install` creates NO PATH shims - an
-  # interpreter it manages lives under ~/.local/share/uv/python/... and `command -v python3.13`
-  # does not find it. So PATH probing alone would miss a perfectly good uv-provisioned Python
-  # and reinstall one. That is fine for our purposes: install_doc_python_deps builds
-  # ~/.default_venv from whatever interpreter it is handed, and document-pipeline's launchers
-  # probe that venv - so uv can provide the interpreter without owning PATH.
-  if has_command uv; then
-    path="$(uv python find ">=$CSA_PYTHON_MIN" 2>/dev/null)" || return 1
-    if [[ -n "$path" ]] && python_meets_floor "$path"; then
-      printf '%s\n' "$path"
-      return 0
-    fi
-  fi
   return 1
 }
 
