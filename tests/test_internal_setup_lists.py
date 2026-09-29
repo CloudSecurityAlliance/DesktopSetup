@@ -51,6 +51,12 @@ def check(ok: bool, label: str) -> None:
         failures.append(label)
 
 
+# Matches `setups=(`, `$setups = @(` and the hoisted `CSA_INTERNAL_SETUPS=(`. Case-insensitive
+# because the hoisted form is upper-case, and a case-sensitive rule would have made this file
+# report zero servers rather than the wrong servers — loud, but for the wrong reason.
+LIST_RE = r"[A-Z_]*setups\s*=\s*[\(@]\(?(.*?)\)"
+
+
 def servers_in(path: pathlib.Path) -> list[str]:
     """The server names one copy lists, in order, stripped of extension.
 
@@ -58,7 +64,7 @@ def servers_in(path: pathlib.Path) -> list[str]:
     servers first because most people have those - not an implementation detail.
     """
     text = path.read_text(encoding="utf-8")
-    block = re.search(r"setups\s*=\s*[\(@]\(?(.*?)\)", text, re.S)
+    block = re.search(LIST_RE, text, re.S | re.I)
     if not block:
         return []
     names = re.findall(r"csa-([a-z0-9-]+)-setup\.(?:sh|ps1)", block.group(1))
@@ -67,7 +73,7 @@ def servers_in(path: pathlib.Path) -> list[str]:
 
 def extensions_in(path: pathlib.Path) -> set[str]:
     text = path.read_text(encoding="utf-8")
-    block = re.search(r"setups\s*=\s*[\(@]\(?(.*?)\)", text, re.S)
+    block = re.search(LIST_RE, text, re.S | re.I)
     if not block:
         return set()
     return set(re.findall(r"csa-[a-z0-9-]+-setup\.(sh|ps1)", block.group(1)))
@@ -111,6 +117,25 @@ def main() -> int:
           "every script holding the list is checked here"
           + ("" if holders == sorted(COPIES)
              else f" — untracked: {sorted(set(holders) - set(COPIES))}"))
+
+    print()
+    # The seventh copy was not a seventh FILE. macos-ai-tools.sh printed an installation plan
+    # that named Google Workspace and Skilljar by hand while its list held four, so two servers
+    # were installed that the person consenting had not been shown. The check above could not
+    # see it: it counts files holding the list, and this was a second list INSIDE a file it
+    # already counted. A census answers only what its membership rule admits.
+    #
+    # The rule that does cover it: a printed line may not hard-code a server name. The plan is
+    # derived from the list now, so any such line is by definition a copy of it.
+    printed = re.compile(r"^\s*(?:echo|Write-Host)\b.*csa-([a-z0-9-]+?)(?:-setup)?\b", re.M)
+    hard_coded = []
+    for name in COPIES:
+        for match in printed.finditer((ROOT / name).read_text(encoding="utf-8")):
+            if match.group(1) in reference:
+                hard_coded.append(f"{name}: {match.group(0).strip()[:70]}")
+    check(not hard_coded,
+          "no printed line names a server by hand (the plan is derived)"
+          + ("" if not hard_coded else f" — {len(hard_coded)}: {hard_coded[0]}"))
 
     print()
     if failures:

@@ -42,6 +42,18 @@ SCRIPT_VERSION="2026.09272200"
 # All six files hard-code the same list. When adding or removing a
 # marketplace, update every file and bump each file's SCRIPT_VERSION /
 # $ScriptVersion — otherwise the scripts will drift.
+# One entry per internal MCP server. Top-level, beside CSA_MARKETPLACES, because the
+# installation plan has to count it and a list local to the function that runs it cannot be
+# counted from the plan. It was local, the plan named two of these four by hand, and two
+# servers were installed that the person had not been shown. Appending here is now the whole
+# change needed to add a server.
+CSA_INTERNAL_SETUPS=(
+  csa-google-workspace-setup.sh
+  csa-google-gmail-calendar-setup.sh
+  csa-skilljar-setup.sh
+  csa-zendesk-setup.sh
+)
+
 CSA_MARKETPLACES=(
   "CloudSecurityAlliance-Internal/Accounting-Plugins"
   "CloudSecurityAlliance-Internal/CINO-Plugins"
@@ -646,12 +658,22 @@ preflight() {
   install_plugins_preview
   echo "  CSA MCP server       register $CSA_MCP_NAME if your GitHub account has CSA-Internal access"
   echo "                       sign in with a free CSA account - https://cloudsecurityalliance.org/ (click 'Sign in or Sign Up')"
-  # Announced, because it was not: setup_csa_internal_tools installs and upgrades
-  # csa-google-workspace, and a plan that does not mention it means somebody reading the plan
-  # cannot tell whether their Google Workspace server was touched. Same gh-probe gate as the
-  # line above, so it says "if ... access" for the same reason.
-  echo "  Google Workspace     install/upgrade csa-google-workspace if your GitHub account has CSA-Internal access"
-  echo "  Skilljar             install/upgrade csa-skilljar (read-only profile) if your GitHub account has CSA-Internal access"
+  # Announced, because it was not: setup_csa_internal_tools installs and upgrades these, and a
+  # plan that does not mention one means somebody reading the plan cannot tell whether that
+  # server was touched. Same gh-probe gate as the line above, so it says "if ... access" for
+  # the same reason.
+  #
+  # DERIVED from CSA_INTERNAL_SETUPS, not typed out, for the reason the marketplace line above
+  # is derived: the hand-written version named Google Workspace and Skilljar, then Gmail/Calendar
+  # and Zendesk were appended to the list and installed without ever appearing in the plan a
+  # person agreed to. A consent surface that is a second copy of the list is a consent surface
+  # that will eventually describe a different installation from the one that runs.
+  echo "  Internal MCP servers install/upgrade ${#CSA_INTERNAL_SETUPS[@]} servers if your GitHub account has CSA-Internal access"
+  local setup_name
+  for setup_name in "${CSA_INTERNAL_SETUPS[@]}"; do
+    echo "                       ${setup_name%-setup.sh}"
+  done
+  echo "                       each prints what it may do before it is used"
 
   echo ""
 }
@@ -1437,17 +1459,8 @@ setup_csa_internal_tools() {
   gh auth status >/dev/null 2>&1 || return 0
   gh api "repos/$CSA_MCP_GATE_REPO" >/dev/null 2>&1 || return 0
 
-  # One entry per internal MCP server. A list rather than a copied block: the second
-  # server was added by appending a name here, and the third should be too.
-  local setups=(
-    csa-google-workspace-setup.sh
-    csa-google-gmail-calendar-setup.sh
-    csa-skilljar-setup.sh
-    csa-zendesk-setup.sh
-  )
-
   local name script
-  for name in "${setups[@]}"; do
+  for name in "${CSA_INTERNAL_SETUPS[@]}"; do
     script="$(gh api "repos/$CSA_MCP_GATE_REPO/contents/internal-setup/$name" \
                 --jq '.content' 2>/dev/null | base64 --decode 2>/dev/null)" || continue
     [[ -n "$script" ]] || continue
