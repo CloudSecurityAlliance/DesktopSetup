@@ -554,6 +554,15 @@ preflight() {
     install_plugins_preview
     echo "  CSA MCP server     : register $CSA_MCP_NAME if your GitHub account has CSA-Internal access"
     echo "                       sign in with a free CSA account - https://cloudsecurityalliance.org/ (click 'Sign in or Sign Up')"
+    # DERIVED, for the reason the marketplace line is. This preview named none of the four
+    # internal servers while installing all four, so a person agreed to a list that omitted
+    # every one of them. Enumerated so the plan and the run cannot disagree.
+    echo "  Internal MCP servers install/upgrade ${#CSA_INTERNAL_SETUPS[@]} servers if your GitHub account has CSA-Internal access"
+    local setup_name
+    for setup_name in "${CSA_INTERNAL_SETUPS[@]}"; do
+      echo "                       ${setup_name%-setup.sh}"
+    done
+    echo "                       each prints what it may do before it is used"
   else
     warn "claude CLI not found — install it first via scripts/macos-ai-tools.sh"
     abort "Nothing to do without claude CLI."

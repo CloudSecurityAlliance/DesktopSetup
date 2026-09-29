@@ -29,6 +29,18 @@ $ScriptVersion = "2026.09152343"
 # All six files hard-code the same list. When adding or removing a
 # marketplace, update every file and bump each file's SCRIPT_VERSION /
 # $ScriptVersion — otherwise the scripts will drift.
+# One entry per internal MCP server. Top-level, beside $CSA_MARKETPLACES, because the
+# installation plan has to enumerate it and a list local to the function that runs it cannot be
+# reached from the plan. The macOS side named two of these four by hand and installed all four;
+# this side named NONE of them and installed all four, which is the same defect one degree
+# worse. Appending here is the whole change needed to add a server.
+$CSA_INTERNAL_SETUPS = @(
+    'csa-google-workspace-setup.ps1',
+    'csa-google-gmail-calendar-setup.ps1',
+    'csa-skilljar-setup.ps1',
+    'csa-zendesk-setup.ps1'
+)
+
 $CSA_MARKETPLACES = @(
     "CloudSecurityAlliance-Internal/Accounting-Plugins"
     "CloudSecurityAlliance-Internal/CINO-Plugins"
@@ -744,6 +756,14 @@ function Show-Preflight {
     Show-PluginsPreview
     Write-Host "  CSA MCP server     : register $CSA_MCP_NAME if your GitHub account has CSA-Internal access"
     Write-Host "                       sign in with a free CSA account - https://cloudsecurityalliance.org/ (click 'Sign in or Sign Up')"
+    # DERIVED, for the reason the marketplace line is. This plan named none of the four internal
+    # servers while installing all four, so a person agreed to a list that omitted every one of
+    # them. Enumerated from $CSA_INTERNAL_SETUPS so the plan and the run cannot disagree.
+    Write-Host "  Internal MCP servers install/upgrade $($CSA_INTERNAL_SETUPS.Count) servers if your GitHub account has CSA-Internal access"
+    foreach ($setupName in $CSA_INTERNAL_SETUPS) {
+        Write-Host "                       $($setupName -replace '-setup\.ps1$', '')"
+    }
+    Write-Host "                       each prints what it may do before it is used"
 
     Write-Host ""
 }
@@ -766,14 +786,7 @@ function Invoke-CSAInternalSetup {
     # that is absent - `continue` below skips one the repo does not carry - which is how
     # csa-skilljar was carried between the day it was listed here and the day its .ps1
     # landed, with no change needed in this file.
-    $setups = @(
-        'csa-google-workspace-setup.ps1',
-        'csa-google-gmail-calendar-setup.ps1',
-        'csa-skilljar-setup.ps1',
-        'csa-zendesk-setup.ps1'
-    )
-
-    foreach ($name in $setups) {
+    foreach ($name in $CSA_INTERNAL_SETUPS) {
         $encoded = Invoke-NativeOutput { gh api "repos/$CSA_MCP_GATE_REPO/contents/internal-setup/$name" --jq '.content' }
         # `continue`, not `return`: a setup script that is absent - not merged yet, or
         # renamed - must not stop the ones after it. The earlier single-script form
