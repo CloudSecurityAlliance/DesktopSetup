@@ -10,7 +10,7 @@
 #   6. 1Password (via winget, GUI app — needed for biometric CLI unlock)
 #   7. 1Password CLI (via winget)
 #   8. Claude Desktop (via winget, auto-updates)
-#   9. ChatGPT Desktop (via winget, auto-updates)
+#   9. ChatGPT Desktop (via the Microsoft Store, auto-updates)
 #  10. Claude Code (native installer, auto-updates)
 #  11. OpenAI Codex CLI (via npm)
 #  12. Google Gemini CLI (via npm)
@@ -621,9 +621,10 @@ function Detect-Migrations {
         $script:claudeMigration += "winget"
     }
 
-    # Codex: should be npm, not winget
-    $codexWinget = Invoke-NativeOutput { winget list --id OpenAI.Codex --accept-source-agreements }
-    if ($codexWinget -and ($codexWinget | Select-String 'OpenAI.Codex')) {
+    # Codex: should be npm, not winget. Test-CodexInstalledViaWinget rather than a substring
+    # match, because ChatGPT Desktop's MSIX identity is also `OpenAI.Codex` and the old match
+    # aimed Migrate-Codex's uninstall at it. See that function for the measurement.
+    if (Test-CodexInstalledViaWinget) {
         $script:codexMigration = "winget"
     }
 
@@ -754,14 +755,14 @@ function Show-Preflight {
         Write-Host "  Claude Desktop .... install via winget"
     }
 
-    # ChatGPT Desktop
-    $chatgptDesktop = Invoke-NativeOutput { winget list --id OpenAI.ChatGPT --accept-source-agreements }
-    if ($chatgptDesktop -and ($chatgptDesktop | Select-String 'OpenAI.ChatGPT')) {
-        $v = Get-WingetVersion 'OpenAI.ChatGPT'
-        $suffix = if ($v) { ", v$v" } else { '' }
-        Write-Host "  ChatGPT Desktop ... installed (winget$suffix)"
+    # ChatGPT Desktop. Version comes from the MSIX, not Get-WingetVersion: winget has no
+    # manifest for this app, so it could only ever have returned nothing.
+    if (Test-ChatGptDesktop) {
+        $cgv = (Get-AppxPackage -Name $ChatGptMsixName -ErrorAction SilentlyContinue).Version
+        $suffix = if ($cgv) { ", v$cgv" } else { '' }
+        Write-Host "  ChatGPT Desktop ... installed (Microsoft Store$suffix)"
     } else {
-        Write-Host "  ChatGPT Desktop ... install via winget"
+        Write-Host "  ChatGPT Desktop ... install via the Microsoft Store"
     }
 
     # Claude Code
@@ -833,6 +834,55 @@ function Migrate-Claude {
             try { winget uninstall --id Anthropic.ClaudeCode --accept-source-agreements } catch { Write-Warn "winget uninstall claude-code failed; continuing" }
         }
     }
+}
+
+# ChatGPT Desktop comes from the MICROSOFT STORE, not winget. `OpenAI.ChatGPT` exists in no
+# source - measured 2026-09-29, `winget show --exact --id OpenAI.ChatGPT` answers "No package
+# found matching input criteria" - so three runs in one log each reported "Failed to install
+# ChatGPT Desktop" for an app that was already installed.
+#
+# The Store package installs an MSIX whose package identity is `OpenAI.Codex`, which is ALSO the
+# winget id of the entirely unrelated Codex CLI. Test-CodexInstalledViaWinget below exists
+# because of that collision.
+$ChatGptStoreId  = '9PLM9XGG6VKS'
+$ChatGptMsixName = 'OpenAI.Codex'
+
+function Test-ChatGptDesktop {
+    # Asked of Windows' own package store rather than of winget, because the app is an MSIX and
+    # the Store id is not what `winget list` reports for it. Get-AppxPackage names the identity;
+    # the DisplayName inside its manifest is "ChatGPT", and its executable is app/ChatGPT.exe.
+    return [bool](Get-AppxPackage -Name $ChatGptMsixName -ErrorAction SilentlyContinue)
+}
+
+function Test-CodexInstalledViaWinget {
+    # Is the CODEX CLI installed through winget? Asked carefully, because `OpenAI.Codex` names
+    # two unrelated products:
+    #
+    #   winget SOURCE manifest  OpenAI.Codex  ->  Codex CLI 0.159.2       (what this means)
+    #   installed MSIX identity OpenAI.Codex  ->  ChatGPT Desktop 26.x    (what this must not)
+    #
+    # Measured 2026-09-29 on a machine with ChatGPT Desktop, `winget list --id OpenAI.Codex`
+    # prints:
+    #
+    #   Name    Id                                                 Version
+    #   ChatGPT MSIX\OpenAI.Codex_26.924.2738.0_x64__2p2nqsd0c76g0 26.924.2738.0
+    #
+    # The old test was `Select-String 'OpenAI.Codex'`, which matches that row. It therefore
+    # decided the Codex CLI had come from winget, and Migrate-Codex ran
+    # `winget uninstall --id OpenAI.Codex` - pointed at ChatGPT Desktop. The CLI was on npm all
+    # along. The app survived because the uninstall did not succeed, which is luck, not a design.
+    #
+    # A winget-installed package reports its id EXACTLY; an MSIX reports it behind an `MSIX\`
+    # prefix. Requiring the exact form is the whole difference, and it is a property of the row
+    # rather than an inference from a substring appearing somewhere in the output.
+    $out = Invoke-NativeOutput { winget list --exact --id OpenAI.Codex --accept-source-agreements }
+    if (-not $out) { return $false }
+    foreach ($line in ($out -split "`r?`n")) {
+        if ($line -match '(^|\s)OpenAI\.Codex(\s|$)' -and $line -notlike '*MSIX\*') {
+            return $true
+        }
+    }
+    return $false
 }
 
 function Migrate-Codex {
@@ -1308,15 +1358,21 @@ function Install-ClaudeDesktop {
 }
 
 function Install-ChatGPT {
-    $wingetCheck = Invoke-NativeOutput { winget list --id OpenAI.ChatGPT --accept-source-agreements }
-    if ($wingetCheck -and ($wingetCheck | Select-String 'OpenAI.ChatGPT')) {
+    if (Test-ChatGptDesktop) {
         Write-Info "ChatGPT Desktop already installed; skipping"
         return
     }
 
-    Write-Info "Installing ChatGPT Desktop via winget"
-    $null = Invoke-NativeShow { winget install --id OpenAI.ChatGPT --accept-package-agreements --accept-source-agreements }
-    if ($LASTEXITCODE -ne 0) { Write-Warn "Failed to install ChatGPT Desktop" }
+    # --source msstore is required: this package exists in no other source, and without it
+    # winget resolves the name to third-party wrappers (j178.ChatGPT, lencx.ChatGPT,
+    # sonnylab.chatgpt are all in the winget source) which are emphatically not OpenAI's app.
+    Write-Info "Installing ChatGPT Desktop from the Microsoft Store"
+    $null = Invoke-NativeShow { winget install --exact --id $ChatGptStoreId --source msstore --accept-package-agreements --accept-source-agreements }
+    if ($LASTEXITCODE -ne 0) {
+        Write-Warn "Failed to install ChatGPT Desktop (exit $LASTEXITCODE)"
+        Write-Warn "  Store installs can need an interactive session and a signed-in Store."
+        Write-Warn "  If this keeps failing, install ChatGPT from the Microsoft Store app."
+    }
     Refresh-Path
 }
 
@@ -1800,8 +1856,7 @@ function Show-Summary {
     if ($claudeDesktop -and ($claudeDesktop | Select-String 'Anthropic.Claude')) {
         Write-Host "  Claude Desktop .... installed"
     }
-    $chatgptDesktop = Invoke-NativeOutput { winget list --id OpenAI.ChatGPT --accept-source-agreements }
-    if ($chatgptDesktop -and ($chatgptDesktop | Select-String 'OpenAI.ChatGPT')) {
+    if (Test-ChatGptDesktop) {
         Write-Host "  ChatGPT Desktop ... installed"
     }
     if (Has-Command claude) {
