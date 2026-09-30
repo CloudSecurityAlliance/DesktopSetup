@@ -61,6 +61,53 @@ $verdict = & ([ScriptBlock]::Create($inner2))
 Emit ("  Test-CsaInteractive would return : " + $(if ([Console]::IsInputRedirected) { 'FALSE' } else { 'TRUE' }))
 Emit ("  => directory prompts would be    : " + $verdict)
 Emit ""
+
+# ------------------------------------------------------------------------------------------
+# A SEPARATE QUESTION, and nothing above answers it.
+#
+# The CSA setup scripts now WAIT for a locked MCP server executable to be released, and offer
+# `q` to skip. Read-Host and [Console]::KeyAvailable are not interchangeable: Read-Host works
+# fine with redirected stdin, while KeyAvailable THROWS InvalidOperationException when stdin is
+# redirected, and some hosts (ISE, remoting) refuse it outright regardless.
+#
+# The wait loop guards KeyAvailable in try/catch, which is correct - an exception must not be
+# mistaken for "the user quit" - but that guard also means a host where it throws would
+# ADVERTISE `q` and silently never honour it. A refusal that cannot be triggered is the same
+# class of defect as a check that cannot fail, so it gets measured rather than assumed.
+Emit "-- can the wait loop's 'q to skip' actually work here --"
+
+$keyProbe = @'
+$r = @{}
+try   { $r.Available = [Console]::KeyAvailable; $r.Throws = $false }
+catch { $r.Available = $null; $r.Throws = $true; $r.Error = $_.Exception.GetType().Name }
+Write-Output ("    KeyAvailable readable = " + $(if ($r.Throws) { "NO - throws " + $r.Error } else { "YES (currently " + $r.Available + ")" }))
+'@
+
+Emit "  baseline:"
+foreach ($l in (& ([ScriptBlock]::Create($keyProbe)))) { Emit $l }
+Emit "  INNER (as the setup script sees it):"
+$nested = "`$outer = @'`n$keyProbe`n'@`n& ([ScriptBlock]::Create(`$outer))"
+foreach ($l in ($nested | Invoke-Expression)) { Emit $l }
+
+$keyOk = $false
+try { $null = [Console]::KeyAvailable; $keyOk = $true } catch { $keyOk = $false }
+Emit ("  => 'q to skip' would be          : " + $(if ($keyOk) { 'HONOURED' } else { 'ADVERTISED BUT DEAD - fix the offer' }))
+Emit ""
+
+# Only ask for a keypress when it can be read at all, and never block: a probe that hangs is
+# worse than one that reports less.
+if ($keyOk -and -not [Console]::IsInputRedirected) {
+    Write-Host "  Press q within 5 seconds to confirm a keypress is actually delivered (or wait)..."
+    $deadline = (Get-Date).AddSeconds(5)
+    $saw = '<none>'
+    while ((Get-Date) -lt $deadline) {
+        if ([Console]::KeyAvailable) { $saw = [Console]::ReadKey($true).Key; break }
+        Start-Sleep -Milliseconds 200
+    }
+    Emit ("  keypress delivered               : " + $saw)
+    Emit ("  => q/Escape would cancel the wait: " + $(if ($saw -eq 'Q' -or $saw -eq 'Escape') { 'CONFIRMED' } elseif ($saw -eq '<none>') { 'untested (no key pressed)' } else { "saw '$saw' - would be IGNORED, which is correct" }))
+    Emit ""
+}
 Emit "=================================================================="
 Write-Host ""
 Write-Host "LOG WRITTEN TO: $log" -ForegroundColor Green
