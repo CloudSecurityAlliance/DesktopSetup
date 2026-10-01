@@ -134,6 +134,12 @@ jobs:
       - name: README must not ask for a multi-line paste
         run: python3 tools/check-paste-safety.py
 
+      # The index is what raw.githubusercontent.com serves, so a CR reaching it breaks
+      # `curl … | bash` for every macOS user at once. Checked here because .gitattributes
+      # can be edited and a filter can be bypassed with `hash-object --no-filters`.
+      - name: No CR in the index of anything we serve to a shell
+        run: python3 tools/check-line-endings.py
+
       - name: No tail-position conditionals under set -e
         run: python3 tools/check-shell-tail-conditionals.py
 

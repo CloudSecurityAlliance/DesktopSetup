@@ -1,0 +1,27 @@
+# What this repo ships is `curl -fsSL … | bash` and `irm … | iex`, and
+# raw.githubusercontent.com serves the INDEX. So a CR that reaches the index is not a
+# cosmetic problem here: a colleague running the documented one-liner on a new machine gets
+#
+#     bash: line 2: $'\r': command not found
+#
+# with no local checkout to inspect and no obvious cause. Line endings are therefore pinned
+# here rather than left to whatever `core.autocrlf` each contributor happens to have (#66).
+#
+# Note `text eol=crlf` still stores LF in the index — it only affects the working tree — so
+# the .ps1 files are served to `iex` as LF either way. The distinction matters because the
+# thing being protected is what the index holds, not what any checkout looks like.
+* text=auto
+
+*.sh    text eol=lf
+*.py    text eol=lf
+*.txt   text eol=lf
+*.yml   text eol=lf
+*.yaml  text eol=lf
+*.json  text eol=lf
+*.md    text eol=lf
+
+# Windows-native in the working tree, where these are read and edited.
+*.ps1   text eol=crlf
+
+LICENSE     text eol=lf
+.gitignore  text eol=lf
