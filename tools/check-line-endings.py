@@ -109,8 +109,11 @@ def main(argv: list[str]) -> int:
     self_test()
     root = pathlib.Path(__file__).resolve().parent.parent
     try:
-        proc = subprocess.run(["git", "ls-files", "--eol"],
-                              cwd=root, capture_output=True, text=True, check=True)
+        # encoding="utf-8", not text=True: text=True decodes with the locale encoding,
+        # which is cp1252 on a Windows dev box, so a non-ASCII path would crash the check
+        # locally while passing in CI.
+        proc = subprocess.run(["git", "ls-files", "--eol"], cwd=root, capture_output=True,
+                              encoding="utf-8", errors="replace", check=True)
     except (OSError, subprocess.CalledProcessError) as exc:
         # 77, not 1: "could not run here" is not "passed". check-all.sh counts these
         # separately for exactly this reason.

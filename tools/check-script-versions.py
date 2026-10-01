@@ -90,7 +90,13 @@ def self_test() -> None:
 
 def _git(args: list[str]) -> subprocess.CompletedProcess[str]:
     root = pathlib.Path(__file__).resolve().parent.parent
-    return subprocess.run(["git", *args], cwd=root, capture_output=True, text=True)
+    # encoding="utf-8" explicitly, NOT text=True. text=True decodes with the locale
+    # encoding, which is cp1252 on a Windows dev box, and these scripts contain UTF-8
+    # ("·", "—"). The first draft crashed with UnicodeDecodeError on `git show` — and it
+    # would have passed in CI, where the runner is UTF-8, so the failure was reachable only
+    # on the platform that ships least tested. Same local-vs-CI asymmetry as zendesk#66.
+    return subprocess.run(["git", *args], cwd=root, capture_output=True,
+                          encoding="utf-8", errors="replace")
 
 
 def main(argv: list[str]) -> int:
