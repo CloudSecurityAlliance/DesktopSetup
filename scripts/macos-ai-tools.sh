@@ -25,7 +25,7 @@
 
 set -euo pipefail
 
-SCRIPT_VERSION="2026.09272200"
+SCRIPT_VERSION="2026.10011200"
 
 # ── CSA plugin marketplaces ─────────────────────────────────────────
 # Plugin marketplaces to register with Claude Code. Each entry is an
@@ -200,14 +200,14 @@ CSA_LOG_INHERITED=""
 if csa_debug_requested; then
   if [[ -n "${CSA_LOG:-}" ]]; then
     CSA_LOG_INHERITED=1
-    printf '\n--- %s ---\n' "${SCRIPT_LABEL:-desktopsetup}" >> "$CSA_LOG"
+    printf '\n--- %s v%s ---\n' "${SCRIPT_LABEL:-desktopsetup}" "${SCRIPT_VERSION}" >> "$CSA_LOG"
   else
     CSA_LOG="${HOME}/desktopsetup-$(date +%Y%m%d-%H%M%S).log"
     ( umask 077; : > "$CSA_LOG" )      # 0600 from creation, not chmod-ed afterwards
     {
       echo "=== DesktopSetup $(date -u +%Y-%m-%dT%H:%M:%SZ) ==="
       echo "This log is REDACTED for known credential shapes, but review it before sharing."
-      echo "$(uname -sr) · bash ${BASH_VERSION} · ${SCRIPT_LABEL:-desktopsetup}"
+      echo "$(uname -sr) · bash ${BASH_VERSION} · ${SCRIPT_LABEL:-desktopsetup} v${SCRIPT_VERSION}"
     } >> "$CSA_LOG"
   fi
   CSA_DEBUG=1                        # normalised, so a child sees 1 whatever was typed

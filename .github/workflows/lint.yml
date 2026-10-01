@@ -120,7 +120,13 @@ jobs:
     name: duplication
     runs-on: ubuntu-latest
     steps:
+      # fetch-depth: 0 because check-script-versions.py needs a base ref to diff against.
+      # The default shallow clone has no origin/main, and that checker returns 77 (skipped)
+      # rather than 0 when it cannot find one — a check that cannot run must not look like a
+      # check that passed.
       - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955  # v4.3.0
+        with:
+          fetch-depth: 0
 
       - name: Shared functions must not have drifted
         run: python3 tools/check-duplication.py --diff
@@ -139,6 +145,9 @@ jobs:
       # can be edited and a filter can be bypassed with `hash-object --no-filters`.
       - name: No CR in the index of anything we serve to a shell
         run: python3 tools/check-line-endings.py
+
+      - name: A changed script must bump its version
+        run: python3 tools/check-script-versions.py
 
       - name: No tail-position conditionals under set -e
         run: python3 tools/check-shell-tail-conditionals.py
