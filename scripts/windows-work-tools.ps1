@@ -22,7 +22,7 @@
 
 $ErrorActionPreference = 'Stop'
 
-$ScriptVersion = "2026.09160003"
+$ScriptVersion = "2026.10011200"
 
 # ── App sets ────────────────────────────────────────────────────────
 # ONE list per profile, read by Select-Profile, Show-Preflight, Install-Core/Install-Dev,
@@ -251,7 +251,7 @@ if ($CsaDebug -and $CsaLog) {
     # and then the path announced above names a file that does not exist. "Send me the log"
     # then sends nothing, and the one fact worth having (which check refused to proceed) is
     # lost with it.
-    Write-CsaLog ("{0} starting; CSA_DEBUG=1, no argument vector (irm|iex)" -f $SCRIPT_LABEL) 'info'
+    Write-CsaLog ("{0} v{1} starting; CSA_DEBUG=1, no argument vector (irm|iex)" -f $SCRIPT_LABEL, $ScriptVersion) 'info'
 }
 
 

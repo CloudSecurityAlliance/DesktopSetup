@@ -62,6 +62,9 @@ check python3 tools/check-paste-safety.py
 step "no CR in the index of anything we serve to a shell"
 check python3 tools/check-line-endings.py
 
+step "a changed script must bump its version"
+check python3 tools/check-script-versions.py
+
 step "no tail-position conditionals under set -e"
 check python3 tools/check-shell-tail-conditionals.py
 
