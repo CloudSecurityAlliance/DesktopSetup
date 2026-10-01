@@ -149,6 +149,11 @@ jobs:
       - name: A changed script must bump its version
         run: python3 tools/check-script-versions.py
 
+      # Windows only. macOS captures everything with a process-wide tee; Windows has no
+      # equivalent and Start-Transcript would bypass Write-CsaLog's redaction.
+      - name: The log records what the user saw, prompts included
+        run: python3 tools/check-log-coverage.py
+
       - name: No tail-position conditionals under set -e
         run: python3 tools/check-shell-tail-conditionals.py
 
