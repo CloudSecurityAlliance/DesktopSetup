@@ -1,19 +1,29 @@
-# Cloud Security Alliance — Windows Plugin Install/Update
+# Cloud Security Alliance — Windows CSA Plugins and MCP Servers Install/Update
 #
-# Standalone script that just handles Claude Code plugins: register
-# missing marketplaces (CSA ones via gh probe), install any plugins
-# from scripts/csa-plugins.txt and scripts/csa-plugins-internal.txt
-# that aren't yet installed, then refresh all registered marketplaces.
+# Standalone script for the CSA layer: Claude Code plugins AND every
+# CSA MCP server. It registers missing marketplaces (CSA ones via gh
+# probe), installs any plugins from scripts/csa-plugins.txt and
+# scripts/csa-plugins-internal.txt that aren't yet installed, refreshes
+# all registered marketplaces, registers the CSA MCP server, and then
+# installs or upgrades each internal MCP server from the gate repo.
 #
-# Use this when you want to get current on plugins without running
-# the full windows-ai-tools.ps1 (which also installs winget apps).
+# Use this when you want to get current on the CSA layer without running
+# the full windows-ai-tools.ps1 (which also installs winget apps) or
+# windows-update.ps1 (which also upgrades winget / npm / pip).
+#
+# The name says "plugins" for compatibility: it is in documented curl
+# one-liners that fetch HEAD, and `main` is the release. See #89 - every
+# string that NAMES this script now mentions MCP servers, because the
+# naming was the bug: the repo's own maintainer ran the full installer to
+# pick up one new MCP server, which this would have done in a fraction of
+# the time.
 #
 # Usage:
 #   irm https://raw.githubusercontent.com/CloudSecurityAlliance/DesktopSetup/HEAD/scripts/windows-plugins.ps1 -Headers @{'Cache-Control'='no-cache'} | iex
 
 $ErrorActionPreference = 'Stop'
 
-$ScriptVersion = "2026.10021000"
+$ScriptVersion = "2026.10021627"
 
 # ── CSA plugin marketplaces ─────────────────────────────────────────
 # Registered in Setup-PluginMarketplaces regardless of whether
@@ -958,14 +968,14 @@ function Invoke-CSAInternalSetup {
 }
 
 function Main {
-    Write-Info "Cloud Security Alliance -- Windows Plugin Sync v$ScriptVersion"
+    Write-Info "Cloud Security Alliance -- Windows CSA Plugins and MCP Servers v$ScriptVersion"
 
     Detect-NonInteractive
     Test-Preconditions
 
     Show-Preflight
 
-    if (-not (Confirm-Step "Proceed with plugin sync?")) {
+    if (-not (Confirm-Step "Proceed with the CSA plugin and MCP server sync?")) {
         Abort "Aborted."
     }
 
@@ -981,7 +991,7 @@ function Main {
     }
 
     Write-Host ""
-    Write-Success "Plugin sync complete."
+    Write-Success "CSA plugins and MCP servers are up to date."
     Write-Host ""
     Write-Host "  To list installed plugins:"
     Write-Host "    claude plugin list"

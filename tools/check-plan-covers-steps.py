@@ -82,7 +82,9 @@ for _m, _w in EQUIV.items():
 
 # Canonical step -> the label its plan row must start with. Canonical is the macOS name where a
 # counterpart exists (so EQUIV can translate), and the platform's own name where it does not.
-PLAN_LABEL: dict[str, str] = {
+# A value is a label, or a dict of {file-suffix: label} when the two platforms name the
+# same job differently for a real reason.
+PLAN_LABEL: dict[str, str | dict[str, str]] = {
     # both platforms
     "install_git": "Git",
     "install_gh": "GitHub CLI",
@@ -106,6 +108,16 @@ PLAN_LABEL: dict[str, str] = {
     "install_homebrew": "Homebrew",
     # Windows only
     "Set-LongPathSupport": "Long paths",
+    # The other macOS name for the same job; the plugins and update scripts call this one.
+    "sync_plugin_marketplaces": "Plugin marketplaces",
+    # The updaters. A value may be a dict keyed by file suffix, because the same canonical step
+    # legitimately previews under different names: the package managers are different programs,
+    # and calling the winget row "Homebrew" would be worse than having two entries.
+    "update_brew": {".sh": "Homebrew", ".ps1": "winget packages"},
+    "update_npm": {".sh": "npm", ".ps1": "npm globals"},
+    "update_pip": {".sh": "pip packages", ".ps1": "pip packages"},
+    "update_claude_code": "Claude Code",
+    "snapshot": "Snapshot",
 }
 
 # A step whose label is one of two rows. `pandoc` and `typst` are installed by one step and
@@ -133,6 +145,10 @@ PLAN_EXEMPT: dict[str, str] = {
     # list is derived from what the account can see. Asserted below rather than exempted
     # blindly: the plan must still CALL that preview.
     "install_plugins": "previewed by install_plugins_preview / Show-PluginsPreview, asserted separately",
+    # Called from inside preflight() itself, before any row is printed. It makes `brew` findable
+    # and accepts the Xcode licence; there is no action to preview, and previewing it would mean
+    # previewing the thing that lets the preview run.
+    "ensure_brew_in_path": "runs inside preflight to make brew findable; takes no action to preview",
 }
 
 # For the one exemption that is really "previewed differently", say what must be present.
@@ -141,9 +157,18 @@ PREVIEW_CALL = {
     "scripts/windows-ai-tools.ps1": "Show-PluginsPreview",
 }
 
+# ALL SIX entry points, not just the two installers. The first version of this tool covered
+# the installers only - 2 of 6 - which is this repo's own recurring lesson applied to itself:
+# a green check is only evidence about what it ran on. The other four run the same steps,
+# including every internal MCP server, and three of the four are the paths people are told to
+# prefer for a quick update.
 SCRIPTS = {
     "scripts/macos-ai-tools.sh": ("main() {", "preflight() {"),
     "scripts/windows-ai-tools.ps1": ("function Main {", "function Show-Preflight"),
+    "scripts/macos-plugins.sh": ("main() {", "preflight() {"),
+    "scripts/windows-plugins.ps1": ("function Main {", "function Show-Preflight"),
+    "scripts/macos-update.sh": ("main() {", "preflight() {"),
+    "scripts/windows-update.ps1": ("function Main {", "function Show-Preflight"),
 }
 
 
@@ -194,7 +219,7 @@ def plan_has(body: str, label: str) -> bool:
     The trailing-character requirement is what stops `Git` from being satisfied by
     `GitHub CLI ........`, which is a real pair in these files.
     """
-    return re.search(r'"\s{2}' + re.escape(label) + r"(?=[ .\"])", body) is not None
+    return re.search(r'"\s{2}' + re.escape(label) + r"(?=[ .:\"])", body) is not None
 
 
 def canon(step: str) -> str:
@@ -229,7 +254,10 @@ def audit(path: str, rev: str | None) -> tuple[list[str], set[str]]:
             continue
         labels = PLAN_LABEL_EXTRA.get(key) or PLAN_LABEL_EXTRA.get(step)
         if labels is None:
-            label = PLAN_LABEL.get(key) or PLAN_LABEL.get(step)
+            label = PLAN_LABEL.get(key, PLAN_LABEL.get(step))
+            if isinstance(label, dict):
+                # Per-platform label: the package managers differ, so the rows do.
+                label = label.get(".sh" if path.endswith(".sh") else ".ps1")
             if label is None:
                 problems.append(
                     f"{path}: {step} runs in main() but is in neither PLAN_LABEL nor "
@@ -346,7 +374,7 @@ def main(argv: list[str]) -> int:
             f"Note this checks PRESENCE only - it cannot tell you a row's wording is still true."
         )
         return 1
-    print("\nevery step in both main() functions is named in its plan, or exempt with a reason.")
+    print(f"\nevery step in all {len(SCRIPTS)} main() functions is named in its plan, or exempt with a reason.")
     return 0
 
 

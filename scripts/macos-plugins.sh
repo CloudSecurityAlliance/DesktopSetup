@@ -1,15 +1,24 @@
 #!/usr/bin/env bash
 
-# Cloud Security Alliance — macOS Plugin Install/Update
+# Cloud Security Alliance — macOS CSA Plugins and MCP Servers Install/Update
 #
-# Standalone script that just handles Claude Code plugins: register
-# missing marketplaces (CSA ones via gh probe), install any plugins
-# from scripts/csa-plugins.txt and scripts/csa-plugins-internal.txt
-# that aren't yet installed, then refresh all registered marketplaces.
+# Standalone script for the CSA layer: Claude Code plugins AND every
+# CSA MCP server. It registers missing marketplaces (CSA ones via gh
+# probe), installs any plugins from scripts/csa-plugins.txt and
+# scripts/csa-plugins-internal.txt that aren't yet installed, refreshes
+# all registered marketplaces, registers the CSA MCP server, and then
+# installs or upgrades each internal MCP server from the gate repo.
 #
-# Use this when you want to get current on plugins without running
+# Use this when you want to get current on the CSA layer without running
 # the full macos-ai-tools.sh (which also installs Homebrew apps) or
 # macos-update.sh (which also upgrades Homebrew / npm / pip).
+#
+# The name says "plugins" for compatibility: it is in documented curl
+# one-liners that fetch HEAD, and `main` is the release. See #89 - every
+# string that NAMES this script now mentions MCP servers, because the
+# naming was the bug: the repo's own maintainer ran the full installer to
+# pick up one new MCP server, which this would have done in a fraction of
+# the time.
 #
 # Usage:
 #   bash scripts/macos-plugins.sh
@@ -17,7 +26,7 @@
 
 set -euo pipefail
 
-SCRIPT_VERSION="2026.10021000"
+SCRIPT_VERSION="2026.10021627"
 
 # ── CSA plugin marketplaces ─────────────────────────────────────────
 # Registered in sync_plugin_marketplaces() regardless of whether
@@ -604,11 +613,11 @@ preflight() {
 # ── Main ────────────────────────────────────────────────────────────
 
 main() {
-  info "Cloud Security Alliance — macOS Plugin Sync v${SCRIPT_VERSION}"
+  info "Cloud Security Alliance — macOS CSA Plugins and MCP Servers v${SCRIPT_VERSION}"
 
   preflight
 
-  if ! confirm "Proceed with plugin sync?"; then
+  if ! confirm "Proceed with the CSA plugin and MCP server sync?"; then
     abort "Aborted."
   fi
 
@@ -620,7 +629,7 @@ main() {
   claude plugin marketplace update || warn "marketplace update failed; continuing"
 
   echo ""
-  success "Plugin sync complete."
+  success "CSA plugins and MCP servers are up to date."
   echo ""
   echo "  To list installed plugins:"
   echo "    claude plugin list"

@@ -17,7 +17,7 @@
 
 set -euo pipefail
 
-SCRIPT_VERSION="2026.10021000"
+SCRIPT_VERSION="2026.10021627"
 
 # ── CSA plugin marketplaces ─────────────────────────────────────────
 # Each update run will add any entries from this list that aren't yet
@@ -520,6 +520,12 @@ preflight() {
       echo "                       ${setup_name%-setup.sh}"
     done
     echo "                       each prints what it may do before it is used"
+    echo ""
+    # Windows's plan has named this file since the snapshot was added; macOS's did
+    # not, so a macOS user was never told a file was being written - while
+    # $SNAPSHOT_FILE is written here AND printed in the closing summary. Found by
+    # check-plan-covers-steps.py once it covered all six scripts rather than two.
+    echo "  Snapshot           : $SNAPSHOT_FILE"
     echo ""
   fi
 }
