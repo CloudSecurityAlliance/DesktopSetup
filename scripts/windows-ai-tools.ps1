@@ -20,7 +20,7 @@
 
 $ErrorActionPreference = 'Stop'
 
-$ScriptVersion = "2026.10020800"
+$ScriptVersion = "2026.10020900"
 
 # ── CSA plugin marketplaces ─────────────────────────────────────────
 # Plugin marketplaces to register with Claude Code. Each entry is an
@@ -896,12 +896,23 @@ function Get-RunningAiClients {
 function Check-RunningTools {
     $running = Get-RunningAiClients
     if ($running.Count -eq 0) { return }
-    # ONE line. The first version of this said "Nothing is asked of you" and then spent three
-    # more lines explaining why - which reads as a warning precisely because it is long, and a
-    # reader cannot tell at a glance that there is nothing to do. If no action is required, the
-    # length of the message should say so too.
-    Write-Info ("Running: " + ($running -join ', ') +
-                " - fine to leave open; if a step needs one closed it will say so.")
+    # "FOUND x running", not "Running: x". The previous wording read as though the INSTALLER
+    # were running Claude Code - reported that way from a real run. The subject of the sentence
+    # has to be the thing that was found, because the reader's question is "what is this telling
+    # me about my machine", not "what is the installer doing".
+    #
+    # "has to be reinstalled", not "to update MCP servers": a close is needed only when a
+    # REBUILD is implied - $wouldRebuild is a sticky receipt, a husk, or an interpreter move.
+    # Measured 2026-10-01, a dependency-only upgrade exits 0 with every client running, and
+    # even a version change lands. Saying that updates need clients closed would send people to
+    # close things on runs that do not need it, which is how a warning stops being read.
+    #
+    # ONE line. An earlier version said "Nothing is asked of you" and then spent three more
+    # lines explaining why - which reads as a warning precisely because it is long. If no action
+    # is required, the length of the message should say so too.
+    Write-Info ("Found " + ($running -join ', ') +
+                " running - no need to close anything. If a server has to be reinstalled, " +
+                "this will stop and ask.")
 }
 
 # ── Migration detection ────────────────────────────────────────────
