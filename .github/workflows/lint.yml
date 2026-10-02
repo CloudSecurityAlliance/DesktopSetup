@@ -163,6 +163,9 @@ jobs:
       - name: TODO.md cites functions that exist, never line numbers
         run: python3 tools/check-todo-citations.py
 
+      - name: The refresh tool can still report what moved
+        run: python3 tools/csa-refresh.py --self-test
+
       - name: Debug mode must not swallow interactive prompts
         run: python3 tests/test_prompt_visibility.py
 

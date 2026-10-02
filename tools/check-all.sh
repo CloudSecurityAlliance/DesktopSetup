@@ -88,6 +88,9 @@ check python3 tools/check-shell-tail-conditionals.py
 step "every macOS script has a Windows counterpart with matching steps"
 check python3 tools/check-parity.py
 
+step "the refresh tool can still report what moved"
+check python3 tools/csa-refresh.py --self-test
+
 step "TODO.md cites functions that exist, never line numbers"
 check python3 tools/check-todo-citations.py
 
