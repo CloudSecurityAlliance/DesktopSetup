@@ -17,7 +17,7 @@
 
 $ErrorActionPreference = 'Stop'
 
-$ScriptVersion = "2026.10011200"
+$ScriptVersion = "2026.10011300"
 
 # ── Snapshot location ───────────────────────────────────────
 
@@ -91,10 +91,28 @@ $CSA_MCP_GATE_REPO = 'CloudSecurityAlliance-Internal/CSA-Plugins'
 
 # ── Output helpers ──────────────────────────────────────────────────
 
-function Write-Info    { param([string]$Message) Write-Host "==> $Message" -ForegroundColor Cyan }
-function Write-Success { param([string]$Message) Write-Host "==> $Message" -ForegroundColor Green }
-function Write-Warn    { param([string]$Message) Write-Host "Warning: $Message" -ForegroundColor Yellow }
-function Write-Err     { param([string]$Message) Write-Host "Error: $Message" -ForegroundColor Red }
+# Every one of these records what it printed, so "shown to the user" and "in the debug log"
+# stop being two decisions. They were two, and a real run cost two wrong diagnoses: a log
+# ending mid-run read as a crash when the script had carried on for several more steps, and
+# Claude Desktop was judged absent because its registration line never reached the file (#96).
+#
+# macOS has never had this problem - its logger is a process-wide `tee`, so everything printed
+# is captured by construction. Windows has no equivalent, and Start-Transcript is not one:
+# it would bypass Write-CsaLog's redaction, and this file is deliberately redacted.
+#
+# One kind, 'screen', for all four: the prefix already distinguishes them, and a single kind
+# means `grep '[screen]'` reconstructs what the terminal showed.
+#
+# ORDERING: these call Write-CsaLog, which is defined further down. PowerShell resolves at
+# call time, so this is safe only while no Write-* call executes before that definition.
+# Measured 2026-10-01: the earliest real call in each of the five scripts is after it. That is
+# a property of today's code, not a guarantee - so check-log-coverage.py enforces it, because
+# the same CommandNotFoundException-to-$null-to-wrong-branch failure has already cost this
+# fleet a release (CSA-Plugins, Test-CsaInteractive).
+function Write-Info    { param([string]$Message) $l = "==> $Message";      Write-Host $l -ForegroundColor Cyan;   Write-CsaLog $l 'screen' }
+function Write-Success { param([string]$Message) $l = "==> $Message";      Write-Host $l -ForegroundColor Green;  Write-CsaLog $l 'screen' }
+function Write-Warn    { param([string]$Message) $l = "Warning: $Message"; Write-Host $l -ForegroundColor Yellow; Write-CsaLog $l 'screen' }
+function Write-Err     { param([string]$Message) $l = "Error: $Message";   Write-Host $l -ForegroundColor Red;    Write-CsaLog $l 'screen' }
 function Abort         { param([string]$Message) Write-Err $Message; exit 1 }
 
 # ── Debug logging ───────────────────────────────────────────────────
@@ -438,8 +456,17 @@ function Invoke-NativeCapture {
 
 function Confirm-Step {
     param([string]$Message)
-    if ($env:NONINTERACTIVE -eq '1') { return $true }
-    $reply = Read-Host "$Message [Y/n]"
+    # Logged BEFORE Read-Host blocks, which is the point: "waiting on a human" and "hung" are
+    # indistinguishable in a log that only records what happened afterwards, and a prompt that
+    # had lost its value was the actual bug the last investigation was looking for (#96).
+    $question = "$Message [Y/n]"
+    if ($env:NONINTERACTIVE -eq '1') {
+        Write-CsaLog "$question -> auto-yes (NONINTERACTIVE)" 'prompt'
+        return $true
+    }
+    Write-CsaLog $question 'prompt'
+    $reply = Read-Host $question
+    Write-CsaLog "answered: '$reply'" 'prompt'
     return ($reply -eq '' -or $reply -match '^[Yy]')
 }
 

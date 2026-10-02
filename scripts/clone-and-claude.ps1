@@ -16,14 +16,32 @@
 
 $ErrorActionPreference = 'Stop'
 
-$ScriptVersion = "2026.10011200"
+$ScriptVersion = "2026.10011300"
 
 # ── Output helpers ──────────────────────────────────────────────────
 
-function Write-Info    { param([string]$Message) Write-Host "==> $Message" -ForegroundColor Cyan }
-function Write-Success { param([string]$Message) Write-Host "==> $Message" -ForegroundColor Green }
-function Write-Warn    { param([string]$Message) Write-Host "Warning: $Message" -ForegroundColor Yellow }
-function Write-Err     { param([string]$Message) Write-Host "Error: $Message" -ForegroundColor Red }
+# Every one of these records what it printed, so "shown to the user" and "in the debug log"
+# stop being two decisions. They were two, and a real run cost two wrong diagnoses: a log
+# ending mid-run read as a crash when the script had carried on for several more steps, and
+# Claude Desktop was judged absent because its registration line never reached the file (#96).
+#
+# macOS has never had this problem - its logger is a process-wide `tee`, so everything printed
+# is captured by construction. Windows has no equivalent, and Start-Transcript is not one:
+# it would bypass Write-CsaLog's redaction, and this file is deliberately redacted.
+#
+# One kind, 'screen', for all four: the prefix already distinguishes them, and a single kind
+# means `grep '[screen]'` reconstructs what the terminal showed.
+#
+# ORDERING: these call Write-CsaLog, which is defined further down. PowerShell resolves at
+# call time, so this is safe only while no Write-* call executes before that definition.
+# Measured 2026-10-01: the earliest real call in each of the five scripts is after it. That is
+# a property of today's code, not a guarantee - so check-log-coverage.py enforces it, because
+# the same CommandNotFoundException-to-$null-to-wrong-branch failure has already cost this
+# fleet a release (CSA-Plugins, Test-CsaInteractive).
+function Write-Info    { param([string]$Message) $l = "==> $Message";      Write-Host $l -ForegroundColor Cyan;   Write-CsaLog $l 'screen' }
+function Write-Success { param([string]$Message) $l = "==> $Message";      Write-Host $l -ForegroundColor Green;  Write-CsaLog $l 'screen' }
+function Write-Warn    { param([string]$Message) $l = "Warning: $Message"; Write-Host $l -ForegroundColor Yellow; Write-CsaLog $l 'screen' }
+function Write-Err     { param([string]$Message) $l = "Error: $Message";   Write-Host $l -ForegroundColor Red;    Write-CsaLog $l 'screen' }
 function Abort         { param([string]$Message) Write-Err $Message; exit 1 }
 
 # ── Debug logging ───────────────────────────────────────────────────
@@ -393,7 +411,9 @@ Write-Host ""
 
 if ([Environment]::UserInteractive) {
     while ($true) {
+        Write-CsaLog '  Clone to default location, or choose your own? [yes/No]' 'prompt'
         $reply = Read-Host "  Clone to default location, or choose your own? [yes/No]"
+        Write-CsaLog "answered: '$reply'" 'prompt'
         $replyLower = $reply.ToLower()
         if ($replyLower -eq 'y' -or $replyLower -eq 'yes') {
             $BaseDir = $DefaultBase
@@ -403,7 +423,9 @@ if ([Environment]::UserInteractive) {
             Write-Host "  Enter the path where you want the repo."
             Write-Host "  Example: ~\Projects or C:\Users\yourname\work"
             Write-Host ""
+            Write-CsaLog '  Path' 'prompt'
             $customPath = Read-Host "  Path"
+            Write-CsaLog "answered: '$customPath'" 'prompt'
             if (-not $customPath) {
                 Abort "No path entered."
             }
@@ -444,7 +466,9 @@ if ([Environment]::UserInteractive) {
     Write-Host "  Will clone to: $TargetDir"
     Write-Host ""
     while ($true) {
+        Write-CsaLog '  Proceed? [y/N]' 'prompt'
         $confirmReply = Read-Host "  Proceed? [y/N]"
+        Write-CsaLog "answered: '$confirmReply'" 'prompt'
         $confirmLower = $confirmReply.ToLower()
         if ($confirmLower -eq 'y' -or $confirmLower -eq 'yes') {
             break

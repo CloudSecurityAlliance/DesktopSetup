@@ -65,6 +65,9 @@ check python3 tools/check-line-endings.py
 step "a changed script must bump its version"
 check python3 tools/check-script-versions.py
 
+step "the log records what the user saw, prompts included"
+check python3 tools/check-log-coverage.py
+
 step "no tail-position conditionals under set -e"
 check python3 tools/check-shell-tail-conditionals.py
 
