@@ -127,3 +127,16 @@ Audit performed 2026-02-24.
 
 - **SEC-M3 — Snapshot log files are world-readable** (`macos-update.sh`, `snapshot`) — DOCUMENTED CONCERN
   macOS home directory permissions protect these files on a standard single-user machine. Only a concern on shared multi-user systems, which is not the target environment.
+
+## Guard layer
+
+- **G1 — Two checkers carry no self-test** (`tools/check-duplication.py`,
+  `tools/check-paste-safety.py`) — OPEN
+  [ADR-005](DECISIONS-ADR.md) requires a guard to break its own rule on purpose, and nine of
+  eleven comply. These two are the oldest and predate the rule rather than being excused from
+  it. The reason it matters is on the record twice over: #71 and #72 were both guards that ran,
+  passed, and could not have failed, and `check-powershell-native.py` has a self-test precisely
+  because two separate bugs once made it print *"all native calls are guarded"* no matter what.
+  `check-duplication.py` is the higher priority of the two — its first run found twelve
+  already-drifted functions, so it is doing real work and nothing proves it still can.
+  Found while correcting a claim in `GOALS.md` that said *each* checker self-tests.

@@ -144,7 +144,7 @@ instruction file is worse than drifting code, because nothing runs it.
 
 **Status:** Active · **Date:** 2026-10-02
 
-**Context.** Twelve checkers in `tools/` and eleven tests in `tests/`. The temptation with a
+**Context.** Eleven checkers in `tools/` and ten test files in `tests/`. The temptation with a
 growing guard layer is to write general-purpose linting.
 
 **Decision.** A new guard is added only for a mistake that actually shipped, it names the issue
@@ -157,6 +157,10 @@ inherited with the code rather than held by the author. The self-test requiremen
 ceremony — [#71](https://github.com/CloudSecurityAlliance/DesktopSetup/issues/71) and
 [#72](https://github.com/CloudSecurityAlliance/DesktopSetup/issues/72) are both guards that ran,
 passed, and could not have failed.
+
+**Known exceptions, which are a gap and not an exemption.** `check-duplication.py` and
+`check-paste-safety.py` are the two oldest checkers and carry no self-test. They predate the
+rule rather than being excused from it; logged in [`TODO.md`](TODO.md). Nine of eleven comply.
 
 **Rejected alternatives.**
 - *An off-the-shelf linter instead.* `shellcheck` and `PSScriptAnalyzer` both run, and neither

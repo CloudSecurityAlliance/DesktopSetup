@@ -206,6 +206,3 @@ marimo/_static/
 marimo/_lsp/
 __marimo__/
 
-# Untracked working notes — AGENTS.md was swept into #114 by `git add -A` and is a
-# mangled copy of CLAUDE.md; keep it local until it is written deliberately. See #115.
-AGENTS.md
