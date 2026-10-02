@@ -30,7 +30,7 @@ assumption rather than the output. The fixture below is now real output.
 Self-tests before it reports, on output it must reject and output it must accept: a checker
 that cannot see a bad entry would print "all clear" for ever and be believed.
 
-    python3 tools/check-line-endings.py
+    python3 tools/check-line-endings.py [repo-root]
 """
 from __future__ import annotations
 
@@ -107,7 +107,13 @@ def self_test() -> None:
 
 def main(argv: list[str]) -> int:
     self_test()
-    root = pathlib.Path(__file__).resolve().parent.parent
+    # An explicit root so this can police ANOTHER repo's index. CSA-Plugins needs it more than
+    # this one does: its .sh are base64-encoded by `gh api`, decoded on the target machine and
+    # piped into `bash -c`, so a CR in its index is carried byte-for-byte to a macOS laptop.
+    # One implementation rather than a copy, because a copied checker drifts and this repo
+    # already has check-duplication.py because of that.
+    args = [a for a in argv[1:] if not a.startswith("-")]
+    root = pathlib.Path(args[0]).resolve() if args else pathlib.Path(__file__).resolve().parent.parent
     try:
         # encoding="utf-8", not text=True: text=True decodes with the locale encoding,
         # which is cp1252 on a Windows dev box, so a non-ASCII path would crash the check
