@@ -7,6 +7,13 @@ within months — C2 pointed 243 lines away, at unrelated code about the same to
 than no citation because it looks right. A function name survives edits; a line number does not.
 `tools/check-todo-citations.py` enforces this and verifies every cited function still exists (#70).
 
+> **On a Mac?** [#119](https://github.com/CloudSecurityAlliance/DesktopSetup/issues/119) is the
+> single index of everything that needs one — the macOS findings below (C2, H1, H2, H3, H4), the
+> issues that have always needed a Mac (#56, #78, #81, #82, #93), the parity gaps the Windows
+> work *created*, and a section naming what is **not** macOS work so nobody re-derives it. The
+> Windows counterpart is
+> [CSA-Plugins#130](https://github.com/CloudSecurityAlliance-Internal/CSA-Plugins/issues/130).
+
 ---
 
 ## Critical
