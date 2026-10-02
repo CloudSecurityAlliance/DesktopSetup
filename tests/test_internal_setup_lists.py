@@ -108,8 +108,15 @@ def main() -> int:
     # Fail-closed on a SEVENTH copy. The list was duplicated once and then again; a script
     # added later that carries its own copy must land here rather than quietly going stale,
     # because nothing about a missing server is visible at run time.
+    # as_posix(), not str(): on Windows `str(Path.relative_to())` yields backslashes, so this
+    # compared "scripts\macos-ai-tools.sh" against COPIES' "scripts/macos-ai-tools.sh" and
+    # reported all six as untracked. It passed in CI on ubuntu and failed only on Windows -
+    # which nobody saw, because this test ran in CI and not in tools/check-all.sh. Wiring it
+    # into the local runner is what surfaced it. COPIES is written with forward slashes
+    # because it is a literal in source, so the comparison has to be normalised, not the
+    # literal.
     holders = sorted(
-        str(p.relative_to(ROOT))
+        p.relative_to(ROOT).as_posix()
         for p in (ROOT / "scripts").glob("*")
         if p.suffix in {".sh", ".ps1"} and "setup_csa_internal_tools" in p.read_text(encoding="utf-8")
     )

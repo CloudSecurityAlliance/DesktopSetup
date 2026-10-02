@@ -17,7 +17,7 @@
 
 set -euo pipefail
 
-SCRIPT_VERSION="2026.10011200"
+SCRIPT_VERSION="2026.10021000"
 
 # ── CSA plugin marketplaces ─────────────────────────────────────────
 # Registered in sync_plugin_marketplaces() regardless of whether
@@ -525,6 +525,32 @@ setup_csa_internal_tools() {
   gh api "repos/$CSA_MCP_GATE_REPO" >/dev/null 2>&1 || return 0
 
   local name script
+  # What the gate repo ACTUALLY holds. The loop below does `continue` on a script it cannot
+  # fetch - deliberately, so one absent server does not stop the ones after it - which makes a
+  # stale list produce NO OUTPUT AT ALL. The list is copied into six scripts and has drifted
+  # twice (#85, #92); both times somebody noticed a server missing days later. See #95.
+  #
+  # tests/test_internal_setup_lists.py asserts the six copies agree with each other and says it
+  # cannot check them against the gate repo, which is private. Here we can.
+  gate_has="$(gh api "repos/${CSA_MCP_GATE_REPO}/contents/internal-setup" --jq '.[].name' 2>/dev/null \
+              | grep -E '^csa-.*-setup\.sh$' || true)"
+  if [[ -n "$gate_has" ]]; then
+    for have in $gate_has; do
+      listed=""
+      for want in "${CSA_INTERNAL_SETUPS[@]}"; do
+        if [[ "$want" == "$have" ]]; then listed=1; break; fi
+      done
+      if [[ -z "$listed" ]]; then
+        warn "${have} is in the gate repo but not in this installer's list - a server nobody is installing (#95)"
+      fi
+    done
+    for want in "${CSA_INTERNAL_SETUPS[@]}"; do
+      if ! printf '%s\n' "$gate_has" | grep -qxF "$want"; then
+        info "${want} is listed here but not yet in the gate repo; skipping it"
+      fi
+    done
+  fi
+
   for name in "${CSA_INTERNAL_SETUPS[@]}"; do
     script="$(gh api "repos/$CSA_MCP_GATE_REPO/contents/internal-setup/$name" \
                 --jq '.content' 2>/dev/null | base64 --decode 2>/dev/null)" || continue

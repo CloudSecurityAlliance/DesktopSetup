@@ -17,7 +17,7 @@
 
 $ErrorActionPreference = 'Stop'
 
-$ScriptVersion = "2026.10020500"
+$ScriptVersion = "2026.10021000"
 
 # ── Snapshot location ───────────────────────────────────────
 
@@ -900,6 +900,31 @@ function Invoke-CSAInternalSetup {
     # that is absent - `continue` below skips one the repo does not carry - which is how
     # csa-skilljar was carried between the day it was listed here and the day its .ps1
     # landed, with no change needed in this file.
+    # What the gate repo ACTUALLY holds. The loop below does `continue` on a script it cannot
+    # fetch - deliberately, so one absent server does not stop the ones after it - which makes
+    # a stale list produce NO OUTPUT AT ALL. The list is copied into six scripts and has
+    # drifted twice (#85, #92); both times somebody noticed a server missing days later,
+    # because the installer had nothing to say at the time. See #95.
+    #
+    # tests/test_internal_setup_lists.py asserts the six copies agree with each other and says
+    # it cannot check them against the gate repo, which is private. Here we can: access is
+    # already proved above, so this closes the half that test named.
+    $gateHas = @(Invoke-NativeOutput {
+        gh api "repos/$CSA_MCP_GATE_REPO/contents/internal-setup" --jq '.[].name'
+    } | Where-Object { $_ -like 'csa-*-setup.ps1' })
+    if ($gateHas.Count -gt 0) {
+        # In the gate repo and not in our list: a server exists and we do not install it.
+        # Unambiguously a bug here, and exactly what #85 and #92 were.
+        foreach ($e in @($gateHas | Where-Object { $CSA_INTERNAL_SETUPS -notcontains $_ })) {
+            Write-Warn "$e is in the gate repo but not in this installer's list - a server nobody is installing (#95)"
+        }
+        # In our list and not in the gate repo: expected during a rollout. csa-skilljar was
+        # carried this way between being listed and its script landing, deliberately. Said
+        # once, quietly, rather than warned about.
+        foreach ($m in @($CSA_INTERNAL_SETUPS | Where-Object { $gateHas -notcontains $_ })) {
+            Write-Info "$m is listed here but not yet in the gate repo; skipping it"
+        }
+    }
     foreach ($name in $CSA_INTERNAL_SETUPS) {
         $encoded = Invoke-NativeOutput { gh api "repos/$CSA_MCP_GATE_REPO/contents/internal-setup/$name" --jq '.content' }
         # `continue`, not `return`: a setup script that is absent - not merged yet, or
