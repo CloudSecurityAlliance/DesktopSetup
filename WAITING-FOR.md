@@ -7,12 +7,12 @@ observable trigger** — without one it is a wish, not a WAITING-FOR.
 |----|-------|--------|------|------|
 | WAITING-FOR-001 | A Windows machine with a real Microsoft Store Python stub | Open | Technology | 2026-10-02 |
 | WAITING-FOR-002 | A macOS session | Open | Person/Response | 2026-10-02 |
-| WAITING-FOR-003 | A decision on pinning the CI runner image | Open | Person/Response | 2026-10-02 |
+| WAITING-FOR-003 | A decision on pinning the CI runner image | **CLOSED 2026-10-02** | Person/Response | 2026-10-02 |
 | WAITING-FOR-004 | An upstream `node@24` release that moves the keg-only link | Open | Technology | 2026-10-02 |
 
-**WAITING-FOR-003 is the one with a deadline.** `ubuntu-latest` begins migrating to Ubuntu 26 on
-**2026-10-19**, and 34 CI jobs across six repositories run on it unpinned. That date arrives
-whether or not anyone decides.
+**WAITING-FOR-001 is the one that blocks a filed issue**; 002 is the whole macOS queue.
+WAITING-FOR-003 closed the day it was opened — see below, and note what it cost to answer: a
+measurement, not a discussion.
 
 ---
 
@@ -55,9 +55,26 @@ confirm are listed in a comment on #119 rather than repeated here.
 **Observable trigger:** a session on the Mac. Not a wish — the work is specified, the issues are
 written, and #119 exists so nothing has to be rediscovered.
 
-## WAITING-FOR-003 — A decision on pinning the CI runner image
+## WAITING-FOR-003 — A decision on pinning the CI runner image — **CLOSED 2026-10-02**
 
-**Blocks:** nothing yet, and that is the hazard.
+**Decided: accept the migration, do not pin.** `ubuntu-latest` is taken as it comes; whatever
+breaks after 2026-10-19 gets fixed then. Reasoning recorded on
+[CINO-PE#178](https://github.com/CloudSecurityAlliance-Internal/CINO-Platform-Engineering/issues/178):
+the exposure is CI rather than production, a breaking job is visible and attributable, and an
+unexpiring pin is the same silent drift that left `actions/checkout` three majors behind until a
+deprecation notice happened to be read. The rollover is staged rather than a cutover, so
+breakage arrives on some runs before all of them.
+
+**What to watch for**, so a red build is diagnosed in a minute: the four MCP servers gate
+coverage at 100% measured on ubuntu, with ~27 `icacls` lines carrying `# pragma: no cover`
+because they cannot execute on Linux. A different interpreter or toolchain can move which lines
+are reachable, and the symptom is `--cov-fail-under=100` failing on a PR that changed nothing
+related. After the 19th, suspect the image before the diff.
+
+Kept rather than deleted, because the useful part is not the answer but what answering cost: the
+34-job measurement is what turned this from a worry into a decision.
+
+**Original entry, for the record.** Blocked: nothing yet, and that was the hazard.
 [CINO-PE#178](https://github.com/CloudSecurityAlliance-Internal/CINO-Platform-Engineering/issues/178)
 holds the measurement: 34 `ubuntu-latest` jobs across six repositories, none pinned, with
 `ubuntu-latest` beginning to mean Ubuntu 26 from **2026-10-19**

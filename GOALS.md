@@ -98,6 +98,14 @@ already achieved, this file has been decaying in the direction that flatters and
 more. The blind spot is structural — inference finds revealed preference, so a goal that was
 intended and never reached looks identical to one that was never wanted.
 
+One claim that *was* checkable and now is: **the four CSA MCP servers this installer provisions
+all pass their own suites on Windows.** Measured 2026-10-02 — 6,265 passed, 81 skipped, **0
+failed** across csa-google-workspace, csa-skilljar, csa-zendesk and csa-google-gmail-calendar.
+That matters here because this repo's job is to leave a machine where those servers work, and
+until that run the Windows side of it was an assumption. Twelve of the 81 skips are
+symlink-escape refusals that cannot execute without Developer Mode
+([CINO-PE#182](https://github.com/CloudSecurityAlliance-Internal/CINO-Platform-Engineering/issues/182)).
+
 Two things this repository's own record cannot tell you, and they are the ones worth asking a
 person about:
 
