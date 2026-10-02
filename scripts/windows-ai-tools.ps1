@@ -20,7 +20,7 @@
 
 $ErrorActionPreference = 'Stop'
 
-$ScriptVersion = "2026.10020600"
+$ScriptVersion = "2026.10020700"
 
 # ── CSA plugin marketplaces ─────────────────────────────────────────
 # Plugin marketplaces to register with Claude Code. Each entry is an
@@ -176,6 +176,14 @@ $CsaLog = $null
 # Set by the last line of the run. Read by Write-CsaLogTail from a finally, which cannot
 # otherwise tell a completed run from an aborted one.
 $script:CsaCompleted = $false
+
+# The to-do ledger lives for one run. Created here, before anything can discover a to-do, and
+# exported so the nested setup scripts - separate processes on POSIX, a child scope here - can
+# append to the same file. Deleted by Show-CsaTodoList after it renders.
+if (-not $env:CSA_TODO_FILE) {
+    $env:CSA_TODO_FILE = Join-Path ([System.IO.Path]::GetTempPath()) ("csa-todo-$PID.tsv")
+    $script:CsaOwnsTodoFile = $true
+}
 if ($CsaDebug) {
     if ($env:CSA_LOG) {
         $CsaLog = $env:CSA_LOG
@@ -1848,6 +1856,7 @@ function Register-CSAMcpServer {
         Write-Success "Registered Claude Code MCP server: $CSA_MCP_NAME"
         Write-Info "Run /mcp inside Claude Code to authenticate with the CSA MCP server."
         Write-Info "  sign in with a free CSA account - https://cloudsecurityalliance.org/ (click 'Sign in or Sign Up')"
+
     } else {
         Write-Warn "Failed to register Claude Code MCP server '$CSA_MCP_NAME':"
         $msg = if ($result.Output) { $result.Output } else { '<no stderr output>' }
@@ -2114,6 +2123,121 @@ function Install-Plugins {
     }
 }
 
+# ── The to-do ledger ────────────────────────────────────────────────
+#
+# What a person must do after an install, collected from every script that discovers one, and
+# rendered ONCE at the very bottom.
+#
+# Measured before this existed, on a fresh Windows run: nine lines of "Next steps" that were
+# not steps, ~140 lines of per-server output printed AFTER them, up to four separate "restart
+# Claude Desktop" instructions, and three different formats for "now go sign in". The one thing
+# a person needs - what do I do now - was the only thing not presented as a list, and it had
+# scrolled off by the time the run ended.
+#
+# WHY A FILE. The nested setup scripts run as separate processes on POSIX (`bash -c "$script"`)
+# and in a child scope on Windows, so a shared variable does not survive the trip. Both
+# platforms have files. The path travels in CSA_TODO_FILE, so a script that finds the variable
+# unset is running standalone and prints its own instruction exactly as it always did - nothing
+# regresses for somebody running one setup script by hand.
+#
+# The format is one record per line, tab-separated, four fields:
+#
+#   <order>\t<title>\t<in-claude>\t<terminal>
+#
+# order     a small integer; the renderer sorts by it, so dependency order is a property of the
+#           record rather than of who happened to write first. 10 restart, 20 sign-in, 30 needs
+#           somebody else.
+# title     the imperative line a person reads.
+# in-claude what to say to Claude, or '-' if there is nothing to say.
+# terminal  the command, or '-' if there is none.
+#
+# Tab-separated and single-line because the writers are bash and PowerShell and the reader is
+# PowerShell; anything richer means a parser in three languages. Deduplicated on the whole
+# record, which is what collapses four "restart Claude Desktop" into one - keyed on the item,
+# not on who emitted it.
+function Add-CsaTodo {
+    param([int]$Order, [string]$Title, [string]$InClaude = '-', [string]$Terminal = '-')
+    if (-not $env:CSA_TODO_FILE) { return $false }   # $false: caller prints its own line
+    $line = ("{0}`t{1}`t{2}`t{3}" -f $Order, $Title, $InClaude, $Terminal)
+    try {
+        # UTF8 without a BOM, and appended: several processes write to this.
+        $sw = New-Object System.IO.StreamWriter($env:CSA_TODO_FILE, $true,
+                                                (New-Object System.Text.UTF8Encoding $false))
+        try { $sw.WriteLine($line) } finally { $sw.Dispose() }
+        return $true
+    } catch {
+        # Never fail the run over the to-do list. A person who cannot be told what to do next is
+        # worse off than one whose installer died, but only slightly - and the install itself
+        # succeeding matters more.
+        Write-CsaLog ("could not append to the todo ledger: {0}" -f $_.Exception.Message) 'warn'
+        return $false
+    }
+}
+
+# Renders the ledger and removes it. Called last, after every nested script has had its say.
+function Show-CsaTodoList {
+    if (-not $env:CSA_TODO_FILE) { return }
+    if (-not (Test-Path $env:CSA_TODO_FILE)) { return }
+
+    $records = @()
+    foreach ($line in (Get-Content $env:CSA_TODO_FILE -ErrorAction SilentlyContinue)) {
+        if (-not $line.Trim()) { continue }
+        $f = $line -split "`t"
+        if ($f.Count -lt 4) { continue }
+        # Seq makes the sort below deterministic without relying on stability - see there.
+        $records += [pscustomobject]@{
+            Order = [int]$f[0]; Title = $f[1]; InClaude = $f[2]; Terminal = $f[3]; Raw = $line
+            Seq = $records.Count
+        }
+    }
+    # Deduplicate WITHOUT sorting, then sort on (Order, Seq).
+    #
+    # Two wrong versions preceded this, both about sorting. `Sort-Object -Property Raw -Unique`
+    # dedups in one step but sorts by the property it dedups on, so within a tier the list came
+    # out alphabetically by record text. Replacing that with a hashtable and `Sort-Object
+    # -Property Order` was still wrong, because **Sort-Object is NOT a stable sort on Windows
+    # PowerShell 5.1** - `-Stable` is a 7-only switch. Measured: three sign-ins written
+    # workspace, gmail, zendesk rendered in reverse, on the runtime that actually ships.
+    #
+    # So stability is constructed rather than assumed: Seq is the read position, and sorting on
+    # (Order, Seq) is deterministic on both runtimes. Write order is worth keeping because it
+    # is the order the person just watched the servers run in.
+    $seen = @{}
+    $records = @($records | Where-Object {
+        if ($seen.ContainsKey($_.Raw)) { return $false }
+        $seen[$_.Raw] = $true
+        return $true
+    } | Sort-Object -Property Order, Seq)
+    Remove-Item $env:CSA_TODO_FILE -Force -ErrorAction SilentlyContinue
+
+    if ($records.Count -eq 0) {
+        Write-Host ""
+        Write-Success "Nothing left to do - everything is installed and signed in."
+        Write-Host ""
+        return
+    }
+
+    Write-Host ""
+    Write-Host ("  What you need to do - {0} thing{1}" -f $records.Count,
+                $(if ($records.Count -eq 1) { '' } else { 's' })) -ForegroundColor Cyan
+    Write-Host "  ---------------------------------------------------------------"
+    $n = 0
+    foreach ($r in $records) {
+        $n++
+        Write-Host ("  {0}. {1}" -f $n, $r.Title)
+        # "In Claude" leads. Three of the four servers ship an `authenticate` tool that delivers
+        # the sign-in link in the conversation, and no setup script mentioned it - we printed the
+        # CLI fallback as the only route, to an audience that is mostly not CLI people. The
+        # command stays second because that path can be refused by the client, so it is a real
+        # fallback rather than dead weight.
+        if ($r.InClaude -ne '-') { Write-Host ("     In Claude, say:    {0}" -f $r.InClaude) -ForegroundColor Green }
+        if ($r.Terminal -ne '-') { Write-Host ("     Or in a terminal:  {0}" -f $r.Terminal) }
+        Write-Host ""
+    }
+    Write-Host "  Re-run this installer any time; it updates everything it installed."
+    Write-Host ""
+}
+
 # ── Summary ─────────────────────────────────────────────────────────
 
 function Show-Summary {
@@ -2174,31 +2298,35 @@ function Show-Summary {
     }
 
     Write-Host ""
-    Write-Info "Next steps:"
+    # The real to-dos go into the ledger, which renders ONE ordered list at the very bottom -
+    # after the nested setup scripts, which used to print ~140 lines between "Next steps" and
+    # the end of the run. Order 40+ so the servers' own items (10 restart, 20 sign-in, 30 needs
+    # somebody else) come first: those are what a person installed this for.
     if (Has-Command gh) {
         if ((Invoke-NativeQuiet { gh auth status }) -ne 0) {
-            Write-Host "  - Run 'gh auth login' to authenticate with GitHub"
+            $null = Add-CsaTodo 40 'Sign in to GitHub' '-' 'gh auth login'
         }
     }
     $summaryGitName  = Invoke-NativeOutput { git config --global user.name }
     $summaryGitEmail = Invoke-NativeOutput { git config --global user.email }
     if (-not $summaryGitName -or -not $summaryGitEmail) {
-        Write-Host "  - Configure Git identity: git config --global user.name `"Your Name`""
-        Write-Host "    and: git config --global user.email `"you@example.com`""
+        $null = Add-CsaTodo 41 'Tell Git who you are' '-' `
+            'git config --global user.name "Your Name"   (then user.email)'
     }
-    Write-Host "  - Enable 1Password CLI integration: 1Password app > Settings > Developer > 'Integrate with 1Password CLI', then restart 1Password"
-    Write-Host "  - Run 'claude' to start Claude Code"
-    Write-Host "  - Run 'codex' to start Codex CLI"
-    Write-Host "  - Run 'gemini' to start Gemini CLI"
+    # Not conditional, because nothing here can detect it: the toggle lives in the 1Password
+    # app's own settings and there is no CLI that reports its state before `op` works.
+    $null = Add-CsaTodo 42 'Turn on the 1Password CLI integration' '-' `
+        '1Password > Settings > Developer > "Integrate with 1Password CLI", then restart it'
+
+    # Reference, not steps. macOS removed the equivalents and recorded why: three lines telling
+    # people to run a command named after the tool are not next steps, and the npm-update
+    # advice competed with the answer that actually matters - re-run this script. That line was
+    # missing here entirely; the ledger prints it now.
     Write-Host ""
-    Write-Host "  To update npm-installed tools later:"
-    Write-Host "    npm update -g @openai/codex @google/gemini-cli"
-    Write-Host ""
-    Write-Host "  To refresh plugin marketplaces:"
-    Write-Host "    claude plugin marketplace update"
+    Write-Info "Reference:"
+    Write-Host "  claude plugin marketplace update   refresh the plugin marketplaces"
     Write-Host "  (auto-update per marketplace is opt-in -- toggle from /plugin in Claude Code)"
-    Write-Host ""
-    Write-Host "  Claude Code updates itself automatically."
+    Write-Host "  Claude Code updates itself; re-run this installer for everything else."
     Write-Host ""
     Write-Info "Learn Claude Code in your terminal:"
     Write-Host "  /powerup  -- interactive lessons with animated demos, one feature at a time"
@@ -2249,10 +2377,16 @@ function Main {
     Install-Plugins
     Register-CSAMcpServer
     Show-Summary
-    # Runs LAST, after the summary, so the internal setup's own output - including
-    # the "you still need to log in" banner - is the final thing on screen rather
-    # than buried under install output the user has stopped reading.
+    # Runs before the to-do list, because this is where the servers discover theirs. Its own
+    # banners still print here - gmail's two-directory explanation is a GRANT NOTICE, the
+    # control that makes a broad default capability set a decision rather than a surprise, so
+    # it stays where it is read. What moved out is the ACTION: the banner explains, the ledger
+    # instructs.
     Invoke-CSAInternalSetup
+    # Dead last. Nothing may print after this, or the list stops being the final thing on
+    # screen - which was the original defect, with ~140 lines of server output between
+    # "Next steps" and the end of the run.
+    Show-CsaTodoList
 }
 
 try {

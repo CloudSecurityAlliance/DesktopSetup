@@ -25,7 +25,7 @@
 
 set -euo pipefail
 
-SCRIPT_VERSION="2026.10011200"
+SCRIPT_VERSION="2026.10020700"
 
 # ── CSA plugin marketplaces ─────────────────────────────────────────
 # Plugin marketplaces to register with Claude Code. Each entry is an
@@ -133,6 +133,14 @@ warn()    { printf "${YELLOW}Warning:${RESET} %s\n" "$*" >&2; }
 error()   { printf "${RED}Error:${RESET} %s\n" "$*" >&2; }
 abort()   { error "$@"; exit 1; }
 SCRIPT_LABEL="macos-ai-tools.sh"
+
+# The to-do ledger lives for one run. Created before anything can discover a to-do, and
+# EXPORTED so the nested setup scripts - separate processes here, `bash -c "$script"` - append
+# to the same file. Removed by csa_show_todo_list after it renders.
+if [[ -z "${CSA_TODO_FILE:-}" ]]; then
+  CSA_TODO_FILE="${TMPDIR:-/tmp}/csa-todo-$$.tsv"
+  export CSA_TODO_FILE
+fi
 CSA_RAW_BASE="https://raw.githubusercontent.com/CloudSecurityAlliance/DesktopSetup/HEAD/scripts"
 
 # ── Debug logging ───────────────────────────────────────────────────
@@ -1702,6 +1710,95 @@ install_plugins() {
 
 # ── Summary ─────────────────────────────────────────────────────────
 
+# ── The to-do ledger ────────────────────────────────────────────────
+#
+# What a person must do after an install, collected from every script that discovers one, and
+# rendered ONCE at the very bottom. The Windows twin carries the measurement that prompted it:
+# nine lines of "Next steps" that were not steps, ~140 lines of per-server output printed
+# after them, and up to four separate "restart Claude Desktop" instructions.
+#
+# One record per line, tab-separated, four fields:
+#
+#   <order>\t<title>\t<in-claude>\t<terminal>
+#
+# order     10 restart, 20 sign in, 30 needs somebody else, 40+ the installer's own. Dependency
+#           order is a property of the record, so a writer does not have to know what else
+#           exists. Restart is first because until it happens nothing below it exists.
+# title     the imperative line a person reads.
+# in-claude what to say to Claude, or '-'.
+# terminal  the command, or '-'.
+#
+# Tab-separated and single-line because the writers are bash AND PowerShell and either may be
+# the reader; anything richer means a parser in two languages that must agree.
+#
+# CSA_TODO_FILE unset means "running standalone" - the caller returns non-zero and prints its
+# own line exactly as it always did, so nothing regresses for somebody running one setup
+# script by hand.
+csa_todo_add() {
+  local order="$1" title="$2" in_claude="${3:--}" terminal="${4:--}"
+  if [[ -z "${CSA_TODO_FILE:-}" ]]; then
+    return 1
+  fi
+  # Never fail the run over the to-do list: an install that worked matters more than the note
+  # about it. `|| true` because this file runs under `set -e`.
+  printf '%s\t%s\t%s\t%s\n' "$order" "$title" "$in_claude" "$terminal" >> "$CSA_TODO_FILE" 2>/dev/null || true
+  return 0
+}
+
+# Renders the ledger and removes it. Called dead last - nothing may print after it, or the list
+# stops being the final thing on screen, which was the original defect.
+csa_show_todo_list() {
+  if [[ -z "${CSA_TODO_FILE:-}" ]] || [[ ! -f "$CSA_TODO_FILE" ]]; then
+    return 0
+  fi
+
+  # Dedup on the whole record keeping the FIRST occurrence - which is what collapses four
+  # "restart Claude Desktop" into one, keyed on the item rather than on who emitted it. Then a
+  # sort on (order, read-position), so the order within a tier is the order the servers ran and
+  # therefore the order the person just watched. `sort -s` is not relied on: the position is an
+  # explicit key, which is also how the PowerShell half does it, because Sort-Object is not a
+  # stable sort on Windows PowerShell 5.1.
+  local rendered
+  rendered="$(awk -F'\t' 'NF >= 4 && !seen[$0]++ { printf "%05d\t%06d\t%s\n", $1, NR, $0 }' \
+              "$CSA_TODO_FILE" | sort -k1,1n -k2,2n | cut -f3-)" || rendered=""
+  rm -f "$CSA_TODO_FILE"
+
+  if [[ -z "$rendered" ]]; then
+    echo ""
+    success "Nothing left to do — everything is installed and signed in."
+    echo ""
+    return 0
+  fi
+
+  local count
+  count="$(printf '%s\n' "$rendered" | grep -c . || true)"
+  local plural="s"
+  if [[ "$count" == "1" ]]; then plural=""; fi
+
+  echo ""
+  printf "${BLUE}  What you need to do — %s thing%s${RESET}\n" "$count" "$plural"
+  echo "  ---------------------------------------------------------------"
+  local n=0
+  while IFS=$'\t' read -r order title in_claude terminal; do
+    if [[ -z "$title" ]]; then continue; fi
+    n=$((n + 1))
+    printf '  %s. %s\n' "$n" "$title"
+    # "In Claude" leads. Three of the four servers ship an `authenticate` tool that delivers
+    # the sign-in link in the conversation, and no setup script mentioned it — the CLI
+    # fallback was printed as the only route, to an audience that is mostly not CLI people.
+    # The command stays second because that path can be refused by the client.
+    if [[ "$in_claude" != "-" ]]; then
+      printf "     In Claude, say:    ${GREEN}%s${RESET}\n" "$in_claude"
+    fi
+    if [[ "$terminal" != "-" ]]; then
+      printf '     Or in a terminal:  %s\n' "$terminal"
+    fi
+    echo ""
+  done <<< "$rendered"
+  echo "  Re-run this installer any time; it updates everything it installed."
+  echo ""
+}
+
 summary() {
   echo ""
   success "Setup complete! Installed versions:"
@@ -1758,18 +1855,19 @@ summary() {
   # people to run a command named after the tool ("Run 'claude' to start Claude Code") are
   # not next steps, and the npm-update advice competed with the answer that actually
   # matters: re-run this script, which updates everything it installed.
+  # The real to-dos go to the ledger, which renders ONE ordered list dead last - after the
+  # nested setup scripts, which print their own output between here and the end of the run.
+  # 40+ so the servers' items (10 restart, 20 sign in, 30 needs somebody else) come first:
+  # those are what a person installed this for. The re-run line is printed by the renderer.
   if has_command gh && ! gh auth status >/dev/null 2>&1; then
-    echo "  - Run 'gh auth login' to authenticate with GitHub"
+    csa_todo_add 40 "Sign in to GitHub" - "gh auth login" || true
   fi
   if [[ -z "$(git config --global user.name 2>/dev/null)" ]] || [[ -z "$(git config --global user.email 2>/dev/null)" ]]; then
-    echo "  - Configure Git identity: git config --global user.name \"Your Name\""
-    echo "    and: git config --global user.email \"you@example.com\""
+    csa_todo_add 41 "Tell Git who you are" - 'git config --global user.name "Your Name"   (then user.email)' || true
   fi
   if needs_1password_integration; then
-    echo "  - Turn on the 1Password CLI integration: 1Password -> Settings -> Developer ->"
-    echo "    \"Integrate with 1Password CLI\", then restart 1Password"
+    csa_todo_add 42 "Turn on the 1Password CLI integration" -       "1Password > Settings > Developer > \"Integrate with 1Password CLI\", then restart it" || true
   fi
-  echo "  - Re-run this script any time to update everything it installed"
   echo ""
   echo "  To refresh plugin marketplaces:"
   echo "    claude plugin marketplace update"
@@ -1838,10 +1936,13 @@ main() {
   install_plugins
   setup_csa_mcp_server
   summary
-  # Runs LAST, after the summary, so the internal setup's own output — including the
-  # "you still need to log in" banner — is the final thing on screen instead of being
-  # buried under a wall of install output the user has stopped reading.
+  # Runs before the to-do list, because this is where the servers discover theirs. Their own
+  # banners still print here - gmail's two-directory explanation is a GRANT NOTICE, so it stays
+  # where it is read. What moved out is the ACTION: the banner explains, the ledger instructs.
   setup_csa_internal_tools
+  # Dead last. Nothing may print after this, or the list stops being the final thing on screen -
+  # which was the original defect.
+  csa_show_todo_list
 }
 
 main "$@"
