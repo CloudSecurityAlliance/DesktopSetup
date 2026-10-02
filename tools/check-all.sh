@@ -13,14 +13,25 @@ cd "$(dirname "$0")/.."
 
 fail=0
 skipped=0
-step() { printf '\n\033[1m==> %s\033[0m\n' "$1"; }
+skipped_names=""
+current_step=""
+# The label is remembered as well as printed, so a skip can say WHICH check it was.
+step() { current_step="$1"; printf '\n\033[1m==> %s\033[0m\n' "$1"; }
 # Exit 77 means "could not run on this platform", not "passed". A check that cannot fail
-# must never be counted as one that passed, so the summary reports skips separately.
+# must never be counted as one that passed, so the summary reports skips separately - and
+# NAMES them, because a bare "1 check(s) SKIPPED" is a number you read past. Knowing a check
+# did not run is only useful if you know WHICH, and the name is free: step() already has it.
+#
+# (This was first written up as the cause of two scripts reaching CI without a version bump.
+# It was not. That run's only skip was "debug mode shows prompts";
+# check-script-versions.py exited 0, about the empty set, because its diff was commit-scoped
+# and the edits were uncommitted - fixed there, not here.)
 check() {
   "$@"; local rc=$?
   case $rc in
     0)  ;;
-    77) skipped=$((skipped + 1)) ;;
+    77) skipped=$((skipped + 1))
+        skipped_names="${skipped_names}${skipped_names:+|}${current_step:-$1}" ;;
     *)  fail=1; printf '\033[31m    FAILED: %s\033[0m\n' "$1" ;;
   esac
   # Return the command's own status. Without this, check() returned printf's 0 on failure, so
@@ -158,7 +169,8 @@ printf '\n'
 if [[ $fail -eq 0 ]]; then
   printf '\033[32mall checks passed\033[0m — note this does NOT prove the .ps1 scripts work on Windows\n'
   if [[ $skipped -gt 0 ]]; then
-    printf '\033[33m%d check(s) SKIPPED on this platform\033[0m - they did not pass, they did not run\n' "$skipped"
+    printf '\033[33m%d check(s) SKIPPED on this platform\033[0m - they did not pass, they did not run:\n' "$skipped"
+    printf '%s\n' "$skipped_names" | tr '|' '\n' | sed 's/^/      - /'
   fi
 else
   printf '\033[31msome checks failed\033[0m\n'

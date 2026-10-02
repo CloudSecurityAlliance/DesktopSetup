@@ -87,6 +87,34 @@ def self_test() -> None:
     # A script with no version at all is a defect regardless of the diff.
     assert problem("a.ps1", ps_old, 'Write-Host "b"\n'), "missed a missing version"
 
+    # SCOPE, asserted against this file's own source. `problem()` is a pure function and every
+    # case above exercises it correctly - which is precisely why none of them noticed that
+    # main() was asking git the wrong question. The diff was merge_base..HEAD, so uncommitted
+    # edits were invisible, and locally that is the normal state: this printed "no scripts
+    # changed", exited 0, and was a true statement about the empty set while two unbumped
+    # scripts went on to fail this same check in CI.
+    #
+    # Re-adding HEAD would restore that silently, because every assertion above would still
+    # pass. A git fixture would be the thorough version of this; this is the cheap one, and it
+    # cannot rot because it reads the code it is about.
+    src = pathlib.Path(__file__).read_text(encoding="utf-8")
+    # The needle includes `_git([` so this line does not match ITSELF. The first version
+    # searched for the bare argument pair, found two lines - the call and this assertion - and
+    # failed with "expected one changed-file diff, found 2". A check whose own text satisfies
+    # its own search is a small, pure instance of the same trap as the rest.
+    # The needle is ASSEMBLED rather than written out, so no single line of this file
+    # contains it whole - including this one. Two earlier versions matched themselves and
+    # failed with "expected one changed-file diff, found 2": the search string sat inside
+    # the line doing the searching. A pure, miniature instance of the same trap.
+    needle = '_git([' + '"diff", "--name-only"'
+    diff_calls = [l for l in src.splitlines() if needle in l]
+    assert len(diff_calls) == 1, f"expected one changed-file diff, found {len(diff_calls)}"
+    assert '"HEAD"' not in diff_calls[0], (
+        "the changed-file diff must NOT name HEAD: with it the comparison is commit-only and "
+        "uncommitted edits - the local case - are invisible. Omitted, it compares against the "
+        "working tree, and in CI the working tree equals HEAD anyway."
+    )
+
 
 def _git(args: list[str]) -> subprocess.CompletedProcess[str]:
     root = pathlib.Path(__file__).resolve().parent.parent
@@ -117,19 +145,30 @@ def main(argv: list[str]) -> int:
         return 77
 
     merge_base = _git(["merge-base", base, "HEAD"]).stdout.strip() or base
-    changed = _git(["diff", "--name-only", merge_base, "HEAD", "--", "scripts/"]).stdout.split()
+    # NO "HEAD" in this diff, deliberately. With it the comparison is merge_base..HEAD, which is
+    # commit-only, and locally the edits are usually not committed yet - on a fresh branch HEAD
+    # IS the merge base. So this printed "no scripts changed against origin/main", exited 0, and
+    # was a true statement about the empty set; two unbumped scripts then failed this same check
+    # in CI. Omitting HEAD compares merge_base to the WORKING TREE, staged and unstaged included,
+    # so a local run sees the change while somebody can still act on it. In CI the working tree
+    # equals HEAD, so nothing there changes - this only adds the case that was missing.
+    changed = _git(["diff", "--name-only", merge_base, "--", "scripts/"]).stdout.split()
     scripts = [p for p in changed if p.endswith((".ps1", ".sh"))]
     if not scripts:
-        print(f"no scripts changed against {base}.")
+        print(f"no scripts changed against {base} (working tree included).")
         return 0
 
+    root = pathlib.Path(__file__).resolve().parent.parent
     problems = []
     for path in sorted(scripts):
-        new = _git(["show", f"HEAD:{path}"])
-        if new.returncode != 0:
+        # From disk, not `git show HEAD:path` - on disk is where an uncommitted version lives,
+        # and it is the one a log from this run would actually print.
+        disk = root / path
+        if not disk.exists():
             continue                       # deleted in this change
+        new_text = disk.read_text(encoding="utf-8", errors="replace")
         old = _git(["show", f"{merge_base}:{path}"])
-        msg = problem(path, old.stdout if old.returncode == 0 else None, new.stdout)
+        msg = problem(path, old.stdout if old.returncode == 0 else None, new_text)
         if msg:
             problems.append(msg)
 
@@ -140,7 +179,8 @@ def main(argv: list[str]) -> int:
               f"release, so the version is the only way to tell what somebody ran.\n"
               f"Set it to the current UTC YYYY.MMDDHHMM.")
         return 1
-    print(f"all {len(scripts)} changed script(s) bumped their version.")
+    print(f"all {len(scripts)} changed script(s) bumped their version: "
+          f"{', '.join(sorted(scripts))}")
     return 0
 
 
