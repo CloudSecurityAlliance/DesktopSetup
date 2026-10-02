@@ -221,6 +221,25 @@ INCOMPATIBLE = [
      "ConvertFrom-Json -AsHashtable is PowerShell 6+. On 5.1: \"a parameter cannot be "
      "found that matches parameter name 'AsHashtable'\", which a surrounding try/catch "
      "will report as an unreadable file. Shell out to python for JSON you must mutate."),
+    # The following four do not merely behave differently on 5.1 - they do not PARSE, so the
+    # whole script dies at load with "Unexpected token". Found the embarrassing way: this
+    # repo's sibling had a ternary in its own test harness, so 41 checks had never run on the
+    # runtime they protect, and CI was green because it used `shell: pwsh`.
+    #
+    # The parser is the real oracle, and CI now runs it on 5.1 in both repos. These patterns
+    # exist so a developer whose only PowerShell is pwsh finds out at their desk, with a
+    # reason, instead of in CI.
+    (re.compile(r"[^\s]\s+\?\s+[^\s?]"),
+     "the ternary `$c ? $a : $b` is PowerShell 7+. On 5.1: \"Unexpected token '?'\" and the "
+     "script does not load at all. Use if/else."),
+    (re.compile(r"\?\?=?[^=]"),
+     "null-coalescing `??` and `??=` are PowerShell 7+. On 5.1 the script does not parse. "
+     "Use an explicit `if ($null -eq $x)`."),
+    (re.compile(r"\$\w+\?\."),
+     "null-conditional `?.` is PowerShell 7+. On 5.1 the script does not parse."),
+    (re.compile(r"(?<![|&])(\|\||&&)(?![|&])"),
+     "the pipeline chain operators `&&` and `||` are PowerShell 7+. On 5.1: \"Unexpected "
+     "token\". Use `if ($LASTEXITCODE -eq 0)` or separate statements."),
 ]
 
 
@@ -284,9 +303,20 @@ $r = Invoke-NativeQuiet {
         -- $McpBin
 } 'claude mcp add'
 npx create-thing
+$ok = ($a -is [array]) ? (1) : (2)
+$name = $env:NAME ?? 'default'
+$len = $obj?.Count
+git pull && git push
 """
-SELF_TEST_EXPECT_UNGUARDED = {8, 9, 10, 18}  # bare, redirected, assigned, after-the-block
-SELF_TEST_EXPECT_INCOMPAT = {13}            # three-argument Join-Path
+# 22 is `git pull && git push`, which trips BOTH checks: the chain operator does not parse
+# on 5.1, and `git` is also an unguarded native call. The self-test caught that omission
+# when the line was added, which is the fixture doing its job.
+SELF_TEST_EXPECT_UNGUARDED = {8, 9, 10, 18, 22}  # bare, redirected, assigned, after-the-block, chained
+# 13 is the three-argument Join-Path; 19-22 are the four constructs that do not PARSE on 5.1
+# at all - ternary, null-coalescing, null-conditional, pipeline chain. Each is in the fixture
+# because each has to be seen to fail: a 7-only construct in a .ps1 is not a behaviour
+# difference, it is a script that will not load on the runtime Windows 11 actually ships.
+SELF_TEST_EXPECT_INCOMPAT = {13, 19, 20, 21, 22}
 
 
 def self_test() -> int:
