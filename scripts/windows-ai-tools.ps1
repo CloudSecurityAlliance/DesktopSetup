@@ -20,7 +20,7 @@
 
 $ErrorActionPreference = 'Stop'
 
-$ScriptVersion = "2026.10020500"
+$ScriptVersion = "2026.10020600"
 
 # ── CSA plugin marketplaces ─────────────────────────────────────────
 # Plugin marketplaces to register with Claude Code. Each entry is an
@@ -244,6 +244,126 @@ function Write-CsaLog {
 # is a discarded diagnosis.
 # Printed at the end of every run, either way. The moment somebody needs the logging
 # incantation is the moment the run went wrong - not later, in a README they are not reading.
+# What this machine IS, written to the debug log at the end of every CSA_DEBUG run.
+#
+# The log recorded 100 commands and no answer to "what is this machine". Every diagnosis in
+# the 2026-09/10 Windows work needed the second: which interpreter a server ended up on,
+# whether a credential had ever arrived, whether the fix had reached the box at all. Those
+# were each reconstructed by hand, from absences.
+#
+# This is also the audit that cannot currently be taken on macOS at all (DesktopSetup#119 §4):
+# where each server keeps its token there is unmeasured, and one `CSA_DEBUG=1` run would
+# answer it on either platform. That is why it is one function with a stated format rather
+# than a few extra log lines - its value is being comparable across machines and across time.
+#
+# THE PRIVACY BOUNDARY IS NOT OPTIONAL. Existence, sizes, timestamps, versions and KEY NAMES
+# only - never a file's contents and never an environment VALUE. claude_desktop_config.json
+# holds inlined secrets today (CSA-Plugins#132), so this lists its server names and nothing
+# else. The log is designed to be emailed.
+function Write-CsaStateSnapshot {
+    if (-not $CsaLog) { return }
+    Write-CsaLog '=== state snapshot: what this machine is ===' 'info'
+
+    # -- the toolchain, versions only -------------------------------------------------------
+    foreach ($t in @(
+        @('git', @('--version')), @('gh', @('--version')), @('python', @('--version')),
+        @('node', @('--version')), @('npm', @('--version')), @('uv', @('--version')),
+        @('claude', @('--version')), @('codex', @('--version')), @('gemini', @('--version'))
+    )) {
+        $v = Get-ToolVersion $t[0] $t[1]
+        Write-CsaLog ("  tool {0,-8} {1}" -f $t[0], $(if ($v) { $v } else { '<absent>' })) 'state'
+    }
+    $pyCmd = Get-Command python -ErrorAction SilentlyContinue
+    Write-CsaLog ("  python path       {0}" -f $(if ($pyCmd) { $pyCmd.Source } else { '<absent>' })) 'state'
+    Write-CsaLog ("  python Store stub {0}" -f (Test-PythonStoreStub)) 'state'
+
+    # -- the MCP fleet: version AND interpreter, which is the pair that has gone wrong -------
+    # A server can be at the right version on the wrong interpreter - that was CSA-Plugins#133,
+    # four servers silently on Python 3.10 while the installer had provisioned 3.14. Neither
+    # number alone would have shown it.
+    $uvRoot = $null
+    if (Has-Command uv) { $uvRoot = (Invoke-NativeOutput { uv tool dir } | Select-Object -First 1) }
+    foreach ($setup in $CSA_INTERNAL_SETUPS) {
+        $name = $setup -replace '-setup\.ps1$', ''
+        $ver = '<not installed>'
+        $py = '-'
+        $locked = '-'
+        if ($uvRoot) {
+            $dir = Join-Path $uvRoot.Trim() $name
+            if (Test-Path (Join-Path $dir 'pyvenv.cfg')) {
+                $m = Select-String -Path (Join-Path $dir 'pyvenv.cfg') -Pattern '^version_info\s*=\s*(.+)$'
+                if ($m) { $py = $m.Matches[0].Groups[1].Value.Trim() }
+                $sp = Join-Path $dir 'Lib\site-packages'
+                $distinfo = Get-ChildItem $sp -Filter "$($name -replace '-','_')-*.dist-info" -Directory -ErrorAction SilentlyContinue |
+                            Select-Object -First 1
+                if ($distinfo) { $ver = ($distinfo.Name -replace '^.*?-', '') -replace '\.dist-info$', '' }
+                elseif (Test-Path $sp) { $ver = '<site-packages present, no dist-info>' }
+                else { $ver = '<HUSK: pyvenv.cfg but no site-packages>' }
+            }
+            # Entry-point lock state, read from uv's own receipt. Cheap, and it is the fact a
+            # failed rebuild turns on.
+            $receipt = Join-Path $dir 'uv-receipt.toml'
+            if (Test-Path $receipt) {
+                $held = @()
+                foreach ($mm in [regex]::Matches((Get-Content $receipt -Raw), 'install-path\s*=\s*"([^"]+)"')) {
+                    $ep = $mm.Groups[1].Value
+                    if (-not (Test-Path $ep)) { $held += ((Split-Path $ep -Leaf) + ':missing'); continue }
+                    try {
+                        $fs = [System.IO.File]::Open($ep, 'Open', 'ReadWrite', 'None'); $fs.Close(); $fs.Dispose()
+                    } catch { $held += ((Split-Path $ep -Leaf) + ':HELD') }
+                }
+                $locked = $(if ($held) { $held -join ',' } else { 'all free' })
+            }
+        }
+        Write-CsaLog ("  server {0,-28} {1,-22} python {2,-8} entrypoints {3}" -f $name, $ver, $py, $locked) 'state'
+    }
+
+    # -- credentials: EXISTENCE and mtime only, never contents ------------------------------
+    # The four servers use four different conventions, which is itself worth recording: three
+    # ~/.csa_* dot-directories and one XDG path, on Windows.
+    $home_ = $env:USERPROFILE
+    foreach ($c in @(
+        @('gmail client',     (Join-Path $home_ '.csa_google_gmail_calendar\client_secret.json')),
+        @('gmail token',      (Join-Path $home_ '.csa_google_gmail_calendar\token.json')),
+        @('workspace client', (Join-Path $home_ '.csa_google_workspace\client_secret.json')),
+        @('workspace token',  (Join-Path $home_ '.csa_google_workspace\token.json')),
+        @('skilljar env',     (Join-Path $home_ '.csa_skilljar\skilljar.env')),
+        @('zendesk tokens',   (Join-Path $home_ '.config\csa-zendesk\tokens.json'))
+    )) {
+        $p = $c[1]
+        if (Test-Path $p) {
+            $i = Get-Item $p
+            Write-CsaLog ("  cred   {0,-18} present  {1,6} bytes  {2}" -f $c[0], $i.Length,
+                          $i.LastWriteTime.ToString('yyyy-MM-dd')) 'state'
+        } else {
+            Write-CsaLog ("  cred   {0,-18} ABSENT" -f $c[0]) 'state'
+        }
+    }
+
+    # -- client registration: names only ----------------------------------------------------
+    if (Has-Command claude) {
+        # Only the csa-* rows are read out. `claude mcp list` health-checks EVERY registered
+        # server, so on a real machine it returned 22 entries including a staff member's
+        # unrelated connectors - slow, noisy, and none of it this fleet's business. The total
+        # is still recorded, because "22 registered, 4 of them ours" is the useful shape.
+        $listing = @(Invoke-NativeOutput { claude mcp list } | Where-Object { $_ -match '^\S' })
+        $ours = @($listing | Where-Object { $_ -match '^csa-' })
+        Write-CsaLog ("  claude mcp list   {0} entries registered, {1} of them csa-*" -f `
+                      $listing.Count, $ours.Count) 'state'
+        foreach ($l in $ours) { Write-CsaLog ("    " + $l) 'state' }
+    }
+    # The Desktop config holds inlined secrets today, so only the SERVER NAMES are read out.
+    $deskCfg = Join-Path $env:APPDATA 'Claude\claude_desktop_config.json'
+    if (Test-Path $deskCfg) {
+        $names = Invoke-NativeOutput {
+            python -c "import json,sys; print(' '.join(sorted(json.load(open(sys.argv[1])).get('mcpServers',{}))))" $deskCfg
+        }
+        Write-CsaLog ("  desktop config    servers: {0}" -f $(if ($names) { ($names -join ' ') } else { '<unreadable>' })) 'state'
+    } else {
+        Write-CsaLog '  desktop config    ABSENT' 'state'
+    }
+}
+
 # When and how the run ended. Its ABSENCE was the defect: #96 diagnosed a crash from a log
 # whose last line was an ordinary successful command, because nothing marked the end. A log
 # that stops is indistinguishable from a log that was cut off.
@@ -2139,6 +2259,7 @@ try {
     Main
     $script:CsaCompleted = $true
 } finally {
+    Write-CsaStateSnapshot
     Write-CsaLogTail
     Show-CsaDebugHint
 }
