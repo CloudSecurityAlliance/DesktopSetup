@@ -185,6 +185,8 @@ jobs:
         run: python3 tests/test_survives_tool_failure.py
       - name: claude.ai connector tool changes only what it says
         run: python3 tests/test_claude_connectors.py
+      - name: The summary names one interpreter and reports its pip (#100)
+        run: python3 tests/test_summary_interpreter.py
 
 
       - name: The checks must not change the working tree (#72)
