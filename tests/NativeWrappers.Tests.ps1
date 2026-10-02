@@ -34,27 +34,67 @@ BeforeAll {
     # be found that accepts argument 'scripts'". Forward slashes are fine on Windows.
     $script:source = "$PSScriptRoot/../scripts/windows-ai-tools.ps1"
     $errors = $null
-    $ast = [System.Management.Automation.Language.Parser]::ParseFile(
+    $script:ast = $ast = [System.Management.Automation.Language.Parser]::ParseFile(
         $script:source, [ref]$null, [ref]$errors)
     if ($errors) { throw "cannot parse $($script:source): $($errors.Count) error(s)" }
 
     # Write-CsaLog / Write-CsaNativeLog are what the wrappers call to record a command in the
-    # CSA_DEBUG log. They have to be loaded too, or every wrapper test fails with
-    # CommandNotFoundException - which is how this list was found to be incomplete.
+    # CSA_DEBUG log, so they have to be loaded too - and so does anything THEY call, which is
+    # what the closure below is for.
     #
-    # $CsaLog is deliberately left unset, so those two return immediately: these tests are
-    # about the wrappers' contract, and asserting it holds with logging OFF is asserting it
-    # for the path every normal run takes.
-    $wanted = 'Invoke-NativeQuiet', 'Invoke-NativeOutput', 'Invoke-NativeShow',
-              'Invoke-NativeCapture', 'Invoke-NativeNpm', 'Write-CsaLog',
-              'Write-CsaNativeLog', 'Expand-CsaCommandText'
+    # $CsaLog is deliberately left unset for most tests, so those two return immediately: the
+    # wrappers' contract is the subject, and asserting it holds with logging OFF asserts it for
+    # the path every normal run takes. Two tests turn logging ON, and those are the only ones
+    # that reach past Write-CsaNativeLog - which is why a missing helper failed exactly two.
+    # ROOTS, not a membership list. What gets loaded is the transitive closure: every
+    # script-defined function reachable from a root by a command call.
+    #
+    # It was a flat list of names twice, and fell behind twice. The comment that used to sit
+    # here said "which is how this list was found to be incomplete" - and then #125 added
+    # Test-CsaLooksBase64, made Write-CsaNativeLog call it, and left the list alone. `main`
+    # went red for six commits (#132). A list of names is a membership rule, and a membership
+    # rule only ever proves what it admits:
+    # CINO-PE insights/a-census-proves-only-what-its-membership-rule-admits.md.
+    #
+    # Deriving it costs nothing here because the AST is already parsed above, and it removes
+    # the whole class: a helper added to any loaded function is picked up with no list to
+    # maintain and nothing to remember.
+    $roots = 'Invoke-NativeQuiet', 'Invoke-NativeOutput', 'Invoke-NativeShow',
+             'Invoke-NativeCapture', 'Invoke-NativeNpm', 'Write-CsaLog',
+             'Write-CsaNativeLog', 'Expand-CsaCommandText'
     $definitions = $ast.FindAll(
         { $args[0] -is [System.Management.Automation.Language.FunctionDefinitionAst] }, $true)
+    $byName = @{}
+    foreach ($definition in $definitions) { $byName[$definition.Name] = $definition }
+
+    # Breadth-first over command names, bounded by the set of functions the script defines -
+    # so a call to a real cmdlet or a native binary is simply not in $byName and is skipped.
+    $needed = [System.Collections.Generic.HashSet[string]]::new(
+        [System.StringComparer]::OrdinalIgnoreCase)
+    $queue = [System.Collections.Queue]::new()
+    foreach ($r in $roots) { if ($byName.ContainsKey($r)) { $null = $queue.Enqueue($r) } }
+    while ($queue.Count -gt 0) {
+        $name = [string]$queue.Dequeue()
+        if (-not $needed.Add($name)) { continue }
+        $calls = $byName[$name].Body.FindAll(
+            { $args[0] -is [System.Management.Automation.Language.CommandAst] }, $true)
+        foreach ($call in $calls) {
+            $called = $call.GetCommandName()
+            if ($called -and $byName.ContainsKey($called) -and -not $needed.Contains($called)) {
+                $null = $queue.Enqueue($called)
+            }
+        }
+    }
+
+    # Definition order, so a function defined before the one that calls it is still loaded
+    # first - PowerShell resolves at call time, so this is belt and braces rather than
+    # required, and it keeps the loaded text in the same order a reader sees it in the script.
     foreach ($definition in $definitions) {
-        if ($wanted -contains $definition.Name) {
+        if ($needed.Contains($definition.Name)) {
             . ([scriptblock]::Create($definition.Extent.Text))
         }
     }
+    $script:loadedFunctions = @($needed)
 }
 
 Describe 'the wrappers are defined in the script under test' {
@@ -64,10 +104,35 @@ Describe 'the wrappers are defined in the script under test' {
         }
     }
 
+    It 'loads every function the loaded ones call' {
+        # Not decoration. When the loader was a flat list of names it fell behind twice, and
+        # the second time `main` was red for six commits (#132) - every failure reading
+        # "CommandNotFoundException" three screens from the cause. This asserts the property
+        # the closure provides, so a regression names itself here rather than in two unrelated
+        # exit-code tests.
+        $missing = @()
+        foreach ($loaded in $script:loadedFunctions) {
+            $def = $script:ast.FindAll({
+                $args[0] -is [System.Management.Automation.Language.FunctionDefinitionAst] -and
+                $args[0].Name -eq $loaded }, $true) | Select-Object -First 1
+            if (-not $def) { continue }
+            $calls = $def.Body.FindAll(
+                { $args[0] -is [System.Management.Automation.Language.CommandAst] }, $true)
+            foreach ($c in $calls) {
+                $n = $c.GetCommandName()
+                if (-not $n) { continue }
+                $isScriptFn = $script:ast.FindAll({
+                    $args[0] -is [System.Management.Automation.Language.FunctionDefinitionAst] -and
+                    $args[0].Name -eq $n }, $true)
+                if ($isScriptFn -and -not (Get-Command $n -ErrorAction SilentlyContinue)) {
+                    $missing += "$loaded calls $n, which is not loaded"
+                }
+            }
+        }
+        $missing -join '; ' | Should -BeExactly ''
+    }
+
     It 'loads the logging helpers the wrappers depend on' {
-        # Not decoration: the wrappers call Write-CsaNativeLog unconditionally, so if this
-        # list ever falls behind again, every other test in this file fails with
-        # CommandNotFoundException and the reason is three screens up. This one names it.
         foreach ($n in 'Write-CsaLog','Write-CsaNativeLog') {
             Get-Command $n -ErrorAction SilentlyContinue | Should -Not -BeNullOrEmpty
         }
