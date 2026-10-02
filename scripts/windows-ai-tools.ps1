@@ -20,7 +20,7 @@
 
 $ErrorActionPreference = 'Stop'
 
-$ScriptVersion = "2026.10021000"
+$ScriptVersion = "2026.10021546"
 
 # ── CSA plugin marketplaces ─────────────────────────────────────────
 # Plugin marketplaces to register with Claude Code. Each entry is an

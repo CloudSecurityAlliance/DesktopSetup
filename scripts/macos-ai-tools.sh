@@ -25,7 +25,7 @@
 
 set -euo pipefail
 
-SCRIPT_VERSION="2026.10021000"
+SCRIPT_VERSION="2026.10021546"
 
 # ── CSA plugin marketplaces ─────────────────────────────────────────
 # Plugin marketplaces to register with Claude Code. Each entry is an
