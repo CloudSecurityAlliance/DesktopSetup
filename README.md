@@ -317,6 +317,27 @@ service. Nothing removes them for you.
 
 ## Repository contents
 
+### Project documents
+
+The CINO standard file set. Written after reading the repository rather than from a template,
+and where something does not apply it says so and says why — per
+[`a-standard-file-filled-from-the-template-is-worse-than-a-missing-one`](https://github.com/CloudSecurityAlliance-Internal/CINO-Platform-Engineering/blob/main/insights/a-standard-file-filled-from-the-template-is-worse-than-a-missing-one.md).
+
+- **[`BUSINESS-CASE.md`](BUSINESS-CASE.md)** — why this exists: to move the question from *can
+  the AI do this* to *should we*
+- **[`GOALS.md`](GOALS.md)** — what success looks like, read off this repository's record with
+  the evidence linked inline
+- **[`RACI.md`](RACI.md)** — who is accountable, and the bus factor of one
+- **[`DECISIONS-ADR.md`](DECISIONS-ADR.md)** — six local technical decisions and what each one
+  rejected
+- **[`FRICTION.md`](FRICTION.md)** — work that is harder than it should be, for a human or an AI
+- **[`WAITING-FOR.md`](WAITING-FOR.md)** — blocked work, each entry with an observable trigger
+- **[`TODO.md`](TODO.md)** — open work, one line per item
+- **[`OPERATIONAL-RESOURCES.md`](OPERATIONAL-RESOURCES.md)** — no running service; the runtime
+  dependencies that exist anyway, two of them CSA's own
+- **[`BACKUP-RESOURCES.md`](BACKUP-RESOURCES.md)** — no state of our own; the backups these
+  scripts write onto *user* machines, and the retention gap
+
 ### `scripts/`
 
 Each script is self-contained and idempotent (safe to re-run):
