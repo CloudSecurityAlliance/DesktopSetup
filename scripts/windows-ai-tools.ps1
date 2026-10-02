@@ -20,7 +20,7 @@
 
 $ErrorActionPreference = 'Stop'
 
-$ScriptVersion = "2026.10021546"
+$ScriptVersion = "2026.10022353"
 
 # ── CSA plugin marketplaces ─────────────────────────────────────────
 # Plugin marketplaces to register with Claude Code. Each entry is an
@@ -955,7 +955,23 @@ function Detect-Migrations {
 # ── Python Store stub detection ────────────────────────────────────
 
 function Test-PythonStoreStub {
-    $pythonCmd = Get-Command python -ErrorAction SilentlyContinue
+    # Judges the candidate it is GIVEN, not always `python`. It used to ask
+    # `Get-Command python` whatever it was called about, while Find-UsablePython loops over
+    # seven names - so the guard refused `python` for living under WindowsApps and then
+    # accepted `python3` from the same directory (#136). Measured: the resolver returned
+    # `...\WindowsApps\python3.exe`, the very shape the guard exists to reject.
+    #
+    # Default 'python' so the state snapshot and the preflight row keep their existing
+    # meaning: "is the bare `python` a Store entry".
+    #
+    # STILL A PATH TEST, and that half of #136 is open. The honest discriminator is executing
+    # the candidate - `Test-PythonMeets` already does, and a dead stub cannot print a version -
+    # but `Invoke-NativeQuiet` has NO TIMEOUT, so a stub that blocks on the Store UI instead of
+    # exiting would hang the installer rather than be rejected. Deleting this needs either a
+    # real stub measured on a clean machine or a bounded probe; the second is actionable
+    # without one.
+    param([string]$Candidate = 'python')
+    $pythonCmd = Get-Command $Candidate -ErrorAction SilentlyContinue
     if (-not $pythonCmd) { return $false }
     return $pythonCmd.Source -like '*WindowsApps*'
 }
@@ -1482,7 +1498,11 @@ function Find-UsablePython {
     foreach ($want in @($CsaPythonPreferred, $CsaPythonMin)) {
         foreach ($cand in @('python', 'python3', 'python3.14', 'python3.13', 'python3.12', 'python3.11', 'python3.10')) {
             if (-not (Has-Command $cand)) { continue }
-            if ($cand -eq 'python' -and (Test-PythonStoreStub)) { continue }
+            # Every candidate, not just `python`. The `-eq 'python'` condition was the
+            # other half of #136: it meant six of the seven names were never judged at all,
+            # including `python3`, which on a real machine sits in the same WindowsApps
+            # directory as the `python` this guard had just refused.
+            if (Test-PythonStoreStub $cand) { continue }
             if (Test-PythonMeets $cand $want) { return (Get-Command $cand).Source }
         }
         if (Has-Command uv) {
