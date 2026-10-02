@@ -122,10 +122,19 @@ def self_test() -> None:
           "`if x=$(...)`, and `|| true`.")
 
 
-def main() -> int:
+def main(argv: list[str] | None = None) -> int:
     self_test()
+    # Paths, so this can police another repo's scripts. Without them it silently scanned its
+    # OWN scripts when handed a directory - printing "no unguarded pipeline assignments" about
+    # files nobody asked about, which reads exactly like a pass. Measured 2026-10-01 while
+    # wiring it up against CSA-Plugins, and it is the same defect this fleet keeps finding: a
+    # check that answers a question you did not ask.
+    roots = [pathlib.Path(a) for a in (argv or [])[1:] if not a.startswith("-")]
+    targets: list[pathlib.Path] = []
+    for root in roots or [SCRIPTS]:
+        targets.extend(sorted(root.glob("*.sh")) if root.is_dir() else [root])
     total = 0
-    for path in sorted(SCRIPTS.glob("*.sh")):
+    for path in targets:
         bad = offenders(path)
         print(f"{path.name}: {len(bad)} unguarded pipeline assignment(s)")
         for lineno, line in bad:
@@ -142,4 +151,4 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    sys.exit(main(sys.argv))
