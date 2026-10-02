@@ -19,6 +19,7 @@ DesktopSetup is the Cloud Security Alliance's machine bootstrap. Scripts manage 
 - `windows-plugins.ps1` — Standalone plugin install/update, Windows counterpart to `macos-plugins.sh`. Runs just the plugin workflow without touching winget apps.
 
 **Cross-platform:**
+- `csa-claude-connectors.py` — Disables selected claude.ai connectors (default: Gmail, Google Calendar, Google Drive) in Claude Code, so the CSA Google MCP servers are used instead. Claude.ai connectors are on in every project unless switched off per project, and the only global switch turns off all of them. Report-only unless `--apply`; backs up and writes atomically; `--repos ~/GitHub` also strips stale allow entries and reports commands that call the connectors (#129)
 - `clone-and-claude.sh` / `clone-and-claude.ps1` — Clone a CSA repo into `~/GitHub/OrgName/RepoName` and print instructions to launch Claude Code
 
 AI skills, MCP server catalogs, and per-project tooling live in separate repositories.
@@ -37,6 +38,7 @@ scripts/
   windows-plugins.ps1       # Standalone plugin install/update (Windows)
   clone-and-claude.sh       # Clone repo & launch Claude (macOS)
   clone-and-claude.ps1      # Clone repo & launch Claude (Windows)
+  csa-claude-connectors.py  # Disable chosen claude.ai connectors in Claude Code everywhere (#129)
   csa-plugins.txt           # Public default plugin list (fetched from HEAD at runtime)
   csa-plugins-internal.txt  # CSA-internal default plugin list (fetched from HEAD at runtime)
 tools/
