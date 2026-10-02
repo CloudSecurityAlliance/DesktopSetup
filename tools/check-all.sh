@@ -115,6 +115,9 @@ check python3 tests/test_claude_connectors.py
 step "the summary names one interpreter and reports its pip"
 check python3 tests/test_summary_interpreter.py
 
+step "the plan must cover what main() runs"
+check python3 tools/check-plan-covers-steps.py
+
 if command -v pwsh >/dev/null; then
   step "powershell parse"
   check pwsh -NoProfile -c '
