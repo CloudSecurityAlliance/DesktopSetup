@@ -22,7 +22,7 @@ jobs:
     name: bash
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955  # v4.3.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
 
       - name: Syntax check every script
         run: |
@@ -43,7 +43,7 @@ jobs:
     name: powershell
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955  # v4.3.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
 
       - name: Parse every script
         shell: pwsh
@@ -124,7 +124,7 @@ jobs:
       # The default shallow clone has no origin/main, and that checker returns 77 (skipped)
       # rather than 0 when it cannot find one — a check that cannot run must not look like a
       # check that passed.
-      - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955  # v4.3.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
           fetch-depth: 0
 
