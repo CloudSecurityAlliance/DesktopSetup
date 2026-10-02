@@ -95,6 +95,9 @@ check python3 tests/test_venv_replacement.py
 step "a failing tool must not kill the installer"
 check python3 tests/test_survives_tool_failure.py
 
+step "claude.ai connector tool changes only what it says"
+check python3 tests/test_claude_connectors.py
+
 if command -v pwsh >/dev/null; then
   step "powershell parse"
   check pwsh -NoProfile -c '

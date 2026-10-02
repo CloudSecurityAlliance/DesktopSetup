@@ -183,6 +183,9 @@ jobs:
 
       - name: A failing tool must not kill the installer (#51)
         run: python3 tests/test_survives_tool_failure.py
+      - name: claude.ai connector tool changes only what it says
+        run: python3 tests/test_claude_connectors.py
+
 
       - name: The checks must not change the working tree (#72)
         # A fresh checkout is clean, so "empty at the end" is the CI form of check-all.sh's
