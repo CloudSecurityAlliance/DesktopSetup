@@ -22,7 +22,7 @@
 
 $ErrorActionPreference = 'Stop'
 
-$ScriptVersion = "2026.10011300"
+$ScriptVersion = "2026.10020500"
 
 # ── App sets ────────────────────────────────────────────────────────
 # ONE list per profile, read by Select-Profile, Show-Preflight, Install-Core/Install-Dev,
@@ -120,6 +120,9 @@ $CsaDebug = Test-CsaDebugRequested
 # was given. The CSA-internal setup is a separate process and reads $env:CSA_DEBUG only.
 if ($CsaDebug) { $env:CSA_DEBUG = '1' }
 $CsaLog = $null
+# Set by the last line of the run. Read by Write-CsaLogTail from a finally, which cannot
+# otherwise tell a completed run from an aborted one.
+$script:CsaCompleted = $false
 if ($CsaDebug) {
     if ($env:CSA_LOG) {
         $CsaLog = $env:CSA_LOG
@@ -160,6 +163,21 @@ function Write-CsaLog {
                 Add-Content $CsaLog -Encoding UTF8
             "PowerShell $($PSVersionTable.PSVersion) $($PSVersionTable.PSEdition) on $env:COMPUTERNAME" |
                 Add-Content $CsaLog -Encoding UTF8
+            # The console codepage, because it has caused two failures in this work that looked
+            # like nothing of the kind. A checker crashed with UnicodeDecodeError reading UTF-8
+            # script text on a cp1252 box - and passed in CI, where the runner is UTF-8. A probe
+            # died printing U+FEFF for the same reason. Neither was guessable from a log that
+            # did not say what the codepage was.
+            #
+            # And whether a prompt was even possible: "the script hung" and "the script asked a
+            # question nobody could answer" are the same lines in a log otherwise.
+            ("codepage {0} / console {1}; stdin-redirected={2}; NONINTERACTIVE={3}; CI={4}" -f `
+                (Get-Culture).Name,
+                [Console]::OutputEncoding.WebName,
+                [Console]::IsInputRedirected,
+                $(if ($env:NONINTERACTIVE) { $env:NONINTERACTIVE } else { '<unset>' }),
+                $(if ($env:CI) { $env:CI } else { '<unset>' })) |
+                Add-Content $CsaLog -Encoding UTF8
             # A bare native call piped to Out-Null. Not through a wrapper: the wrappers call
             # THIS, and the recursion would be unbounded.
             icacls $CsaLog /inheritance:r /grant:r "$($env:USERNAME):(R,W)" | Out-Null
@@ -173,6 +191,19 @@ function Write-CsaLog {
 # is a discarded diagnosis.
 # Printed at the end of every run, either way. The moment somebody needs the logging
 # incantation is the moment the run went wrong - not later, in a README they are not reading.
+# When and how the run ended. Its ABSENCE was the defect: #96 diagnosed a crash from a log
+# whose last line was an ordinary successful command, because nothing marked the end. A log
+# that stops is indistinguishable from a log that was cut off.
+#
+# Called from a finally, so it also appears after an Abort or an unhandled exception - the two
+# cases where a missing terminator is most misleading. Measured on 5.1: `finally` runs on
+# `exit` and the exit code survives.
+function Write-CsaLogTail {
+    if (-not $CsaLog) { return }
+    $how = if ($script:CsaCompleted) { 'completed' } else { 'ENDED EARLY (aborted, or threw)' }
+    Write-CsaLog ("=== end of {0} v{1}: {2} ===" -f $SCRIPT_LABEL, $ScriptVersion, $how) 'info'
+}
+
 function Show-CsaDebugHint {
     if ($CsaLog) {
         Write-Info "debug log: $CsaLog  (redacted, but review before sharing)"
@@ -241,11 +272,62 @@ function Expand-CsaCommandText {
     return $text
 }
 
+# Is this output a base64 blob? Measured on a real 6,567-line debug log: 5,390 of its lines -
+# 82% of the entire file - were the base64 of the four fetched setup scripts, because
+# `gh api --jq '.content'` returns base64 and this function logged every line of it.
+#
+# That is not merely noise. The setup scripts already explain why it is the wrong thing to log,
+# in the comment covering the credential fetch they deliberately exclude: "a redaction rule
+# cannot recognise a base64 blob". No secret is leaking here - the credential fetch is a
+# separate call and is correctly unlogged - but a person asked to review a log before sharing
+# it cannot review 5,390 lines of base64, and the redactor cannot inspect them either.
+#
+# A length and a hash are BETTER evidence than the blob: they prove what was fetched and can be
+# compared against the gate repo, in one line somebody can actually read.
+function Test-CsaLooksBase64 {
+    param([string[]]$Lines)
+    $real = @($Lines | Where-Object { $_.Trim() })
+    if ($real.Count -lt 8) { return $false }
+    $long = @($real | Where-Object { $_.Length -ge 60 -and $_ -match '^[A-Za-z0-9+/=]+$' })
+    return ($long.Count / $real.Count) -ge 0.9
+}
+
 function Write-CsaNativeLog {
     param([scriptblock]$Call, [int]$Code, [string]$Output)
     if (-not $CsaLog) { return }
     Write-CsaLog ("{0} -> exit {1}" -f (Expand-CsaCommandText $Call), $Code) 'run'
-    if ($Output) { foreach ($line in ($Output -split "`r?`n")) { Write-CsaLog $line 'out' } }
+    if (-not $Output) { return }
+    $lines = $Output -split "`r?`n"
+
+    if (Test-CsaLooksBase64 $lines) {
+        $sha = [System.Security.Cryptography.SHA256]::Create()
+        try {
+            $h = [BitConverter]::ToString($sha.ComputeHash(
+                [System.Text.Encoding]::UTF8.GetBytes($Output))).Replace('-', '').Substring(0, 16)
+        } finally { $sha.Dispose() }
+        Write-CsaLog ("<base64 omitted: {0} lines, {1} bytes, sha256 {2}>" -f `
+            $lines.Count, $Output.Length, $h.ToLower()) 'out'
+        return
+    }
+
+    # A long SUCCESSFUL command gets its middle elided; a FAILING one never does. The log
+    # exists for failures, so evidence is only ever dropped where there is nothing to diagnose.
+    # The marker states the count, because output that is quietly incomplete is worse than
+    # output that is long.
+    if ($Code -eq 0 -and $lines.Count -gt 60) {
+        foreach ($line in $lines[0..29]) { Write-CsaLog $line 'out' }
+        # The format string is parenthesised BEFORE -f. Without the inner parens, -f binds
+        # tighter than + and formats only the SECOND fragment - which has no {0} - so the log
+        # read "<{0} lines elided". Identical precedence trap to `-What 'pkg ' + $why` binding
+        # only the literal and silently dropping the reason (CSA-Plugins, measured with an
+        # argument probe). PowerShell accepts a malformed argument list without complaint.
+        Write-CsaLog (("<{0} lines elided; the command succeeded, so they are not diagnostic. " +
+                       "A non-zero exit is never elided.>") -f ($lines.Count - 40)) 'out'
+        foreach ($line in $lines[($lines.Count - 10)..($lines.Count - 1)]) { Write-CsaLog $line 'out' }
+        return
+    }
+
+    foreach ($line in $lines) { Write-CsaLog $line 'out' }
 }
 
 # AFTER the definitions above, not up where $CsaLog is decided. PowerShell does not hoist
@@ -1038,5 +1120,10 @@ function Main {
     Show-Summary
 }
 
-Main
-Show-CsaDebugHint
+try {
+    Main
+    $script:CsaCompleted = $true
+} finally {
+    Write-CsaLogTail
+    Show-CsaDebugHint
+}
