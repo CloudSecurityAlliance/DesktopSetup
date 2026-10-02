@@ -63,6 +63,7 @@ EQUIV = {
     "select_profile": "Select-Profile",
     "preflight": "Show-Preflight",
     "summary": "Show-Summary",
+    "csa_show_todo_list": "Show-CsaTodoList",
     "install_git": "Install-Git",
     "install_gh": "Install-GH",
     "setup_gh_auth": "Setup-GHAuth",
