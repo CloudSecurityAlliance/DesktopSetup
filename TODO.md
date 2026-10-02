@@ -23,6 +23,15 @@ than no citation because it looks right. A function name survives edits; a line 
 
 - [ ] **H1 — `pgrep -x claude` may not detect running Claude Code** (`macos-ai-tools.sh`, `check_running_tools`)
   Needs verification on macOS: if the native installer puts a real binary at `~/.local/bin/claude`, `-x` works fine. If it runs as a Node.js process, the process name would be `node` and the check misses it. If broken, fix is `pgrep -f "\.local/bin/claude"`.
+
+  **Update 2026-10-01 — the Windows twin is fixed (#109), and this is now a narrower, better-specified job.** Identifying by name was wrong for three reasons, all measured on Windows and all applying here:
+  1. **The name is not the identity.** The Windows check looked for `claude`/`codex`/`gemini` and never looked for **Claude Desktop**, which was the parent of all eight CSA MCP server processes. It enumerated the tools that were not holding anything and omitted the one that was.
+  2. **The name is not even stable.** `Get-Process -Id 45752` reported `ProcessName = claude.exe.old.1790878548618.45752` — Claude Code's own updater had renamed its running image — while `Path` stayed correct. A query *by name* also reports back the name asked for, so it cannot reveal that it matched something else.
+  3. **The check must never name its own ancestors.** The one-liner is routinely run *from* one of these clients, so "close Claude Code" is advice that cannot be followed. On Windows this is now structural, via a bounded walk up `ParentProcessId`.
+
+  So the macOS fix is not just `-x` → `-f`; it is: match on the **bundle/binary path** (`/Claude.app/`, `/ChatGPT.app/`, `/.local/bin/claude`), add the two desktop apps, and **exclude `$$` and its ancestors** — `pgrep -f` will otherwise match this very script, and `clone-and-claude.sh` contains "claude" in its own name. Windows also dropped the `Continue anyway?` prompt, because it fired on every run over a risk that is rare and now handled precisely mid-run; the macOS prompt has even less justification, since a running binary *can* be replaced there and the destructive case does not exist at all.
+
+  **Deliberately not shipped blind.** `pgrep` and `ps -o ppid=` are both absent from Git Bash, so none of this is exercisable from the Windows box — and this repo's own position is that a platform you cannot run is a platform whose green result means nothing. Needs someone on a mac.
   To verify: start a `claude` session, then in another terminal run `ps aux | grep claude` and check the process name in column 11 (the COMMAND column). If it shows `node` rather than `claude`, apply the fix.
 
 - [ ] **H2 — Missing `has_command brew` guard in Git plan display** (`macos-work-tools.sh`, `preflight`)
