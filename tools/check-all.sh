@@ -65,6 +65,9 @@ check python3 tools/check-line-endings.py
 step "a changed script must bump its version"
 check python3 tools/check-script-versions.py
 
+step "the internal-setup list agrees across all six scripts"
+check python3 tests/test_internal_setup_lists.py
+
 step "the log records what the user saw, prompts included"
 check python3 tools/check-log-coverage.py
 
