@@ -56,7 +56,8 @@ further along, and it is why this is written down instead of dismissed.
 
 ## What should change
 
-Not fixed here, because it is a behaviour change to a tool somebody else wrote this week
+Filed as [#143](https://github.com/CloudSecurityAlliance/DesktopSetup/issues/143). Not fixed
+here, because it is a behaviour change to a tool merged this week
 ([#130](https://github.com/CloudSecurityAlliance/DesktopSetup/pull/130)) and it deserves its own
 review rather than being folded into a documentation pass. The shape of the fix:
 

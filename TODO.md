@@ -131,7 +131,8 @@ Audit performed 2026-02-24.
 ## Guard layer
 
 - **G1 — Two checkers carry no self-test** (`tools/check-duplication.py`,
-  `tools/check-paste-safety.py`) — OPEN
+  `tools/check-paste-safety.py`) — OPEN,
+  [#144](https://github.com/CloudSecurityAlliance/DesktopSetup/issues/144)
   [ADR-005](DECISIONS-ADR.md) requires a guard to break its own rule on purpose, and nine of
   eleven comply. These two are the oldest and predate the rule rather than being excused from
   it. The reason it matters is on the record twice over: #71 and #72 were both guards that ran,
