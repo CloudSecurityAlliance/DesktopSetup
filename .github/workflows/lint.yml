@@ -187,6 +187,8 @@ jobs:
         run: python3 tests/test_claude_connectors.py
       - name: The summary names one interpreter and reports its pip (#100)
         run: python3 tests/test_summary_interpreter.py
+      - name: The plan must cover what main() runs (#80)
+        run: python3 tools/check-plan-covers-steps.py
 
 
       - name: The checks must not change the working tree (#72)
