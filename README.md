@@ -84,7 +84,7 @@ Run the update script to update everything at once (Homebrew formulas/casks, npm
 bash -c "$(curl -fsSL -H 'Cache-Control: no-cache' https://raw.githubusercontent.com/CloudSecurityAlliance/DesktopSetup/HEAD/scripts/macos-update.sh)"
 ```
 
-**Plugins only** — if you just want to refresh CSA Claude Code plugins (no Homebrew/npm/pip), run the standalone plugins script:
+**CSA layer only** — plugins **and every CSA MCP server**, without Homebrew/npm/pip. This is the fast way to pick up a new or updated MCP server:
 
 ```bash
 bash -c "$(curl -fsSL -H 'Cache-Control: no-cache' https://raw.githubusercontent.com/CloudSecurityAlliance/DesktopSetup/HEAD/scripts/macos-plugins.sh)"
@@ -109,7 +109,7 @@ Run the update script to update everything at once (winget packages, npm globals
 irm https://raw.githubusercontent.com/CloudSecurityAlliance/DesktopSetup/HEAD/scripts/windows-update.ps1 -Headers @{'Cache-Control'='no-cache'} | iex
 ```
 
-**Plugins only** — Windows counterpart of `macos-plugins.sh`, if you just want to refresh CSA Claude Code plugins (no winget/npm/pip):
+**CSA layer only** — Windows counterpart of `macos-plugins.sh`: plugins **and every CSA MCP server**, without winget/npm/pip:
 
 ```powershell
 irm https://raw.githubusercontent.com/CloudSecurityAlliance/DesktopSetup/HEAD/scripts/windows-plugins.ps1 -Headers @{'Cache-Control'='no-cache'} | iex
@@ -323,9 +323,9 @@ Each script is self-contained and idempotent (safe to re-run):
 
 - **`macos-ai-tools.sh`** — AI desktop apps and coding assistants with migration support (macOS)
 - **`macos-update.sh`** — Update all installed tools with version snapshots (macOS)
-- **`macos-plugins.sh`** — Standalone Claude Code plugin install/update (macOS)
+- **`macos-plugins.sh`** — CSA plugins **and MCP servers** install/update (macOS)
 - **`windows-update.ps1`** — Update all installed tools with version snapshots (Windows)
-- **`windows-plugins.ps1`** — Standalone Claude Code plugin install/update (Windows)
+- **`windows-plugins.ps1`** — CSA plugins **and MCP servers** install/update (Windows)
 - **`macos-work-tools.sh`** — Core work apps + optional developer tools (macOS)
 - **`windows-ai-tools.ps1`** — AI desktop apps and coding assistants with migration support (Windows)
 - **`windows-work-tools.ps1`** — Core work apps + optional developer tools (Windows)
