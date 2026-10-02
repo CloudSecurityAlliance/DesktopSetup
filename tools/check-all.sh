@@ -101,6 +101,9 @@ check python3 tests/test_survives_tool_failure.py
 step "claude.ai connector tool changes only what it says"
 check python3 tests/test_claude_connectors.py
 
+step "the summary names one interpreter and reports its pip"
+check python3 tests/test_summary_interpreter.py
+
 if command -v pwsh >/dev/null; then
   step "powershell parse"
   check pwsh -NoProfile -c '

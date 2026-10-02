@@ -2290,9 +2290,27 @@ function Show-Summary {
         $ghVer = Get-ToolVersion gh '--version'
         Write-Host "  GitHub CLI ........ $ghVer"
     }
-    if (Has-Command python) {
-        $pyVer = Get-ToolVersion python '--version'
-        Write-Host "  Python ............ $pyVer"
+    # Resolved, not probed - see the macOS side, where this was visible (#100). A bare `python`
+    # here was wrong twice over: it is the one candidate Find-UsablePython refuses outright when
+    # a Store alias is present, so the summary could name an interpreter the installer had
+    # explicitly declined to use; and there was no pip row at all, leaving "is pip available for
+    # the Python I am actually using" unanswerable on Windows while macOS answered it wrongly.
+    #
+    # Find-UsablePython is what Install-Python itself uses, so the summary reports the
+    # interpreter the run acted on. Re-resolved rather than carried from Install-Python: the
+    # summary describes the machine at the end, after any install and Refresh-Path.
+    $summaryPy = Find-UsablePython
+    if ($summaryPy) {
+        Write-Host "  Python ............ $(Get-ToolVersion $summaryPy '--version') ($summaryPy)"
+        $summaryPip = Get-ToolVersion $summaryPy @('-m', 'pip', '--version')
+        if ($summaryPip) {
+            Write-Host "  pip ............... $summaryPip"
+        } else {
+            # Deliberately NOT falling back to a bare `pip`. A pip belonging to another
+            # interpreter is not a substitute, and an absent pip for the Python in use is
+            # exactly what somebody debugging a package that "did not install" needs to see.
+            Write-Host "  pip ............... not available for $summaryPy"
+        }
     }
     if (Has-Command node) {
         $nodeVer = Get-ToolVersion node '--version'

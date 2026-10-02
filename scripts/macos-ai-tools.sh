@@ -1837,9 +1837,31 @@ summary() {
     echo "  Node.js ........... $(get_version node --version)"
     echo "  npm ............... $(get_version npm --version)"
   fi
-  if has_command python3; then
-    echo "  Python ............ $(get_version python3 --version)"
-    echo "  pip ............... $(get_version pip3 --version)"
+  # Resolved, not probed. `python3` and `pip3` each resolve off PATH independently, so these
+  # two rows could describe different installations - and on a real run they did (#100):
+  # Python 3.13.1 from ~/.default_venv next to pip 26.2.1 from Homebrew's python3.14
+  # site-packages, printed adjacently and read as one interpreter.
+  #
+  # find_usable_python is what install_python itself uses, so the summary now reports the
+  # interpreter the run acted on, and pip through that interpreter rather than beside it.
+  # Re-resolved here rather than carried from install_python: the summary describes the machine
+  # as it is at the end, after any install and PATH change, not what was decided earlier.
+  local summary_py summary_pip
+  if summary_py="$(find_usable_python)"; then
+    echo "  Python ............ $(get_version "$summary_py" --version) ($summary_py)"
+    # `|| summary_pip=""` is load-bearing, not defensive dressing. `set -o pipefail` is on, so
+    # an interpreter with no pip makes this pipeline exit non-zero and `set -e` kills the script
+    # HERE - at the summary, after everything succeeded - and the "not available" branch below
+    # would never run. check-pipeline-assignments.py caught exactly this on the first run.
+    summary_pip="$("$summary_py" -m pip --version 2>/dev/null | head -n1)" || summary_pip=""
+    if [[ -n "$summary_pip" ]]; then
+      echo "  pip ............... $summary_pip"
+    else
+      # Deliberately NOT falling back to `pip3`. A pip belonging to a different interpreter is
+      # not a substitute for the missing one, and an absent pip for the Python in use is
+      # precisely what somebody debugging a package that "did not install" needs to see.
+      echo "  pip ............... not available for $summary_py"
+    fi
   fi
   if has_command pandoc; then
     echo "  pandoc ............ $(get_version pandoc --version)"
