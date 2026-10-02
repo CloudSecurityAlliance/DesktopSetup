@@ -20,7 +20,7 @@
 
 $ErrorActionPreference = 'Stop'
 
-$ScriptVersion = "2026.10011300"
+$ScriptVersion = "2026.10011400"
 
 # ── CSA plugin marketplaces ─────────────────────────────────────────
 # Plugin marketplaces to register with Claude Code. Each entry is an
@@ -604,21 +604,93 @@ function Detect-NonInteractive {
 
 # ── Running process check ──────────────────────────────────────────
 
-function Check-RunningTools {
-    $running = @()
-    if (Get-Process -Name claude -ErrorAction SilentlyContinue) { $running += "Claude Code" }
-    if (Get-Process -Name codex  -ErrorAction SilentlyContinue) { $running += "Codex CLI" }
-    if (Get-Process -Name gemini -ErrorAction SilentlyContinue) { $running += "Gemini CLI" }
-
-    if ($running.Count -gt 0) {
-        Write-Warn "These tools are currently running: $($running -join ', ')"
-        Write-Host "  It's safe to continue, but running sessions will stay on the old version."
-        Write-Host "  For a clean migration, close them first and re-run this script."
-        Write-Host ""
-        if (-not (Confirm-Step "Continue anyway?")) {
-            Abort "Aborted. Close running tools and try again."
-        }
+# This installer's own process and everything that launched it, bounded.
+#
+# Needed because the one-liner is routinely run FROM one of the clients below, via
+# `irm ... | iex`. Telling somebody to close the thing executing the installer is advice that
+# cannot be followed, and it was given twice during the investigation behind #109. Excluding
+# the ancestor chain makes that structurally impossible rather than a thing to remember.
+#
+# Bounded at 12 hops and stopping on a self-parent: a cycle in the reported tree must not hang
+# an install.
+function Get-CsaAncestorPids {
+    $pids = @()
+    $current = $PID
+    for ($i = 0; $i -lt 12 -and $current; $i++) {
+        $pids += $current
+        $ci = Get-CimInstance Win32_Process -Filter "ProcessId=$current" -ErrorAction SilentlyContinue
+        if (-not $ci -or -not $ci.ParentProcessId -or $ci.ParentProcessId -eq $current) { break }
+        $current = $ci.ParentProcessId
     }
+    return @($pids)
+}
+
+# Which AI clients are running, identified by their IMAGE PATH rather than their process name.
+#
+# The name is not the identity. The previous version asked `Get-Process -Name claude` and
+# labelled any hit "Claude Code", while Claude Desktop - whose image lives under
+# WindowsApps\Claude_* - was never looked for at all. Measured 2026-09-30: all eight CSA MCP
+# server processes were children of Claude Desktop, and the Claude Code session running this
+# installer was the parent of nothing. So the check enumerated the three tools that were NOT
+# holding anything and omitted the one that was.
+#
+# It is the same identifier collision as winget's `OpenAI.Codex`, which names both the Codex
+# CLI manifest and ChatGPT Desktop's installed MSIX identity, and once aimed an uninstall at
+# the wrong product (#105). A path answers "which program is this"; a name answers "what did
+# somebody call a file".
+#
+# And the name is not even stable. Measured 2026-10-01 against a live Claude Code process,
+# PID 45752:
+#
+#   Get-Process -Id 45752    -> ProcessName = claude.exe.old.1790878548618.45752
+#   Get-Process -Name claude -> ProcessName = claude                 (the same PID)
+#   either query             -> Path        = C:\Users\kurt\.local\bin\claude.exe
+#
+# Claude Code's own self-updater had RENAMED its running image - Windows refuses to delete a
+# loaded executable but permits renaming it - so the live image name was a timestamped .old.
+# Worse, querying BY NAME reports back the name that was asked for, so a name-based check
+# cannot even reveal that it matched something else. The path was correct throughout.
+#
+# $proc.Path throws for processes owned by another user or protected by the system, so each read
+# is guarded and an unreadable process is simply not claimed.
+function Get-RunningAiClients {
+    $mine = Get-CsaAncestorPids
+    $found = @{}
+    foreach ($proc in (Get-Process -ErrorAction SilentlyContinue)) {
+        if ($mine -contains $proc.Id) { continue }
+        $path = ''
+        try { $path = $proc.Path } catch { }
+        if (-not $path) { continue }
+        if ($path -like '*\WindowsApps\Claude_*')      { $found['Claude Desktop']  = $true }
+        elseif ($path -like '*\.local\bin\claude.exe') { $found['Claude Code']     = $true }
+        elseif ($path -like '*\WindowsApps\*ChatGPT*') { $found['ChatGPT Desktop'] = $true }
+        elseif ($path -like '*\codex.exe')             { $found['Codex CLI']       = $true }
+        elseif ($path -like '*\gemini.exe')            { $found['Gemini CLI']      = $true }
+    }
+    return @($found.Keys | Sort-Object)
+}
+
+# States what is running and asks nothing.
+#
+# There is deliberately NO prompt. The old one fired on every run that found a familiar process
+# name, over a risk that is rare and that this installer now handles precisely at the moment it
+# matters: a server needing a REBUILD refuses before uv touches anything, names the holding
+# process from the process tree, and offers to wait. A gate that fires on safe runs is a gate
+# nobody reads on the run that is not safe - the same reasoning as defect 8 in CSA-Plugins'
+# check-setup-scripts.py, which exists because a run with nothing to do opened with two
+# warnings telling the reader to close clients they had already closed.
+#
+# The old wording was also about the wrong risk. "Running sessions will stay on the old
+# version" is true and harmless; the risk worth naming is that a held .exe cannot be replaced,
+# which is measured in CSA-Plugins#152.
+function Check-RunningTools {
+    $running = Get-RunningAiClients
+    if ($running.Count -eq 0) { return }
+    Write-Info ("Running right now: " + ($running -join ', '))
+    Write-Host "  Nothing is asked of you. Most runs replace no files these hold, and a step"
+    Write-Host "  that does need one closed will stop and name the process at the time."
+    Write-Host "  Sessions already open keep running their current version until restarted."
+    Write-Host ""
 }
 
 # ── Migration detection ────────────────────────────────────────────
