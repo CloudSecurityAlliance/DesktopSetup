@@ -430,7 +430,9 @@ Ten scripts, five macOS/Windows pairs — each self-contained and idempotent.
   fast path
 - **`clone-and-claude.sh`** / **`clone-and-claude.ps1`** — clone a CSA repo and start Claude Code
 - **`csa-claude-connectors.py`** — disable chosen claude.ai connectors so the CSA Google MCP
-  servers are used instead. Report-only unless `--apply`
+  servers are used instead. Report-only unless `--apply`. Each file it changes is copied to
+  `.bak-<stamp>` first, and **those copies hold your Claude credentials** — the three most
+  recent of each are kept, so delete them once you are happy (#143)
 - **`csa-plugins.txt`** / **`csa-plugins-internal.txt`** — the plugin lists, fetched at runtime
 
 ### `tools/` and `tests/`
