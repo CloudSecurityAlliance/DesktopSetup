@@ -20,7 +20,7 @@
 
 $ErrorActionPreference = 'Stop'
 
-$ScriptVersion = "2026.10022353"
+$ScriptVersion = "2026.10030129"
 
 # ── CSA plugin marketplaces ─────────────────────────────────────────
 # Plugin marketplaces to register with Claude Code. Each entry is an
@@ -1467,11 +1467,66 @@ $CsaPythonPreferred = '3.14'
 # defect - `Has-Command python3` with no version check at all. Windows ships no python3 by
 # default so the blast radius is smaller, but an older Python already on the machine was
 # accepted exactly the same way.
+function Invoke-BoundedPython {
+    # Run one python snippet with a hard time limit. Returns its exit code, or $null if it did
+    # not finish in time, could not be started, or threw.
+    #
+    # Needed because the alternative is a path test, and a path cannot tell a working App
+    # Execution Alias from a dead Microsoft Store stub (#136). Executing the candidate can -
+    # a stub cannot print a version - but a stub that opens the Store instead of exiting would
+    # hang `Invoke-NativeQuiet`, which has no timeout, in the one place a person cannot
+    # interrupt it. So the probe is bounded and the decision moves to behaviour.
+    #
+    # Measured on 5.1.26100: meets-floor 0 in 154ms, impossible-floor 1, a 60s sleep capped at
+    # 3s returned $null in 3026ms, a non-existent exe returned $null with nothing thrown.
+    #
+    # Built from ProcessStartInfo rather than Start-Process: `Start-Process -PassThru` hands
+    # back a Process whose WaitForExit(ms) works but whose ExitCode is NOT available, so every
+    # probe came back null. And the code goes in a temp FILE because
+    # ProcessStartInfo.ArgumentList is .NET Core 2.1+ - 5.1 runs .NET Framework, which has only
+    # the single `Arguments` string, and a file path is trivially quotable while a python
+    # snippet full of quotes and parens is not.
+    param([string]$Exe, [string]$Code, [int]$TimeoutSeconds = 10)
+    $script = [System.IO.Path]::GetTempFileName() + '.py'
+    [System.IO.File]::WriteAllText($script, $Code, (New-Object System.Text.UTF8Encoding $false))
+    $psi = New-Object System.Diagnostics.ProcessStartInfo
+    $psi.FileName = $Exe
+    $psi.Arguments = '"' + $script + '"'
+    $psi.UseShellExecute = $false
+    $psi.RedirectStandardOutput = $true
+    $psi.RedirectStandardError = $true
+    $psi.CreateNoWindow = $true
+    $proc = New-Object System.Diagnostics.Process
+    $proc.StartInfo = $psi
+    try {
+        if (-not $proc.Start()) { return $null }
+        # Drained asynchronously: a child that fills the pipe buffer blocks forever, and then
+        # the timeout below never gets a chance to fire.
+        $null = $proc.StandardOutput.ReadToEndAsync()
+        $null = $proc.StandardError.ReadToEndAsync()
+        if (-not $proc.WaitForExit($TimeoutSeconds * 1000)) {
+            try { $proc.Kill() } catch { }
+            return $null
+        }
+        return $proc.ExitCode
+    }
+    catch { return $null }
+    finally {
+        $proc.Dispose()
+        Remove-Item $script -Force -ErrorAction SilentlyContinue
+    }
+}
+
 function Test-PythonMeets {
+    # Behaviour, not a path. A candidate that executes and reports a version at or above the
+    # floor is usable whatever directory it lives in - including a WindowsApps alias, which on
+    # a real machine forwards to a genuine install. One that cannot is not usable, whatever it
+    # is called. Bounded, so a stub that opens the Store instead of exiting is rejected on the
+    # timeout rather than hanging the installer (#136).
     param([string]$Exe, [string]$Want)
     $code = "import sys; sys.exit(0 if sys.version_info >= tuple(map(int, '$Want'.split('.'))) else 1)"
-    $null = Invoke-NativeQuiet { & $Exe -c $code }
-    return ($LASTEXITCODE -eq 0)
+    # $null for "did not finish", which is not 0, so it fails the floor like any other refusal.
+    return ((Invoke-BoundedPython -Exe $Exe -Code $code) -eq 0)
 }
 
 # Kept as a name because asking about the floor specifically is still a real question.
@@ -1498,11 +1553,19 @@ function Find-UsablePython {
     foreach ($want in @($CsaPythonPreferred, $CsaPythonMin)) {
         foreach ($cand in @('python', 'python3', 'python3.14', 'python3.13', 'python3.12', 'python3.11', 'python3.10')) {
             if (-not (Has-Command $cand)) { continue }
-            # Every candidate, not just `python`. The `-eq 'python'` condition was the
-            # other half of #136: it meant six of the seven names were never judged at all,
-            # including `python3`, which on a real machine sits in the same WindowsApps
-            # directory as the `python` this guard had just refused.
-            if (Test-PythonStoreStub $cand) { continue }
+            # NO path test here any more (#136 item 2). It was wrong in both directions:
+            # name-scoped, so six of seven candidates were never judged; and over-broad,
+            # because a WindowsApps path on a real machine is a working Python 3.14.3
+            # forwarding to a genuine install, and a substring cannot tell that from the dead
+            # Store stub it meant to refuse.
+            #
+            # `Test-PythonMeets` below is the honest discriminator - it executes the candidate,
+            # and a stub cannot report a version. That was only safe once the probe was
+            # bounded: see Invoke-BoundedPython.
+            #
+            # Test-PythonStoreStub still exists, for the state snapshot and the preflight row,
+            # where "is the bare `python` a Store entry" is useful to a reader. It just no
+            # longer decides anything.
             if (Test-PythonMeets $cand $want) { return (Get-Command $cand).Source }
         }
         if (Has-Command uv) {
