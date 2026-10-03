@@ -34,12 +34,13 @@ import json
 import os
 import re
 import shutil
+import stat
 import sys
 import tempfile
 import time
 from pathlib import Path
 
-SCRIPT_VERSION = "2026.10012300"
+SCRIPT_VERSION = "2026.10030141"
 
 DEFAULT_CONNECTORS = [
     "claude.ai Gmail",
@@ -68,9 +69,89 @@ def load_json(path):
         return json.load(f)
 
 
+# How many generations of each backup survive a run. Three, not one: the purpose is crash
+# recovery for THIS run, which one copy satisfies, but a bounded little undo depth costs
+# nothing and the file being copied is one people break by hand. One per run forever was the
+# defect (#143); the exact number is a judgement, the bound is not.
+BACKUPS_KEPT = 3
+
+# `<name>.bak-` plus EXACTLY fourteen digits - the %Y%m%d%H%M%S stamp, and nothing else.
+# This narrowness is the whole safety property of the prune below; see prune_backups.
+BACKUP_RE = re.compile(r"\.bak-\d{14}$")
+
+
+def prune_backups(path, keep=BACKUPS_KEPT):
+    """Bound `path`'s backups to the `keep` most recent. Returns the names removed.
+
+    Matches ONLY the name this script generates. The obvious implementation is a `*.bak*`
+    glob and it is the wrong one: on the authoring machine that would also have matched
+    `client_secret.json.20260929-pre-bom-fix.bak`, written by a different tool entirely and
+    holding a real OAuth client secret. A prune may only ever delete what its own naming
+    scheme made, so the pattern demands the literal `.bak-` and exactly fourteen digits.
+
+    Sorted by NAME, descending. The stamp is fixed-width `%Y%m%d%H%M%S`, so a reverse string
+    sort is already newest-first - no `stat()` call, and no dependence on an mtime that a
+    copy, a restore or a backup tool may have rewritten since.
+    """
+    d = os.path.dirname(path) or "."
+    prefix = os.path.basename(path) + ".bak-"
+    try:
+        names = os.listdir(d)
+    except OSError:
+        return []
+    mine = sorted((n for n in names if n.startswith(prefix) and BACKUP_RE.search(n)),
+                  reverse=True)
+    removed = []
+    for name in mine[keep:]:
+        try:
+            os.unlink(os.path.join(d, name))
+            removed.append(name)
+        except OSError:
+            # A copy we cannot delete is not a reason to fail the run that just made one.
+            # Reported by the caller either way, so it does not vanish silently.
+            pass
+    return removed
+
+
+def check_backup_mode(src, dst):
+    """Return a warning if the backup is more permissive than the file it copied, else None.
+
+    `shutil.copy2` preserves the POSIX mode, so this should never fire. That is exactly why
+    it is worth asserting: the file is `~/.claude.json`, whose keys include `oauthAccount`,
+    and "copy2 handles it" is an inherited guarantee rather than a checked one.
+
+    On Windows this returns None and does not pretend otherwise. `copy2` does not copy ACLs
+    at all - the new file inherits the containing directory's, which being the same directory
+    is the right one, but that is a different claim from the one made here - and `os.chmod`
+    honours only the read-only bit (csa-google-workspace#452). A mode comparison on Windows
+    would compare two values that do not govern access.
+    """
+    if os.name == "nt":
+        return None
+    src_mode = stat.S_IMODE(os.stat(src).st_mode)
+    dst_mode = stat.S_IMODE(os.stat(dst).st_mode)
+    extra = dst_mode & ~src_mode
+    if extra:
+        return (f"{os.path.basename(dst)} is mode {oct(dst_mode)} but the file it copied is "
+                f"{oct(src_mode)} - the copy is the more permissive one. It holds the same "
+                f"credentials; tighten or delete it.")
+    return None
+
+
 def write_json(path, data, stamp):
-    """Back up, then replace atomically, so a crash never leaves half a config file."""
-    shutil.copy2(path, f"{path}.bak-{stamp}")
+    """Back up, then replace atomically, so a crash never leaves half a config file.
+
+    The backup is bounded to BACKUPS_KEPT generations and its mode is checked rather than
+    assumed (#143). It used to be one copy per changing run, forever, of a file that holds
+    the signed-in account - so the pile grew without limit and nothing but the suffix was
+    ever said about it.
+    """
+    backup = f"{path}.bak-{stamp}"
+    shutil.copy2(path, backup)
+    problem = check_backup_mode(path, backup)
+    if problem:
+        print(f"  WARNING: {problem}")
+    prune_backups(path)
     fd, tmp = tempfile.mkstemp(dir=os.path.dirname(path), prefix=".csa-connectors-")
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as f:
@@ -224,7 +305,10 @@ def main(argv=None):
                 print(f"    {path.relative_to(root)}: {', '.join(found)}")
 
     if args.apply:
-        print(f"\nDone. Backups end in .bak-{stamp}. Restart Claude Code to pick up the changes.")
+        print(f"\nDone. Backups of each changed file end in .bak-{stamp}. They contain"
+              f" your Claude credentials, including the signed-in account, so delete them"
+              f" once you are happy. The {BACKUPS_KEPT} most recent of each are kept.")
+        print("Restart Claude Code to pick up the changes.")
     print("\nNote: this covers Claude Code only. Disconnecting at claude.ai -> Settings -> "
           "Connectors also removes them from claude.ai web.")
     return 0
