@@ -9,31 +9,34 @@ Skilljar. That is the point — so the question stops being *"can the AI do this
 
 ---
 
-## Which script do I run?
+## Run this
 
-Start here. Most people need the first row once, and the third row from then on.
+**macOS** — paste it into Terminal:
 
-| I want to… | Run | Takes |
-|---|---|---|
-| **Set up a new machine** | `*-ai-tools` | 10–30 min |
-| …and the productivity apps too | `*-work-tools` as well | +10 min |
-| **Pick up a new or updated CSA MCP server, or new plugins** | `*-plugins` | under a minute |
-| **Update everything** — Homebrew/winget, npm, pip, Claude Code, *and* the CSA layer | `*-update` | 5–20 min |
-| **Clone a CSA repo and start working in it** | `clone-and-claude` | seconds |
+```bash
+bash -c "$(curl -fsSL -H 'Cache-Control: no-cache' https://raw.githubusercontent.com/CloudSecurityAlliance/DesktopSetup/HEAD/scripts/macos-ai-tools.sh)"
+```
 
-> **`*-plugins` is named badly, and we know.** It installs and upgrades **every CSA MCP server**
-> as well as plugins — it is the fast path for "there's a new MCP server, get it". The filename
-> stays because it is in one-liners people have already saved; see
-> [ADR-003](DECISIONS-ADR.md).
+**Windows** — PowerShell needs one setting changed first
+([four short steps](#windows), five minutes, one-time). Then, in a **regular** PowerShell
+window:
 
-Everything is **idempotent** — safe to re-run, any number of times. Each script shows you its
-plan and asks before it changes anything.
+```powershell
+irm https://raw.githubusercontent.com/CloudSecurityAlliance/DesktopSetup/HEAD/scripts/windows-ai-tools.ps1 -Headers @{'Cache-Control'='no-cache'} | iex
+```
+
+That is the whole thing. **10–30 minutes**, and it is **safe to re-run any number of times** —
+it shows you its plan and asks before it changes anything. Re-running is also how you pick up a
+new MCP server later, so this one command stays the answer.
+
+If you come back wanting something narrower — just the CSA layer, or the productivity apps —
+see [Other scripts](#other-scripts) at the end. **You do not need it today.**
 
 ---
 
-## Quick start — AI tools
+## What a run gives you
 
-**You get:** Claude Desktop and ChatGPT Desktop; the Claude Code, Codex and Gemini CLIs;
+Claude Desktop and ChatGPT Desktop; the Claude Code, Codex and Gemini CLIs;
 1Password (app + CLI); Git and GitHub CLI with your identity configured from your GitHub
 profile; Node, Python (via uv), `pandoc` and `typst`; a curated set of Claude Code plugins; and
 **four CSA MCP servers** if your GitHub account has CSA-Internal access:
@@ -48,13 +51,10 @@ profile; Node, Python (via uv), `pandoc` and `typst`; a curated set of Claude Co
 The installer also detects tools installed the wrong way — Claude Code via Homebrew or npm, for
 instance — and migrates them to the correct installer, preserving settings.
 
-### macOS
+### macOS — what else it sets up
 
-```bash
-bash -c "$(curl -fsSL -H 'Cache-Control: no-cache' https://raw.githubusercontent.com/CloudSecurityAlliance/DesktopSetup/HEAD/scripts/macos-ai-tools.sh)"
-```
-
-Installs a base layer first if it is missing — Xcode CLI Tools, Homebrew, Node/npm, uv, Python —
+The command is at the top under [Run this](#run-this). Beyond the list above it installs a base
+layer first if it is missing — Xcode CLI Tools, Homebrew, Node/npm, uv, Python —
 plus the document toolchain (`pandoc`, `typst`, and `pyyaml`/`pymupdf` in `~/.default_venv`)
 that the **document-pipeline** plugin needs to render CSA PDFs.
 
@@ -194,6 +194,30 @@ winget upgrade --all; npm update -g; python -m pip install --upgrade pip; claude
 ```
 
 Note that doing it by hand skips the CSA layer entirely — no plugins, no MCP servers.
+
+---
+
+## Other scripts
+
+You almost certainly want [Run this](#run-this) instead — re-running it picks up everything,
+including new MCP servers. This section is for the cases where you want to be narrower, and it
+spells out both platforms' filenames because there is no single name that covers them.
+
+| I want to… | macOS | Windows | Takes |
+|---|---|---|---|
+| **Set up a machine** (what [Run this](#run-this) does) | `macos-ai-tools.sh` | `windows-ai-tools.ps1` | 10–30 min |
+| Add the productivity apps | `macos-work-tools.sh` | `windows-work-tools.ps1` | +10 min |
+| Just the CSA layer — plugins **and MCP servers** | `macos-plugins.sh` | `windows-plugins.ps1` | under a minute |
+| Update everything — Homebrew/winget, npm, pip, Claude Code **and** the CSA layer | `macos-update.sh` | `windows-update.ps1` | 5–20 min |
+| Clone a CSA repo and start working in it | `clone-and-claude.sh` | `clone-and-claude.ps1` | seconds |
+
+Every one is **idempotent** — safe to re-run, any number of times — and every one shows its plan
+and asks before changing anything.
+
+> **The `plugins` scripts are named badly, and we know.** They install and upgrade **every CSA
+> MCP server** as well as plugins, so the name undersells them by half. The filenames stay
+> because they are in one-liners people have already saved — see
+> [ADR-003](DECISIONS-ADR.md).
 
 ---
 
