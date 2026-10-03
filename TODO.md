@@ -137,7 +137,7 @@ Audit performed 2026-02-24.
 ## Guard layer
 
 - **G1 — Two checkers carry no self-test** (`tools/check-duplication.py`,
-  `tools/check-paste-safety.py`) — OPEN,
+  `tools/check-paste-safety.py`) — **DONE 2026-10-02**,
   [#144](https://github.com/CloudSecurityAlliance/DesktopSetup/issues/144)
   [ADR-005](DECISIONS-ADR.md) requires a guard to break its own rule on purpose, and nine of
   eleven comply. These two are the oldest and predate the rule rather than being excused from
@@ -147,3 +147,9 @@ Audit performed 2026-02-24.
   `check-duplication.py` is the higher priority of the two — its first run found twelve
   already-drifted functions, so it is doing real work and nothing proves it still can.
   Found while correcting a claim in `GOALS.md` that said *each* checker self-tests.
+  Closed: four mutations caught in `check-duplication.py` (comments treated as behaviour, the
+  read gaining `errors=`, brace matching lost, a stale `PER_SCRIPT` entry) and three in
+  `check-paste-safety.py` (comments counted as commands, a single command flagged, the fence
+  language ignored). The `errors=` one is the hazard that mattered: it is asserted against the
+  file's own source, because `behaviour()` takes a string and no string-level test can reach
+  the decoding.

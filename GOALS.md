@@ -30,7 +30,7 @@ upcoming.
 | A person can say which version they ran | [#113](https://github.com/CloudSecurityAlliance/DesktopSetup/issues/113) — every script carries a UTC version, it reaches the debug log, and CI refuses a changed script that did not bump it |
 | The debug log describes the machine, not just the commands | [#96](https://github.com/CloudSecurityAlliance/DesktopSetup/issues/96), [#121](https://github.com/CloudSecurityAlliance/DesktopSetup/issues/121) — screen output is logged, a state snapshot is taken, and base64 blobs are replaced by a hash and a size |
 | The plan names every step that will run | [#80](https://github.com/CloudSecurityAlliance/DesktopSetup/issues/80) — `tools/check-plan-covers-steps.py`, across all six entry points |
-| The guards are themselves checked | Eleven checkers in `tools/`, **nine** of which carry a self-test that breaks their own rule on purpose; ten test files in `tests/` (nine Python, one Pester); exit **77** for "could not run here", counted apart from passes. The two without a self-test are the gap, logged in [`TODO.md`](TODO.md) |
+| The guards are themselves checked | Eleven checkers in `tools/`, **all eleven** carrying a self-test that breaks their own rule on purpose; ten test files in `tests/` (nine Python, one Pester); exit **77** for "could not run here", counted apart from passes. Every allowlist in `tools/` now reports its own stale entries |
 
 That last row is the one that compounds. Each checker exists because a specific mistake shipped,
 and the issue number is in the file — so the rules are inherited with the code rather than held
