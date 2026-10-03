@@ -86,11 +86,65 @@ def behaviour(source: str) -> list[str]:
     return out
 
 
+def self_test() -> None:
+    """Every rule broken on purpose. A check that has not been seen to fail proves nothing.
+
+    #144: this checker went without one for its whole life, while holding 65 functions to a
+    byte-identical contract across two platforms. #71 and #72 were both guards that ran,
+    passed, and could not have failed; `check-powershell-native.py` self-tests because two
+    separate bugs each turned it into a check that printed a clean bill of health no matter
+    what.
+    """
+    # 1. Comments and whitespace are noise. That is the feature.
+    a = 'f() {\n  echo hi\n}'
+    b = 'f() {\n  # a comment nobody runs\n  echo    hi\n}'
+    assert behaviour(a) == behaviour(b), "comments or whitespace are being treated as behaviour"
+
+    # 2. A non-ASCII difference is NOT noise, and this is the hazard worth guarding. If the
+    # read ever slips to `errors="replace"`, both of these decode to the same U+FFFD and
+    # compare EQUAL - two functions that differ, reported identical, by the tool whose whole
+    # job is catching silent drift.
+    dot = 'f() {\n  echo "a \u00b7 b"\n}'
+    dash = 'f() {\n  echo "a \u2014 b"\n}'
+    assert behaviour(dot) != behaviour(dash), (
+        "a non-ASCII difference is being collapsed; if this passes, two functions differing "
+        "only in punctuation would compare equal"
+    )
+
+    # 3. The read is where that hazard lives, and no string-level test can reach it - so it is
+    # asserted against this file's own source instead.
+    src = pathlib.Path(__file__).read_text(encoding="utf-8")
+    read_lines = [l for l in src.splitlines() if ".read_text(" in l and "__file__" not in l]
+    assert read_lines, "no read_text call found to check"
+    for line in read_lines:
+        assert 'encoding="utf-8"' in line, f"read without an explicit utf-8 encoding: {line.strip()}"
+        assert "errors=" not in line, (
+            f"errors= on the read would decode cp1252 silently and substitute U+FFFD, making "
+            f"property 2 above unprovable: {line.strip()}"
+        )
+
+    # 4. Brace matching, not "up to the next definition". The naive version swept up whatever
+    # sat between functions and inflated the count from 12 to 38.
+    import tempfile
+    with tempfile.TemporaryDirectory() as d:
+        f = pathlib.Path(d) / "x.sh"
+        f.write_text('a() {\n  :\n}\n\n# a comment between\nCONST=1\n\nb() {\n  :\n}\n',
+                     encoding="utf-8")
+        got = functions(f)
+        assert set(got) == {"a", "b"}, got
+        assert "CONST" not in got["a"], "the body of `a` swept up what follows it"
+        assert "comment between" not in got["a"], "the body of `a` swept up the comment after it"
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__,
                                      formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--diff", action="store_true", help="print the differences too")
     args = parser.parse_args()
+
+    # BEFORE reporting, not after. A clean bill of health from a check that cannot fail is
+    # worse than no check, because it is believed.
+    self_test()
 
     catalogue: dict[tuple[str, str], dict[str, list[str]]] = defaultdict(dict)
     for path in sorted(SCRIPTS.iterdir()):
@@ -115,8 +169,19 @@ def main() -> int:
         problems.append((suffix, name, variants, where))
 
     print(f"{len(shared)} function(s) appear in more than one script")
-    allowed = PER_SCRIPT.keys() & {name for _, name in shared}
+    shared_names = {name for _, name in shared}
+    allowed = PER_SCRIPT.keys() & shared_names
     print(f"  {len(allowed)} allowed to differ (see PER_SCRIPT)")
+
+    # A stale exception is reported, not silently counted. `check-parity.py` already does this
+    # for its own allowlist, for the reason that applies here unchanged: an exception for a
+    # function that no longer appears in more than one script has stopped checking anything,
+    # and it stopped without failing. Until #144 this was the only allowlist in tools/ that
+    # could rot in silence.
+    stale = sorted(PER_SCRIPT.keys() - shared_names)
+    for name in stale:
+        print(f"  STALE: PER_SCRIPT has {name!r}, which is not shared by more than one script "
+              f"any more - remove it")
     print(f"  {checked} must match; {len(problems)} have drifted\n")
 
     for suffix, name, variants, where in problems:

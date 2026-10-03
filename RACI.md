@@ -27,7 +27,7 @@ the obstacles are known:
   needs access to it.
 
 The mitigation in place is that the guards encode the knowledge rather than the author holding
-it: eleven checkers in `tools/` (nine of them self-testing) and ten test files in `tests/`,
+it: eleven checkers in `tools/` (all of them self-testing) and ten test files in `tests/`,
 each one pinning a mistake that was actually made, with the issue number in the file. A second maintainer inherits the rules
 along with the code. That is the deliberate answer to a bus factor of one — not documentation
 anyone has to remember to read, but checks that fail.

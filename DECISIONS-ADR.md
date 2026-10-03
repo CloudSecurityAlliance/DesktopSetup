@@ -158,9 +158,11 @@ ceremony — [#71](https://github.com/CloudSecurityAlliance/DesktopSetup/issues/
 [#72](https://github.com/CloudSecurityAlliance/DesktopSetup/issues/72) are both guards that ran,
 passed, and could not have failed.
 
-**Known exceptions, which are a gap and not an exemption.** `check-duplication.py` and
-`check-paste-safety.py` are the two oldest checkers and carry no self-test. They predate the
-rule rather than being excused from it; logged in [`TODO.md`](TODO.md). Nine of eleven comply.
+**All eleven comply as of 2026-10-02.** `check-duplication.py` and `check-paste-safety.py`
+were the two oldest and predated the rule; closed in
+[#148](https://github.com/CloudSecurityAlliance/DesktopSetup/pull/148), which also made
+`check-duplication.py` report a stale `PER_SCRIPT` entry — until then it was the only allowlist
+in `tools/` that could rot in silence.
 
 **Rejected alternatives.**
 - *An off-the-shelf linter instead.* `shellcheck` and `PSScriptAnalyzer` both run, and neither

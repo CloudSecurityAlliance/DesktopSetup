@@ -39,7 +39,46 @@ def offenders(text: str) -> list[tuple[int, list[str]]]:
     return found
 
 
+def self_test() -> None:
+    """Each rule broken on purpose, because a check nobody has seen fail proves nothing (#144).
+
+    The happy path is obvious. The carve-outs are not, and they are where this rule could
+    quietly stop meaning what it says: a comment is not a command, a blank line is not a
+    command, and only PowerShell blocks are in scope.
+    """
+    one = "```powershell\nirm https://example/x.ps1 | iex\n```"
+    assert offenders(one) == [], "a single command is one paste and must be allowed"
+
+    two = "```powershell\n$env:A = '1'\nirm https://example/x.ps1 | iex\n```"
+    assert offenders(two), "two commands in one block is the thing this check exists to catch"
+
+    commented = "```powershell\n# what this does\nirm https://example/x.ps1 | iex\n```"
+    assert offenders(commented) == [], (
+        "a comment is not a command - one command with an explanation above it is still a "
+        "single paste, and flagging it would push the explanation out of the README"
+    )
+
+    blanks = "```powershell\n\nirm https://example/x.ps1 | iex\n\n```"
+    assert offenders(blanks) == [], "blank lines are not commands"
+
+    bash_block = "```bash\ncd /tmp\nls\n```"
+    assert offenders(bash_block) == [], (
+        "only powershell blocks are in scope: the hazard is the PowerShell console, and the "
+        "documented bash form is `bash -c \"$(curl ...)\"`, deliberately one line"
+    )
+
+    # The line number is what makes a failure actionable, so it is part of the contract.
+    found = offenders("intro\n\n" + two)
+    assert len(found) == 1, found
+    line, cmds = found[0]
+    assert line == 3, f"the reported line should point at the fence, got {line}"
+    assert len(cmds) == 2, cmds
+
+
 def main() -> int:
+    # BEFORE reporting. A clean bill of health from a check that cannot fail is worse
+    # than no check, because it is believed.
+    self_test()
     if not TARGET.is_file():
         print(f"no such file: {TARGET}")
         return 1
