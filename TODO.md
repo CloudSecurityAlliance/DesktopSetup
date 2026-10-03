@@ -10,9 +10,15 @@ than no citation because it looks right. A function name survives edits; a line 
 > **On a Mac?** [#119](https://github.com/CloudSecurityAlliance/DesktopSetup/issues/119) is the
 > single index of everything that needs one — the macOS findings below (C2, H1, H2, H3, H4), the
 > issues that have always needed a Mac (#56, #78, #81, #82, #93), the parity gaps the Windows
-> work *created*, and a section naming what is **not** macOS work so nobody re-derives it. The
-> Windows counterpart is
-> [CSA-Plugins#130](https://github.com/CloudSecurityAlliance-Internal/CSA-Plugins/issues/130).
+> work *created*, and a section naming what is **not** macOS work so nobody re-derives it.
+>
+> **Read its latest comment first (2026-10-02).** Windows is closed out — its handoff,
+> [CSA-Plugins#130](https://github.com/CloudSecurityAlliance-Internal/CSA-Plugins/issues/130),
+> is closed with all criteria met, and all four server suites now pass on Windows. What that
+> leaves for a Mac is **412 lines of POSIX code changed in one day and never run there**: 282 in
+> CSA-Plugins, where `register_other_clients` registers every server with Codex and Gemini and
+> has only ever been `bash -n`'d, and 130 across three `macos-*.sh`, including the #100 summary
+> fix — which was reported *on* macOS and is unverified there.
 
 ---
 
