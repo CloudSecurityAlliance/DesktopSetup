@@ -48,6 +48,22 @@ profile; Node, Python (via uv), `pandoc` and `typst`; a curated set of Claude Co
 | `csa-google-workspace` | read and write Docs, Sheets and Slides, and their comment threads |
 | `csa-skilljar` | manage courses, lessons, quizzes, learners and enrolment |
 
+### Sign in to the two Google servers
+
+Setup installs and registers them, but it deliberately does not sign you in. **Until you do, they
+do not work** — and if you use the command line, this is the step to run. In a terminal, macOS or
+Windows:
+
+```bash
+csa-google-workspace-mcp login      # Drive, Docs, Sheets, Slides
+csa-google-gmail-calendar login     # Gmail, Calendar
+```
+
+Each opens a browser. Read the consent screen rather than clicking through it: the app name should
+be **CSA Google Drive-Docs MCP** or **CSA Google Gmail-Calendar MCP**. If you signed in before
+September 2026, run `csa-google-workspace-mcp login --force` once, because the sign-in moved to a
+new Google Cloud project. Details in [`docs/mcp-servers.md`](docs/mcp-servers.md#signing-in).
+
 The installer also detects tools installed the wrong way — Claude Code via Homebrew or npm, for
 instance — and migrates them to the correct installer, preserving settings.
 
@@ -116,7 +132,8 @@ Three kinds of item show up:
 1. **Restart Claude Desktop.** A newly registered MCP server is invisible to it until then.
 2. **Sign in.** Three of the four servers can do this *in the conversation* — just say
    "sign me in to Gmail" in Claude Code and follow the link. A terminal command is listed as the
-   fallback.
+   fallback; for the two Google servers it is the pair under
+   [Sign in to the two Google servers](#sign-in-to-the-two-google-servers).
 3. **Something only another person can do** — for example, Skilljar needs a credential issued to
    you.
 
