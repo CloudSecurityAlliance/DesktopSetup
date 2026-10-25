@@ -10,7 +10,9 @@ what is still open.
 
 **What is supported.** The current build of each app, from a source that keeps it current. On
 Windows that assumes the **Microsoft Store is present**: ChatGPT comes from it, and there is no
-no-Store fallback. Old builds are not detected or migrated.
+no-Store fallback yet; that is deferred to
+[#164](https://github.com/CloudSecurityAlliance/DesktopSetup/issues/164). Old builds are not
+detected or migrated.
 
 ## The rule
 
@@ -70,7 +72,7 @@ compare against the vendor's feed, not just confirm the app exists.
 - On Windows the Store is OpenAI's documented route. **On 2026-10-23 a community manifest,
   `OpenAI.ChatGPT`, appeared in the regular winget source.** It installs the same Store-signed
   MSIX straight from OpenAI's CDN. **It is not used to install.** The Store is assumed, so there
-  is no no-Store fallback.
+  is no no-Store fallback for now; #164 is where that is picked up.
 - winget **correlates the Store copy with `OpenAI.ChatGPT`** (measured 2026-10-25): `winget
   upgrade` lists ChatGPT under that id, not under `9PLM9XGG6VKS`. So `winget upgrade --all` may
   upgrade it through the community package. That is intended: that run upgrades everything it
