@@ -304,6 +304,19 @@ Describe 'windows-update.ps1' {
             Should -Invoke Confirm-Step -Times 2 -Exactly
         }
 
+        It 'tells Copilot users to close its window, not to look for a tray icon it does not have' {
+            $script:runningFor = 2
+            Wait-ForAppExit 'Copilot Desktop' | Should -BeTrue
+            Should -Invoke Write-Host -ParameterFilter { $Object -like '*Close its window*' }
+            Should -Invoke Write-Host -Times 0 -Exactly -ParameterFilter { $Object -like '*system tray*' }
+        }
+
+        It 'tells everyone else to quit from the tray' {
+            $script:runningFor = 2
+            Wait-ForAppExit 'Claude Desktop' | Should -BeTrue
+            Should -Invoke Write-Host -ParameterFilter { $Object -like '*system tray*' }
+        }
+
         It 'an app quit while the question was on screen counts as quit, even after a no' {
             # 32 checks: the first, then one per poll until the minute is up. The 33rd - the
             # re-check after the answer - finds it gone.
@@ -393,5 +406,36 @@ Describe 'windows-update.ps1' {
             Mock Invoke-NativeQuiet { 1 }
             Add-WingetHold $script:ClaudeDue | Should -Be 'failed'
         }
+    }
+}
+
+Describe 'windows-ai-tools.ps1: installing Copilot Desktop' {
+    BeforeAll {
+        foreach ($text in (Get-FunctionClosure -Path "$PSScriptRoot/../scripts/windows-ai-tools.ps1" -Roots @('Install-CopilotDesktop'))) {
+            . ([scriptblock]::Create($text))
+        }
+    }
+    BeforeEach {
+        Mock Test-CopilotDesktop { $false }
+        Mock Invoke-NativeShow { }
+        Mock Write-Info { }
+        Mock Write-Warn { }
+        $script:savedNonInteractive = $env:NONINTERACTIVE
+    }
+    AfterEach {
+        $env:NONINTERACTIVE = $script:savedNonInteractive
+    }
+
+    # The machine-wide MSI raises a UAC prompt, which nobody answers in a headless run.
+    It 'with nobody at the keyboard, does not start an install that needs administrator permission' {
+        $env:NONINTERACTIVE = '1'
+        Install-CopilotDesktop
+        Should -Invoke Invoke-NativeShow -Times 0 -Exactly
+    }
+
+    It 'installs Microsoft.Copilot when somebody is there' {
+        $env:NONINTERACTIVE = $null
+        Install-CopilotDesktop
+        Should -Invoke Invoke-NativeShow -Times 1 -Exactly -ParameterFilter { $Call.ToString() -match 'Microsoft\.Copilot' }
     }
 }

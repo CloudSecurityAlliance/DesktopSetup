@@ -23,7 +23,7 @@
 
 $ErrorActionPreference = 'Stop'
 
-$ScriptVersion = "2026.10252223"
+$ScriptVersion = "2026.10252328"
 
 # ── CSA plugin marketplaces ─────────────────────────────────────────
 # Plugin marketplaces to register with Claude Code. Each entry is an
@@ -1817,8 +1817,8 @@ function Install-ChatGPT {
 # ── Gemini Desktop and Copilot Desktop ─────────────────────────────
 # Both update themselves - Gemini through the Google update client built into the app, Copilot
 # through Edge Update - so these install once and then stay out of the way. Why each source was
-# chosen, and the look-alikes that were rejected: docs/desktop-ai-apps.md. Nothing below has run
-# on Windows yet; #161 lists what to measure.
+# chosen, and the look-alikes that were rejected: docs/desktop-ai-apps.md. Gemini's install and
+# detection were measured on Windows on 2026-10-25; #161 holds the results and what is open.
 
 # Gemini Desktop's uninstall entry, or $null. Asked of the uninstall registry because both of
 # Google's routes run the same per-user NSIS installer - winget's offline package and the
@@ -1887,6 +1887,13 @@ function Get-CopilotDesktopVersion {
 function Install-CopilotDesktop {
     if (Test-CopilotDesktop) {
         Write-Info "Copilot Desktop already installed; it updates itself"
+        return
+    }
+
+    # The MSI is machine-wide, so Windows raises a UAC prompt. With nobody at the keyboard that
+    # prompt is never answered, so skip - as macos-ai-tools.sh does when `sudo -n` fails.
+    if ($env:NONINTERACTIVE -eq '1') {
+        Write-Warn "Installing Copilot Desktop needs administrator permission, and nobody is here to give it; skipping"
         return
     }
 

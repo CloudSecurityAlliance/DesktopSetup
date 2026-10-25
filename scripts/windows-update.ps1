@@ -17,7 +17,7 @@
 
 $ErrorActionPreference = 'Stop'
 
-$ScriptVersion = "2026.10252223"
+$ScriptVersion = "2026.10252328"
 
 # ── Snapshot location ───────────────────────────────────────
 
@@ -1265,9 +1265,16 @@ function Wait-ForAppExit {
         return $false
     }
 
-    Write-Warn "$Name is running. Quit it fully so it can be updated:"
-    Write-Host "   right-click its icon in the system tray (by the clock) and choose Quit -"
-    Write-Host "   closing its window is not enough, it keeps running there."
+    # Copilot (WindowOnly) has no tray icon, and closing its window is all "open" means for it.
+    $app = @($DesktopApps | Where-Object { $_.Name -eq $Name }) | Select-Object -First 1
+    if ($app -and $app.WindowOnly) {
+        Write-Warn "$Name is open. Close its window so it can be updated -"
+        Write-Host "   it keeps running in the background without one, which is fine."
+    } else {
+        Write-Warn "$Name is running. Quit it fully so it can be updated:"
+        Write-Host "   right-click its icon in the system tray (by the clock) and choose Quit -"
+        Write-Host "   closing its window is not enough, it keeps running there."
+    }
     Write-Host "   Waiting for it to exit..."
     # Logged, because this blocks on a person: "waiting for you" and "hung" must not look the
     # same in a debug log (#96).

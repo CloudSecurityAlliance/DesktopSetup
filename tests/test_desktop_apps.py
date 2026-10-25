@@ -286,7 +286,7 @@ INSTALL_FUNCS = ["app_running", "wait_for_app_exit", "macos_major", "is_apple_si
 def run_install(*, migrate: bool, running: bool = False, receipt: bool = True,
                 noninteractive: bool = False, sudo_n_ok: bool = True, curl_ok: bool = True,
                 sig: str = GOOD_SIG, gatekeeper: str = GOOD_GATEKEEPER,
-                uninstall_ok: bool = True) -> tuple[list[str], bool, str]:
+                uninstall_ok: bool = True, sudo_v_ok: bool = True) -> tuple[list[str], bool, str]:
     """(calls in order, whether the downloaded package was left behind, output)."""
     root = tempfile.mkdtemp(prefix="csa-install-")
     try:
@@ -346,6 +346,7 @@ sudo() {{
     shift
     if [[ "$1" == "true" ]]; then log "sudo-check"; [[ '{int(sudo_n_ok)}' == 1 ]]; return; fi
   fi
+  if [[ "$1" == "-v" ]]; then log "sudo-auth"; [[ '{int(sudo_v_ok)}' == 1 ]]; return; fi
   log "$1"
   return 0
 }}
@@ -463,8 +464,11 @@ def main() -> int:
 
     print("\ninstall_copilot_desktop: nothing is removed before its replacement is verified")
     order, leftover, _ = run_install(migrate=True)
-    check(order == ["curl", "pkgutil-sig", "spctl", "brew-uninstall", "installer"] and not leftover,
-          f"migration: download, verify, THEN remove the cask, then install; package cleaned up ({order})")
+    check(order == ["curl", "pkgutil-sig", "spctl", "sudo-auth", "brew-uninstall", "installer"] and not leftover,
+          f"migration: download, verify, get the password, THEN remove the cask, then install; package cleaned up ({order})")
+    order, leftover, _ = run_install(migrate=True, sudo_v_ok=False)
+    check("brew-uninstall" not in order and "installer" not in order and not leftover,
+          f"a password that is never given removes nothing ({order})")
     order, leftover, _ = run_install(migrate=False)
     check(order == ["curl", "pkgutil-sig", "spctl", "installer"] and not leftover,
           f"fresh install: download, verify, install - no Homebrew uninstall ({order})")

@@ -29,7 +29,7 @@
 
 set -euo pipefail
 
-SCRIPT_VERSION="2026.10251454"
+SCRIPT_VERSION="2026.10252328"
 
 # ── CSA plugin marketplaces ─────────────────────────────────────────
 # Plugin marketplaces to register with Claude Code. Each entry is an
@@ -1576,6 +1576,14 @@ install_copilot_desktop() {
   if [[ $migrating -eq 1 ]]; then
     # Again, because the download took minutes and Copilot may have been reopened meanwhile.
     if ! copilot_ready_to_replace; then
+      rm -f "$pkg"
+      return 0
+    fi
+    # The password is asked for HERE, before the cask is removed: a prompt mistyped three times
+    # after the uninstall would leave no Copilot at all. (Non-interactive runs already passed
+    # `sudo -n` above.)
+    if [[ -z "${NONINTERACTIVE-}" ]] && ! sudo -v; then
+      warn "Could not get administrator rights; leaving the Homebrew Copilot in place"
       rm -f "$pkg"
       return 0
     fi
