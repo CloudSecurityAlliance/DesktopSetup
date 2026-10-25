@@ -18,7 +18,13 @@ than no citation because it looks right. A function name survives edits; a line 
 > leaves for a Mac is **412 lines of POSIX code changed in one day and never run there**: 282 in
 > CSA-Plugins, where `register_other_clients` registers every server with Codex and Gemini and
 > has only ever been `bash -n`'d, and 130 across three `macos-*.sh`, including the #100 summary
-> fix — which was reported *on* macOS and is unverified there.
+> fix — which was reported *on* macOS and is unverified there. Its 2026-10-25 comment adds the
+> five macOS checks the desktop-app work (#162) brings.
+>
+> **On Windows?** [#161](https://github.com/CloudSecurityAlliance/DesktopSetup/issues/161) is the
+> handoff for the desktop-app work (#162): Gemini, Copilot, Claude's MSIX, and the winget hold
+> before replacing a running app. None of it has run on Windows. Start with its section 1, which
+> may already be breaking Claude Desktop installs on fresh machines.
 
 ---
 
@@ -45,6 +51,8 @@ than no citation because it looks right. A function name survives edits; a line 
   So the macOS fix is not just `-x` → `-f`; it is: match on the **bundle/binary path** (`/Claude.app/`, `/ChatGPT.app/`, `/.local/bin/claude`), add the two desktop apps, and **exclude `$$` and its ancestors** — `pgrep -f` will otherwise match this very script, and `clone-and-claude.sh` contains "claude" in its own name. Windows also dropped the `Continue anyway?` prompt, because it fired on every run over a risk that is rare and now handled precisely mid-run; the macOS prompt has even less justification, since a running binary *can* be replaced there and the destructive case does not exist at all.
 
   **Deliberately not shipped blind.** `pgrep` and `ps -o ppid=` are both absent from Git Bash, so none of this is exercisable from the Windows box — and this repo's own position is that a platform you cannot run is a platform whose green result means nothing. Needs someone on a mac.
+
+  **Update 2026-10-25 — half of the matching now exists** (`macos-ai-tools.sh`, `app_running`, from #162). It answers "is this app running?" by bundle path, for this user, counting only the main executable (`Contents/MacOS/`). Agents and helpers are excluded because launchd can keep them alive; that function's comment has the measurements. It is tested by `tests/test_desktop_apps.py`. So the H1 fix can call it once per bundle rather than invent a second matcher. The desktop apps to add are now **four**: Claude, ChatGPT, Gemini (`/Applications/Gemini.app`, checked by bundle id, since MacPaw's cleaner has the same name) and Copilot (`copilot_app_path`). Still H1's own job: the CLIs (`~/.local/bin/claude` and the npm-installed codex and gemini) and excluding `$$` and its ancestors. #119's 2026-10-25 comment lists the matching macOS check.
   To verify: start a `claude` session, then in another terminal run `ps aux | grep claude` and check the process name in column 11 (the COMMAND column). If it shows `node` rather than `claude`, apply the fix.
 
 - [ ] **H2 — Missing `has_command brew` guard in Git plan display** (`macos-work-tools.sh`, `preflight`)

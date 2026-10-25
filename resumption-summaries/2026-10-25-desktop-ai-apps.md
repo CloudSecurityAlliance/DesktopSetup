@@ -79,6 +79,17 @@ Windows wait would only end through its "keep waiting?" prompt.
 **Recommended next action:** a Windows session works through #161. Item 1 (Claude MSIX from a
 non-elevated prompt) first, because it may already affect new machines.
 
+**Where the next session resumes (handoffs, written 2026-10-25):**
+
+- **Windows:** [#161](https://github.com/CloudSecurityAlliance/DesktopSetup/issues/161), retitled
+  as the Windows handoff. Its "Start here" section carries the status, the file map, the
+  argument, the ordered tasks, the weak points, the decisions against, and the conventions.
+- **macOS:** [#119](https://github.com/CloudSecurityAlliance/DesktopSetup/issues/119), the
+  existing Mac handoff, has a 2026-10-25 comment with this work's five Mac-only checks.
+- `TODO.md` points at both. Item H1 now notes that `app_running` covers half of it.
+  `WAITING-FOR.md` gains WAITING-FOR-005, a Windows session. The Windows handoff before this
+  one (CSA-Plugins#130) was closed on 2026-10-02.
+
 **Files / artifacts changed:** `scripts/macos-ai-tools.sh`, `scripts/windows-ai-tools.ps1`,
 `scripts/windows-update.ps1`, `scripts/macos-update.sh`, `tools/check-parity.py`,
 `tools/check-plan-covers-steps.py`, `tools/check-all.sh`, `.github/workflows/lint.yml`,
