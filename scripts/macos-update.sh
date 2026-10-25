@@ -17,7 +17,7 @@
 
 set -euo pipefail
 
-SCRIPT_VERSION="2026.10021627"
+SCRIPT_VERSION="2026.10251430"
 
 # ── CSA plugin marketplaces ─────────────────────────────────────────
 # Each update run will add any entries from this list that aren't yet
@@ -538,6 +538,10 @@ update_brew() {
   info "Updating Homebrew"
   brew update || warn "brew update failed; continuing"
 
+  # Never --greedy. Without it, `brew upgrade` skips casks that update themselves, and the
+  # desktop AI apps all do (claude, chatgpt, google-gemini; Copilot is not a cask at all) - so
+  # this never replaces a running desktop app, and there is nothing to ask anyone to quit.
+  # windows-update.ps1 has to ask, because `winget upgrade --all` makes no such distinction.
   info "Upgrading Homebrew packages"
   brew upgrade || warn "brew upgrade failed; continuing"
 

@@ -9,8 +9,10 @@ observable trigger** — without one it is a wish, not a WAITING-FOR.
 | WAITING-FOR-002 | A macOS session | Open | Person/Response | 2026-10-02 |
 | WAITING-FOR-003 | A decision on pinning the CI runner image | **CLOSED 2026-10-02** | Person/Response | 2026-10-02 |
 | WAITING-FOR-004 | An upstream `node@24` release that moves the keg-only link | Open | Technology | 2026-10-02 |
+| WAITING-FOR-005 | A Windows session for the desktop-app work | Open | Person/Response | 2026-10-25 |
 
-**WAITING-FOR-001 is the one that blocks a filed issue**; 002 is the whole macOS queue.
+**WAITING-FOR-001 is the one that blocks a filed issue**; 002 is the whole macOS queue, and 005
+the Windows one.
 WAITING-FOR-003 closed the day it was opened — see below, and note what it cost to answer: a
 measurement, not a discussion.
 
@@ -105,3 +107,24 @@ installs the keg-only `node@24` formula and force-links it. Whether that link su
 **Observable trigger:** Homebrew ships a new `node@24` patch release, and a `brew upgrade` on a
 machine that has the force-link. Then either `node --version` still reports 24.x and the
 question is closed, or it does not and the relink needs to move into `macos-update.sh`.
+
+## WAITING-FOR-005 — A Windows session for the desktop-app work
+
+**Blocks:** [#161](https://github.com/CloudSecurityAlliance/DesktopSetup/issues/161), the
+handoff. Behind it is the confidence of
+[#162](https://github.com/CloudSecurityAlliance/DesktopSetup/pull/162), whose Windows half was
+written on a Mac.
+
+#162 adds Gemini Desktop and Copilot Desktop to `windows-ai-tools.ps1`, and makes
+`windows-update.ps1` wait for a running desktop app to be quit before `winget upgrade --all`
+replaces it, holding the app back with a temporary `winget pin` when the person will not quit it.
+Its decision logic passes under real Windows PowerShell 5.1 in CI. The facts that logic rests on
+are not measured: install paths, uninstall entries, winget's `list --upgrade-available` and `pin`
+behaviour, and what keeps running after Quit.
+
+One item may matter before #162 does. winget's `Anthropic.Claude` is now a per-user MSIX, which
+Anthropic says will not install without administrator rights, and this installer refuses to run
+as Administrator. That is #161 section 1, and it is first in its order for that reason.
+
+**Observable trigger:** a session on a Windows machine. As with WAITING-FOR-002, the work is
+specified, and #161 orders it.

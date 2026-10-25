@@ -190,6 +190,8 @@ jobs:
         run: python3 tests/test_claude_connectors.py
       - name: The summary names one interpreter and reports its pip (#100)
         run: python3 tests/test_summary_interpreter.py
+      - name: A desktop app is replaced only after it is quit, and never mistaken for a look-alike
+        run: python3 tests/test_desktop_apps.py
       - name: The plan must cover what main() runs (#80)
         run: python3 tools/check-plan-covers-steps.py
 

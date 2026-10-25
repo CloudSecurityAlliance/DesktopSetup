@@ -77,6 +77,8 @@ EQUIV = {
     "install_1password_cli": "Install-1PasswordCLI",
     "install_claude_desktop": "Install-ClaudeDesktop",
     "install_chatgpt": "Install-ChatGPT",
+    "install_gemini_desktop": "Install-GeminiDesktop",
+    "install_copilot_desktop": "Install-CopilotDesktop",
     "install_claude": "Install-Claude",
     "install_codex": "Install-Codex",
     "install_gemini": "Install-Gemini",
