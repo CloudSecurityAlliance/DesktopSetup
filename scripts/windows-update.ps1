@@ -17,7 +17,7 @@
 
 $ErrorActionPreference = 'Stop'
 
-$ScriptVersion = "2026.10251454"
+$ScriptVersion = "2026.10252215"
 
 # ── Snapshot location ───────────────────────────────────────
 
@@ -1075,22 +1075,41 @@ function Save-Snapshot {
 #
 # Identified by image PATH, for the reason Get-RunningAiClients in windows-ai-tools.ps1 gives, and
 # only in this user's session: Claude's Cowork service and Copilot's proxy run in session 0 as
-# services, never exit when the app is quit, and would make a wait endless. None of these paths
-# has been measured on Windows yet - #161.
+# services, never exit when the app is quit, and would make a wait endless. Measured 2026-10-25
+# (#161): ChatGPT ran from WindowsApps\OpenAI.Codex_*\app\ChatGPT.exe, Gemini 1.16.0 from
+# <InstallLocation>\app-1.16.0\Gemini.exe, Copilot from Application\copilotapp.exe and
+# Application\undocked_copilot\. Claude's MSIX path and the old build's are still unmeasured.
 #
 # Gemini installs per user wherever its installer chose, so its folder is read from its
 # uninstall entry (Get-DesktopAppPatterns). Its `Paths` here are only the FALLBACK when that
 # entry names no folder: a match on the file name alone. That is the one name match in this
 # table, kept deliberately, because a false match costs a needless prompt while no match at all
 # would let winget replace a Gemini that is open.
+#
+# `Ids` is every package winget may correlate the installed app with, because winget upgrades it
+# through whichever one it picked, not the one it was installed from. Measured 2026-10-25,
+# winget 1.29.380: the Store ChatGPT was listed and upgraded as the community `OpenAI.ChatGPT`,
+# and a pin on `9PLM9XGG6VKS --source msstore` did not stop that upgrade, while a pin on
+# `OpenAI.ChatGPT` did. Copilot from Edge Update was listed as `Microsoft.365Copilot`, never as
+# `Microsoft.Copilot`. Asking about only one id would let `upgrade --all` replace an open app.
+#
+# `WindowOnly`: Copilot pre-launches at sign-in with --no-startup-window and stays resident, with
+# no tray icon to quit it from. Measured 2026-10-25: ten copilotapp processes with no window
+# before it was opened, a window once opened, and all ten still resident with no window after its
+# X. So "open" is "has a window" - otherwise the wait asks for a quit nobody can do. Its update
+# is Chromium-style (one folder per version beside the running one), built to land while it runs.
 $DesktopApps = @(
-    @{ Name = 'Claude Desktop';  Id = 'Anthropic.Claude';     Source = '';
+    @{ Name = 'Claude Desktop';
+       Ids = @(@{ Id = 'Anthropic.Claude'; Source = '' });
        Paths = @('*\WindowsApps\Claude_*', '*\AnthropicClaude\*') },
-    @{ Name = 'ChatGPT Desktop'; Id = '9PLM9XGG6VKS';         Source = 'msstore';
+    @{ Name = 'ChatGPT Desktop';
+       Ids = @(@{ Id = 'OpenAI.ChatGPT'; Source = '' }, @{ Id = '9PLM9XGG6VKS'; Source = 'msstore' });
        Paths = @('*\WindowsApps\OpenAI.Codex_*') },
-    @{ Name = 'Gemini Desktop';  Id = 'Google.GeminiDesktop'; Source = '';
+    @{ Name = 'Gemini Desktop';
+       Ids = @(@{ Id = 'Google.GeminiDesktop'; Source = '' });
        Paths = @('*\Gemini.exe') },
-    @{ Name = 'Copilot Desktop'; Id = 'Microsoft.Copilot';    Source = '';
+    @{ Name = 'Copilot Desktop'; WindowOnly = $true;
+       Ids = @(@{ Id = 'Microsoft.Copilot'; Source = '' }, @{ Id = 'Microsoft.365Copilot'; Source = '' });
        Paths = @('*\Microsoft\Copilot\Application\*') }
 )
 $script:desktopAppsToClose = @()
@@ -1119,7 +1138,7 @@ function Get-GeminiDesktopEntry {
 # (an "exe,index" string). Escaped, because a folder name can hold wildcard characters.
 function Get-DesktopAppPatterns {
     param($App)
-    if ($App.Id -ne 'Google.GeminiDesktop') { return @($App.Paths) }
+    if ($App.Name -ne 'Gemini Desktop') { return @($App.Paths) }
     $entry = Get-GeminiDesktopEntry
     $dir = $null
     if ($entry -and $entry.InstallLocation) {
@@ -1148,6 +1167,9 @@ function Get-RunningDesktopApps {
         try { $path = $proc.Path } catch { }
         if (-not $path) { continue }
         foreach ($app in $DesktopApps) {
+            # [long], because the handle is an IntPtr: a struct, so even IntPtr.Zero is truthy
+            # and `-not $proc.MainWindowHandle` would never skip anything.
+            if ($app.WindowOnly -and [long]$proc.MainWindowHandle -eq 0) { continue }
             foreach ($pattern in $patterns[$app.Name]) {
                 if ($path -like $pattern) { $running[$app.Name] = $true }
             }
@@ -1159,7 +1181,11 @@ function Get-RunningDesktopApps {
 # A winget pin keeps one package out of `winget upgrade --all`. Used to leave a running app
 # alone when the person declines to quit it - or nobody is there to - rather than let winget
 # replace it anyway. Returns 'added' (ours, to remove afterwards), 'existing' (the person's own
-# pin, never touched) or 'failed'. Unmeasured on Windows: #161.
+# pin, never touched) or 'failed'.
+#
+# Measured 2026-10-25, winget 1.29.380, non-elevated 5.1: `pin add` and `pin remove` exit 0, and
+# a pinned package drops out of `winget upgrade`. `pin list --id X --exact` IGNORES its filter and
+# prints every pin, which is why its output is searched for the id rather than trusted as is.
 function Add-WingetHold {
     param($App)
     if ($App.Source) {
@@ -1205,11 +1231,18 @@ function Test-WingetUpgradePending {
 }
 
 # Running AND about to be replaced. Asked of winget only for the apps that are running, so a run
-# with every app closed costs no extra winget calls.
+# with every app closed costs no extra winget calls. Each result names the ONE package winget will
+# upgrade it through (Name, Id, Source), because that is the id a hold has to pin. winget
+# correlates an app with one package, so the first pending id is the one.
 function Get-DesktopAppsAwaitingClose {
     $due = @()
     foreach ($app in @(Get-RunningDesktopApps)) {
-        if (Test-WingetUpgradePending $app.Id $app.Source) { $due += $app }
+        foreach ($pkg in $app.Ids) {
+            if (Test-WingetUpgradePending $pkg.Id $pkg.Source) {
+                $due += @{ Name = $app.Name; Id = $pkg.Id; Source = $pkg.Source }
+                break
+            }
+        }
     }
     return $due
 }

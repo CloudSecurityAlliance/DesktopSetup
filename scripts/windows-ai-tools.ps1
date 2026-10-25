@@ -23,7 +23,7 @@
 
 $ErrorActionPreference = 'Stop'
 
-$ScriptVersion = "2026.10251454"
+$ScriptVersion = "2026.10252215"
 
 # ── CSA plugin marketplaces ─────────────────────────────────────────
 # Plugin marketplaces to register with Claude Code. Each entry is an
@@ -878,7 +878,10 @@ function Get-RunningAiClients {
         elseif ($path -like '*\.local\bin\claude.exe') { $found['Claude Code']     = $true }
         elseif ($path -like '*\WindowsApps\*ChatGPT*') { $found['ChatGPT Desktop'] = $true }
         elseif ($path -like '*\codex.exe')             { $found['Codex CLI']       = $true }
-        elseif ($path -like '*\gemini.exe')            { $found['Gemini CLI']      = $true }
+        # No rule for the Gemini CLI: it is an npm package and runs as node.exe, so no image path
+        # names it. The `*\gemini.exe` rule that stood here matched only Gemini DESKTOP - measured
+        # 2026-10-25, <InstallLocation>\app-1.16.0\Gemini.exe, reported as "Gemini CLI" (#161) -
+        # which holds no CSA server open, so naming it here would be a false lead.
     }
     return @($found.Keys | Sort-Object)
 }

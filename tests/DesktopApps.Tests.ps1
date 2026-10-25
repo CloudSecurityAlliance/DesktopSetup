@@ -9,7 +9,8 @@
 # interactive wait can always be left, that an app still running is HELD BACK from the upgrade
 # rather than replaced anyway, and that the hold is removed afterwards. It does NOT prove the
 # path patterns match what these apps really run from on Windows, or that winget's `list` and
-# `pin` answer the way they are used here. Nothing has measured those yet: #161.
+# `pin` answer the way they are used here. Those were measured on 2026-10-25 for ChatGPT, Gemini
+# and Copilot, recorded beside $DesktopApps; what is still unmeasured is listed in #161.
 #
 # The same discipline as NativeWrappers.Tests.ps1: functions are loaded out of the shipping
 # scripts through PowerShell's own parser, never copied, so the tests cannot drift from them.
@@ -54,9 +55,12 @@ BeforeAll {
     }
 
     function script:New-FakeProcess {
-        param([string]$Path, [int]$SessionId = 1, [switch]$PathThrows)
+        param([string]$Path, [int]$SessionId = 1, [switch]$PathThrows, [switch]$Windowed)
         $p = New-Object PSObject
         Add-Member -InputObject $p -MemberType NoteProperty -Name SessionId -Value $SessionId
+        # A real handle is an IntPtr; zero, as for a process with no window, is what most are.
+        $handle = if ($Windowed) { [IntPtr]4242 } else { [IntPtr]::Zero }
+        Add-Member -InputObject $p -MemberType NoteProperty -Name MainWindowHandle -Value $handle
         if ($PathThrows) {
             Add-Member -InputObject $p -MemberType ScriptProperty -Name Path -Value { throw 'Access is denied' }
         } else {
@@ -128,6 +132,32 @@ Describe 'windows-update.ps1' {
             }
             @(Get-RunningDesktopApps).Count | Should -Be 0
         }
+
+        # Measured 2026-10-25: Copilot pre-launches at sign-in with no window and no tray icon, and
+        # stays resident after its window is closed. Counting that would ask for a quit nobody can do.
+        It 'does not count Copilot as open while it is only resident, with no window' {
+            Mock Get-Process {
+                @(
+                    (New-FakeProcess -Path 'C:\Program Files (x86)\Microsoft\Copilot\Application\copilotapp.exe'),
+                    (New-FakeProcess -Path 'C:\Program Files (x86)\Microsoft\Copilot\Application\undocked_copilot\copilotapphost.exe')
+                )
+            }
+            @(Get-RunningDesktopApps).Count | Should -Be 0
+        }
+
+        It 'counts Copilot as open once it has a window' {
+            Mock Get-Process {
+                @((New-FakeProcess -Path 'C:\Program Files (x86)\Microsoft\Copilot\Application\copilotapp.exe' -Windowed))
+            }
+            @(Get-RunningDesktopApps | ForEach-Object { $_.Name }) | Should -Be @('Copilot Desktop')
+        }
+
+        It 'still counts the other apps with no window, since they keep running in the tray' {
+            Mock Get-Process {
+                @((New-FakeProcess -Path 'C:\Program Files\WindowsApps\OpenAI.Codex_26.1013.4894.0_x64__2p2nqsd0c76g0\app\ChatGPT.exe'))
+            }
+            @(Get-RunningDesktopApps | ForEach-Object { $_.Name }) | Should -Be @('ChatGPT Desktop')
+        }
     }
 
     Describe 'where Gemini Desktop is looked for' {
@@ -162,6 +192,44 @@ Describe 'windows-update.ps1' {
             $due.Count | Should -Be 1
             $due[0].Name | Should -Be 'Claude Desktop'
             Should -Invoke Test-WingetUpgradePending -Times 2 -Exactly
+        }
+
+        # Measured 2026-10-25: winget listed and upgraded the Store ChatGPT as the community
+        # OpenAI.ChatGPT, and reported nothing pending for 9PLM9XGG6VKS. Asking only the Store id
+        # let `upgrade --all` replace a running ChatGPT with no wait and no hold.
+        It 'finds the upgrade under whichever id winget correlated, and names that id for the hold' {
+            Mock Get-RunningDesktopApps { @($script:ChatGpt) }
+            Mock Test-WingetUpgradePending { $Id -eq 'OpenAI.ChatGPT' }
+
+            $due = @(Get-DesktopAppsAwaitingClose)
+
+            $due.Count | Should -Be 1
+            $due[0].Name | Should -Be 'ChatGPT Desktop'
+            $due[0].Id | Should -Be 'OpenAI.ChatGPT'
+            $due[0].Source | Should -Be ''
+        }
+
+        It 'falls back to the Store id, with its source, when that is the one pending' {
+            Mock Get-RunningDesktopApps { @($script:ChatGpt) }
+            Mock Test-WingetUpgradePending { $Id -eq '9PLM9XGG6VKS' -and $Source -eq 'msstore' }
+
+            $due = @(Get-DesktopAppsAwaitingClose)
+
+            $due.Count | Should -Be 1
+            $due[0].Id | Should -Be '9PLM9XGG6VKS'
+            $due[0].Source | Should -Be 'msstore'
+        }
+
+        It 'names an app once, even if more than one of its ids reports an upgrade' {
+            Mock Get-RunningDesktopApps { @($script:ChatGpt) }
+            Mock Test-WingetUpgradePending { $true }
+            @(Get-DesktopAppsAwaitingClose).Count | Should -Be 1
+            Should -Invoke Test-WingetUpgradePending -Times 1 -Exactly
+        }
+
+        It 'asks about Copilot under the id winget gave the Edge Update copy' {
+            $copilot = $script:DesktopApps | Where-Object { $_.Name -eq 'Copilot Desktop' }
+            @($copilot.Ids | ForEach-Object { $_.Id }) | Should -Contain 'Microsoft.365Copilot'
         }
 
         It 'costs no winget call at all when nothing is running' {
@@ -294,24 +362,37 @@ Describe 'windows-update.ps1' {
     }
 
     Describe 'placing the hold' {
+        # What Get-DesktopAppsAwaitingClose hands over: the app and the one id winget will use.
+        BeforeAll {
+            $script:ClaudeDue  = @{ Name = 'Claude Desktop';  Id = 'Anthropic.Claude'; Source = '' }
+            $script:ChatGptDue = @{ Name = 'ChatGPT Desktop'; Id = '9PLM9XGG6VKS';     Source = 'msstore' }
+        }
+
         It "treats the person's own pin as theirs, and adds none" {
             Mock Invoke-NativeOutput { @('Name    Id               Version', 'Claude  Anthropic.Claude 3.6556.2') }
             Mock Invoke-NativeQuiet { 0 }
-            Add-WingetHold $script:Claude | Should -Be 'existing'
+            Add-WingetHold $script:ClaudeDue | Should -Be 'existing'
             Should -Invoke Invoke-NativeQuiet -Times 0 -Exactly
+        }
+
+        # Measured 2026-10-25: `pin list --id X --exact` ignores the filter and prints every pin.
+        It "does not take a pin on another app for the person's pin on this one" {
+            Mock Invoke-NativeOutput { @('Name    Id             Version', 'ChatGPT OpenAI.ChatGPT 26.1013') }
+            Mock Invoke-NativeQuiet { 0 }
+            Add-WingetHold $script:ClaudeDue | Should -Be 'added'
         }
 
         It 'adds a pin, with the source for the Store app, and reports it as ours' {
             Mock Invoke-NativeOutput { @('There are no pins configured.') }
             Mock Invoke-NativeQuiet { 0 }
-            Add-WingetHold $script:ChatGpt | Should -Be 'added'
+            Add-WingetHold $script:ChatGptDue | Should -Be 'added'
             Should -Invoke Invoke-NativeQuiet -Times 1 -Exactly -ParameterFilter { $Call.ToString() -match 'pin add .*--source \$App.Source' }
         }
 
         It 'reports a pin winget refused' {
             Mock Invoke-NativeOutput { @() }
             Mock Invoke-NativeQuiet { 1 }
-            Add-WingetHold $script:Claude | Should -Be 'failed'
+            Add-WingetHold $script:ClaudeDue | Should -Be 'failed'
         }
     }
 }
