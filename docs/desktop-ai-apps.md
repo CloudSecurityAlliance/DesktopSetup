@@ -51,9 +51,11 @@ compare against the vendor's feed, not just confirm the app exists.
   machines; #161 item 1.
 - winget lags. On 2026-10-23 it offered 2.42304.2 while five 3.x submissions sat in review. The
   app updates itself within hours of installing, so the lag costs little.
-- **The old `.exe` build is detected, not migrated.** `Install-ClaudeDesktop` sees it
-  (`%LOCALAPPDATA%\AnthropicClaude\Update.exe` present, no `Claude` MSIX registered) and adds a
-  to-do with the manual steps. Anthropic documents no in-place migration. Their tracker has
+- **The old `.exe` build is detected, not migrated.** `Install-ClaudeDesktop` sees it only as a
+  *live* install: `%LOCALAPPDATA%\AnthropicClaude\Update.exe` plus an `app-*\claude.exe`, no
+  `.dead` marker, and no `Claude` MSIX registered. Squirrel's uninstall can leave `Update.exe` and
+  `.dead` behind, and counting that residue would stop Claude Desktop ever being installed again.
+  When it finds a live install, it adds a to-do with the manual steps. Anthropic documents no in-place migration. Their tracker has
   `ClaudeSetup.exe` run over an old install leaving it in place (anthropics/claude-code#79832).
   And nobody has measured whether uninstalling keeps `claude_desktop_config.json`, where the CSA
   servers are registered.
@@ -97,10 +99,26 @@ compare against the vendor's feed, not just confirm the app exists.
   link is what exposed the mismatch. A Copilot already installed from that cask is replaced, only
   after the person quits it (below). A Copilot from anywhere else is left to its own updater.
 - macOS source: Microsoft's per-architecture links from the deployment doc (`fwlink 2375510`
-  for arm64, `2375509` for Intel, about 410 MB each). The download page's own link is a 764 MB
-  universal package. The arm64 package checked on 2026-10-24 was signed `Developer ID Installer:
-  Microsoft Corporation (UBF8T346G9)` and notarized, with payload `./Copilot.app`. The script
-  refuses a package without that signer, because it runs `sudo installer` on it.
+  for arm64, `2375509` for Intel). Sizes move with each release: 413 MB for arm64 on 2026-10-24
+  (v153); 531 MB for arm64 and 576 MB for Intel on 2026-10-25 (v156). The download page's own
+  link was a 764 MB universal package. The arm64 package checked on 2026-10-24 was signed
+  `Developer ID Installer: Microsoft Corporation (UBF8T346G9)` and notarized, with payload
+  `./Copilot.app`. The script runs `sudo installer` on the package, so it installs only when all
+  three of these hold:
+  - `pkgutil` says Apple issued the certificate for distribution;
+  - the certificate chain names that identity;
+  - Gatekeeper (`spctl`) accepts the package with that origin, which also checks notarization.
+- **Nothing is removed before its replacement is verified.** The cask's own uninstall deletes the
+  app (`pkgutil: com.microsoft.m365copilot`), so the order is:
+  1. wait for the person to quit Copilot;
+  2. download Microsoft's package;
+  3. verify it;
+  4. wait again, in case it was reopened during the download;
+  5. remove the cask;
+  6. install.
+
+  A Homebrew Copilot whose app cannot be found is refused rather than replaced unwatched. In a
+  non-interactive run, `sudo -n` is checked before anything is downloaded.
 - Windows: `Microsoft.Copilot` is published by Microsoft's own pipeline (`esrp-winget-prod[bot]`).
   It is the same `CopilotStableEnterprise*.msi` Microsoft documents for offline deployment, and
   it installs machine-wide. Detection also checks `Program Files (x86)\Microsoft\Copilot\Application`,
@@ -123,22 +141,37 @@ An app is never replaced while it runs: its files would be swapped underneath it
 replace a desktop app in exactly two places:
 
 - `macos-ai-tools.sh`, when it swaps a Homebrew `microsoft-365-copilot` for Microsoft's own
-  Copilot (`migrate_copilot`).
+  Copilot (`install_copilot_desktop`, `copilot_ready_to_replace`).
 - `windows-update.ps1`, when `winget upgrade --all` is about to upgrade a desktop app that is
   running (`Update-Winget`). The plan names any such app before the person agrees to the run.
+  After the sources are refreshed it asks again, because the refresh can reveal an update the
+  plan could not see.
 
 `macos-update.sh` has no equivalent. `brew upgrade` without `--greedy` skips casks that update
 themselves, and all of these do.
 
-**What counts as running.** The app's main executable, or anything under its `Frameworks`
-(the window and renderer processes, which exit with it), for the current user. On Windows: a
-process whose image path matches the app's install location, in the current session. The
-vendors' background agents are **not** counted: Copilot's `LoginItems/CopilotAppHost`, Gemini's
-`GeminiAppLauncher`, updaters under `LaunchServices`, and on Windows the session-0 services
-(Claude's Cowork service, Copilot's proxy). launchd and the Service Control Manager keep these
-alive, so a wait that counted them might never end. The vendor's installer stops and restarts
-them itself. Apps are identified by path, never by process name, for the reasons recorded at
-`Get-RunningAiClients`.
+**What counts as running.**
+
+- **macOS:** the app's main executable (`Contents/MacOS/`), for the current user. Nothing else in
+  the bundle counts, because nothing else is reliably gone once the app is quit:
+  - the vendors' launchd jobs: Copilot's `LoginItems/CopilotAppHost`, Gemini's
+    `GeminiAppLauncher`, updaters under `LaunchServices`;
+  - not even everything under `Frameworks`: on 2026-10-25, three of Copilot's crash handlers
+    there had launchd, not Copilot, as their parent, so they may outlive it.
+
+  The window and renderer processes exit with the main one. `ps -o comm=` gave absolute paths
+  for all four main executables, and relative ones for some launchd jobs, which therefore never
+  match.
+- **Windows:** a process whose image path matches the app's install location, in the current
+  session. The session-0 services (Claude's Cowork service, Copilot's proxy) are excluded.
+  Gemini's folder is read from its uninstall entry: `InstallLocation`, else the folder of its
+  `DisplayIcon`. Only when the entry names no folder does it fall back to the file name
+  `Gemini.exe`, the one name match. A false match costs a needless prompt; no match would let
+  winget replace a Gemini that is open.
+
+A wait that counted a process that never exits would never end. The vendor's installer stops and
+restarts its own agents. Apps are otherwise identified by path, not by process name, for the
+reasons recorded at `Get-RunningAiClients`.
 
 **How the wait behaves.**
 
@@ -146,13 +179,23 @@ them itself. Apps are identified by path, never by process name, for the reasons
 - It explains how to quit fully: from the menu or menu-bar icon on macOS, from the tray icon on
   Windows. Closing the window leaves all of these apps running.
 - It polls every two seconds, and every minute asks whether to keep waiting, so an app that will
-  not exit cannot trap the run. Declining leaves the app as it is. The Copilot migration adds a
-  to-do; the Windows update warns that winget may fail for that app, which still updates itself.
-- With nobody at the keyboard (`NONINTERACTIVE`) it does not wait at all.
+  not exit cannot trap the run. An app quit while that question is on screen counts as quit.
+- **Declining leaves the app as it is**, and so does nobody being at the keyboard
+  (`NONINTERACTIVE`, where it does not wait at all).
+  - macOS: the Copilot migration stops and adds a to-do.
+  - Windows: the app is **held back from `winget upgrade --all` with a temporary `winget pin`**,
+    which is removed afterwards, even if the upgrade fails. A pin the person already had is
+    theirs and is never removed.
 
-Tested by `tests/test_desktop_apps.py` (macOS logic, with a control showing a naive name match
-fails it) and `tests/DesktopApps.Tests.ps1` (Windows logic). Neither proves the Windows paths
-are right; that is #161.
+Tested by `tests/test_desktop_apps.py` and `tests/DesktopApps.Tests.ps1`.
+
+- The macOS tests cover the wait, the states, and the Copilot install's order. Their control
+  shows that a naive name match fails them, and in-memory mutations of the shipping code
+  (including the exact ordering bug the review found) are each caught.
+- The Windows tests cover the wait, the hold and its release, Gemini's location rule, and the old
+  Claude build's detection.
+
+Neither proves the Windows paths or winget's `list` and `pin` behaviour; that is #161.
 
 ## Linux
 

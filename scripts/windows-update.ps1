@@ -17,7 +17,7 @@
 
 $ErrorActionPreference = 'Stop'
 
-$ScriptVersion = "2026.10251430"
+$ScriptVersion = "2026.10251454"
 
 # ── Snapshot location ───────────────────────────────────────
 
@@ -1077,6 +1077,12 @@ function Save-Snapshot {
 # only in this user's session: Claude's Cowork service and Copilot's proxy run in session 0 as
 # services, never exit when the app is quit, and would make a wait endless. None of these paths
 # has been measured on Windows yet - #161.
+#
+# Gemini installs per user wherever its installer chose, so its folder is read from its
+# uninstall entry (Get-DesktopAppPatterns). Its `Paths` here are only the FALLBACK when that
+# entry names no folder: a match on the file name alone. That is the one name match in this
+# table, kept deliberately, because a false match costs a needless prompt while no match at all
+# would let winget replace a Gemini that is open.
 $DesktopApps = @(
     @{ Name = 'Claude Desktop';  Id = 'Anthropic.Claude';     Source = '';
        Paths = @('*\WindowsApps\Claude_*', '*\AnthropicClaude\*') },
@@ -1089,8 +1095,52 @@ $DesktopApps = @(
 )
 $script:desktopAppsToClose = @()
 
+# Gemini Desktop's uninstall entry, or $null. Asked of the uninstall registry because both of
+# Google's routes run the same per-user NSIS installer - winget's offline package and the
+# GeminiSetup.exe bootstrapper on gemini.google/desktop - so either writes this entry, while
+# `winget list` only recognises what it can correlate with its own manifest. Matched on name AND
+# publisher, because "Gemini" alone is not an identity.
+function Get-GeminiDesktopEntry {
+    $roots = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall',
+             'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall',
+             'HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall'
+    foreach ($root in $roots) {
+        $entries = Get-ChildItem -Path $root -ErrorAction SilentlyContinue |
+                   Get-ItemProperty -ErrorAction SilentlyContinue
+        foreach ($entry in $entries) {
+            if ($entry.DisplayName -eq 'Gemini' -and $entry.Publisher -like 'Google*') { return $entry }
+        }
+    }
+    return $null
+}
+
+# The path patterns that identify one app's processes. Fixed for every app but Gemini, whose
+# folder comes from its uninstall entry: InstallLocation, else the folder of its DisplayIcon
+# (an "exe,index" string). Escaped, because a folder name can hold wildcard characters.
+function Get-DesktopAppPatterns {
+    param($App)
+    if ($App.Id -ne 'Google.GeminiDesktop') { return @($App.Paths) }
+    $entry = Get-GeminiDesktopEntry
+    $dir = $null
+    if ($entry -and $entry.InstallLocation) {
+        $dir = [string]$entry.InstallLocation
+    } elseif ($entry -and $entry.DisplayIcon) {
+        # Cut at the last backslash rather than Split-Path, which rewrites `\` as `/` off
+        # Windows and so could not be tested anywhere but the target.
+        $exe = ((([string]$entry.DisplayIcon) -split ',')[0]).Trim().Trim('"')
+        $cut = $exe.LastIndexOf('\')
+        if ($cut -gt 0) { $dir = $exe.Substring(0, $cut) }
+    }
+    if ($dir) {
+        return @(([System.Management.Automation.WildcardPattern]::Escape($dir.TrimEnd('\'))) + '\*')
+    }
+    return @($App.Paths)
+}
+
 function Get-RunningDesktopApps {
     $session = (Get-Process -Id $PID).SessionId
+    $patterns = @{}
+    foreach ($app in $DesktopApps) { $patterns[$app.Name] = @(Get-DesktopAppPatterns $app) }
     $running = @{}
     foreach ($proc in (Get-Process -ErrorAction SilentlyContinue)) {
         if ($proc.SessionId -ne $session) { continue }
@@ -1098,12 +1148,45 @@ function Get-RunningDesktopApps {
         try { $path = $proc.Path } catch { }
         if (-not $path) { continue }
         foreach ($app in $DesktopApps) {
-            foreach ($pattern in $app.Paths) {
+            foreach ($pattern in $patterns[$app.Name]) {
                 if ($path -like $pattern) { $running[$app.Name] = $true }
             }
         }
     }
     return @($DesktopApps | Where-Object { $running.ContainsKey($_.Name) })
+}
+
+# A winget pin keeps one package out of `winget upgrade --all`. Used to leave a running app
+# alone when the person declines to quit it - or nobody is there to - rather than let winget
+# replace it anyway. Returns 'added' (ours, to remove afterwards), 'existing' (the person's own
+# pin, never touched) or 'failed'. Unmeasured on Windows: #161.
+function Add-WingetHold {
+    param($App)
+    if ($App.Source) {
+        $existing = Invoke-NativeOutput { winget pin list --id $App.Id --exact --source $App.Source --accept-source-agreements }
+    } else {
+        $existing = Invoke-NativeOutput { winget pin list --id $App.Id --exact --accept-source-agreements }
+    }
+    if ($existing -and ($existing | Select-String -SimpleMatch $App.Id)) { return 'existing' }
+    if ($App.Source) {
+        $code = Invoke-NativeQuiet { winget pin add --id $App.Id --exact --source $App.Source --accept-source-agreements }
+    } else {
+        $code = Invoke-NativeQuiet { winget pin add --id $App.Id --exact --accept-source-agreements }
+    }
+    if ($code -eq 0) { return 'added' }
+    return 'failed'
+}
+
+function Remove-WingetHold {
+    param($App)
+    if ($App.Source) {
+        $code = Invoke-NativeQuiet { winget pin remove --id $App.Id --exact --source $App.Source --accept-source-agreements }
+    } else {
+        $code = Invoke-NativeQuiet { winget pin remove --id $App.Id --exact --accept-source-agreements }
+    }
+    if ($code -ne 0) {
+        Write-Warn "Could not remove the temporary winget pin on $($App.Name); remove it with: winget pin remove --id $($App.Id)"
+    }
 }
 
 function Test-DesktopAppRunning {
@@ -1132,7 +1215,8 @@ function Get-DesktopAppsAwaitingClose {
 }
 
 # Wait for the person to quit an app fully. $true once it has exited (or was never running),
-# $false when it is still running.
+# $false when it is still running - and then Update-Winget holds it back from `upgrade --all`,
+# so "leaving it as it is" is true rather than a hope.
 #
 # Never closes the app for them: it may hold unsaved work, and only they know. With nobody at
 # the keyboard (NONINTERACTIVE) it does not wait at all, or a headless run would hang forever.
@@ -1157,7 +1241,11 @@ function Wait-ForAppExit {
     $waited = 0
     while (Test-DesktopAppRunning $Name) {
         if ($waited -ge 60) {
-            if (-not (Confirm-Step "$Name is still running. Keep waiting?")) { return $false }
+            if (-not (Confirm-Step "$Name is still running. Keep waiting?")) {
+                # Asked again, not assumed: they may have quit it while the question was on screen.
+                if (Test-DesktopAppRunning $Name) { return $false }
+                break
+            }
             $waited = 0
         }
         Start-Sleep -Seconds 2
@@ -1176,17 +1264,29 @@ function Update-Winget {
     Write-Info "Refreshing winget sources"
     $null = Invoke-NativeShow { winget source update }
 
-    # Decided in Show-Preflight, so the person was told before agreeing to the run.
-    foreach ($app in @($script:desktopAppsToClose)) {
-        if (-not (Wait-ForAppExit $app.Name)) {
-            Write-Warn "  winget may fail to update $($app.Name) while it runs. It updates itself, so nothing is lost."
+    # Asked again now that the sources are fresh: Show-Preflight named what it could see before
+    # the refresh, and the refresh can reveal an update it could not.
+    $held = @()
+    foreach ($app in @(Get-DesktopAppsAwaitingClose)) {
+        if (Wait-ForAppExit $app.Name) { continue }
+        # Still running, by the person's choice or because nobody is here. Leave it as it is - the
+        # promise Wait-ForAppExit just printed - by keeping it out of `upgrade --all` for this run.
+        switch (Add-WingetHold $app) {
+            'added'    { $held += $app; Write-Warn "  $($app.Name) is held back for this run; it updates itself, so nothing is lost." }
+            'existing' { Write-Warn "  $($app.Name) is already pinned in winget, so this run leaves it alone." }
+            default    { Write-Warn "  Could not hold $($app.Name) back; winget may try to replace it while it runs." }
         }
     }
 
-    Write-Info "Upgrading winget packages"
-    $null = Invoke-NativeShow { winget upgrade --all --accept-package-agreements --accept-source-agreements }
-    # winget exits non-zero when there was simply nothing to upgrade, so a non-zero here is
-    # not news. Real failures are visible in the output above, and in the log under CSA_DEBUG.
+    try {
+        Write-Info "Upgrading winget packages"
+        $null = Invoke-NativeShow { winget upgrade --all --accept-package-agreements --accept-source-agreements }
+        # winget exits non-zero when there was simply nothing to upgrade, so a non-zero here is
+        # not news. Real failures are visible in the output above, and in the log under CSA_DEBUG.
+    } finally {
+        # Only the pins this run added. A pin the person set themselves is theirs.
+        foreach ($app in $held) { Remove-WingetHold $app }
+    }
 }
 
 function Update-Npm {

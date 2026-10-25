@@ -2,17 +2,24 @@
 """The macOS desktop-app logic: what counts as running, how the wait ends, and which state the
 plan and the install act on.
 
-Three things are under test, all extracted from scripts/macos-ai-tools.sh rather than copied,
+Four things are under test, all extracted from scripts/macos-ai-tools.sh rather than copied,
 so a test cannot drift from what ships:
 
   app_running / wait_for_app_exit
       An app is about to be replaced only after the person has quit it. "Running" is the
-      app's main executable or anything in its Frameworks; the vendor's background agents
-      (LoginItems, LaunchServices, Helpers) are NOT counted, because launchd keeps them alive
-      and a wait that counted them might never end. Matched by path prefix, so a look-alike
-      bundle ("Copilot Beta.app", "Copilot.app.bak") is not the app. With nobody at the
-      keyboard it must not wait at all; interactively it must ask, every minute, whether to
-      keep waiting, so it can always be left.
+      app's MAIN executable only; nothing else in the bundle counts - not the vendor's launchd
+      agents (LoginItems, LaunchServices, Helpers), and not even a crash handler under
+      Frameworks, which can have launchd as its parent and outlive the app - because a wait
+      that counted them might never end. Matched by path prefix, so a look-alike bundle
+      ("Copilot Beta.app", "Copilot.app.bak") is not the app. With nobody at the keyboard it
+      must not wait at all; interactively it must ask, every minute, whether to keep waiting,
+      so it can always be left - and an app quit while that question is on screen counts as quit.
+
+  install_copilot_desktop
+      Nothing is removed before its replacement is on disk and verified. The Homebrew Copilot's
+      uninstall deletes the app, so a download, signature, Gatekeeper or sudo failure after it
+      would leave no Copilot at all (independent review, 2026-10-25). Run against stubs that
+      record the order of calls.
 
   gemini_desktop_state
       `brew install --cask gemini` is MacPaw's duplicate-file cleaner, and Google's app is
@@ -89,6 +96,10 @@ AGENTS = [
     f"{BUNDLE}/Contents/Library/LaunchServices/com.microsoft.EdgeUpdater.helper",
     f"{BUNDLE}/Contents/Helpers/crashpad_handler",
 ]
+# Seen 2026-10-25 under Copilot's Frameworks with launchd (ppid 1) as its parent, so it may
+# outlive the app: a wait that counted it might never end.
+CRASHPAD = (f"{BUNDLE}/Contents/Frameworks/Microsoft Edge Framework.framework/Versions/"
+            "153.0.4234.38/Helpers/msedge_crashpad_handler")
 LOOKALIKES = [
     "/Applications/Copilot.app.bak/Contents/MacOS/Copilot",
     "/Applications/Copilot Beta.app/Contents/MacOS/Copilot",
@@ -254,6 +265,107 @@ echo "CSA_TEST_RESULT=[$({call})]"
     return match.group(1) if match else f"<no result: {out.strip()[:300]}>"
 
 
+# ── the Copilot install, in order ────────────────────────────────────
+
+GOOD_SIG = ("Package \"Copilot.pkg\":\n"
+            "   Status: signed by a developer certificate issued by Apple for distribution\n"
+            "   Notarization: trusted by the Apple notary service\n"
+            "   Certificate Chain:\n"
+            "    1. Developer ID Installer: Microsoft Corporation (UBF8T346G9)\n")
+GOOD_GATEKEEPER = ("Copilot.pkg: accepted\nsource=Notarized Developer ID\n"
+                   "origin=Developer ID Installer: Microsoft Corporation (UBF8T346G9)\n")
+# The right name on a certificate Apple did not issue for distribution.
+FORGED_SIG = GOOD_SIG.replace("signed by a developer certificate issued by Apple for distribution",
+                              "signed by untrusted certificate")
+
+INSTALL_FUNCS = ["app_running", "wait_for_app_exit", "macos_major", "is_apple_silicon",
+                 "copilot_app_path", "copilot_desktop_state", "copilot_ready_to_replace",
+                 "install_copilot_desktop"]
+
+
+def run_install(*, migrate: bool, running: bool = False, receipt: bool = True,
+                noninteractive: bool = False, sudo_n_ok: bool = True, curl_ok: bool = True,
+                sig: str = GOOD_SIG, gatekeeper: str = GOOD_GATEKEEPER,
+                uninstall_ok: bool = True) -> tuple[list[str], bool, str]:
+    """(calls in order, whether the downloaded package was left behind, output)."""
+    root = tempfile.mkdtemp(prefix="csa-install-")
+    try:
+        home = pathlib.Path(root, "home")
+        home.mkdir()
+        apps = pathlib.Path(root, "vol", "Applications")
+        bundle = apps / "Copilot.app"
+        pkg_info = pkg_files = ""
+        if migrate and receipt:
+            bundle.mkdir(parents=True)
+            pkg_info = f"package-id: com.microsoft.m365copilot\\nvolume: {root}/vol/\\nlocation: Applications\\n"
+            pkg_files = "Copilot.app\\nCopilot.app/Contents\\n"
+        calls = pathlib.Path(root, "calls")
+        calls.write_text("", encoding="utf-8")
+        script = f"""#!/usr/bin/env bash
+set -euo pipefail
+info() {{ echo "INFO $*"; }}
+warn() {{ echo "WARN $*"; }}
+success() {{ echo "OK $*"; }}
+has_command() {{ command -v "$1" >/dev/null 2>&1; }}
+ensure_brew_in_path() {{ :; }}
+{extract(TEXT, "confirm")}
+{chr(10).join(extract(TEXT, f) for f in INSTALL_FUNCS)}
+{constants(TEXT, "COPILOT_RECEIPT", "COPILOT_PKG_ARM64", "COPILOT_PKG_X64", "COPILOT_SIGNER", "COPILOT_PKG_CACHE")}
+COPILOT_APP='{root}/no-such/Copilot.app'
+copilot_needs_migration='{"brew" if migrate else ""}'
+
+CALLS='{calls}'
+log() {{ echo "$*" >> "$CALLS"; }}
+csa_todo_add() {{ log "todo"; return 0; }}
+id() {{ echo 501; }}
+ps() {{ if [[ '{int(running)}' == 1 ]]; then echo '{bundle}/Contents/MacOS/Copilot'; fi; }}
+sleep() {{ :; }}
+sysctl() {{ echo 1; }}
+sw_vers() {{ echo 26.1; }}
+brew() {{
+  if [[ "$1" == "uninstall" ]]; then log "brew-uninstall"; [[ '{int(uninstall_ok)}' == 1 ]]; return; fi
+  return 1
+}}
+curl() {{
+  log "curl"
+  local out=""
+  while [[ $# -gt 0 ]]; do if [[ "$1" == "-o" ]]; then out="$2"; shift; fi; shift; done
+  if [[ '{int(curl_ok)}' == 1 ]]; then echo pkg > "$out"; return 0; fi
+  return 22
+}}
+pkgutil() {{
+  case "$1" in
+    --check-signature) log "pkgutil-sig"; printf '%s' "$SIG_TEXT"; return 0 ;;
+    --pkg-info) if [[ -n '{pkg_info}' ]]; then printf '{pkg_info}'; else return 1; fi ;;
+    --files)    if [[ -n '{pkg_files}' ]]; then printf '{pkg_files}'; else return 1; fi ;;
+  esac
+}}
+spctl() {{ log "spctl"; if [[ -n "$GK_TEXT" ]]; then printf '%s' "$GK_TEXT"; return 0; fi; return 3; }}
+sudo() {{
+  if [[ "$1" == "-n" ]]; then
+    shift
+    if [[ "$1" == "true" ]]; then log "sudo-check"; [[ '{int(sudo_n_ok)}' == 1 ]]; return; fi
+  fi
+  log "$1"
+  return 0
+}}
+
+install_copilot_desktop
+echo "CSA_TEST_DONE"
+"""
+        env = {"SIG_TEXT": sig, "GK_TEXT": gatekeeper, "HOME": str(home)}
+        if noninteractive:
+            env["NONINTERACTIVE"] = "1"
+        out = run_bash(script, env_extra=env)
+        order = [line for line in calls.read_text(encoding="utf-8").splitlines() if line]
+        leftover = pathlib.Path(home, "Library", "Caches", "csa-desktopsetup", "Copilot.pkg").exists()
+    finally:
+        shutil.rmtree(root, ignore_errors=True)
+    if "CSA_TEST_DONE" not in out:
+        order.append(f"<died: {out.strip()[-300:]}>")
+    return order, leftover, out
+
+
 def main() -> int:
     failures: list[str] = []
 
@@ -271,9 +383,9 @@ def main() -> int:
     check(status == 0 and sleeps >= 1 and "has exited" in out and "ASKED:" not in out,
           "a running app is waited for until it exits, with no prompt inside the first minute")
 
-    out, status, sleeps = run_wait([RENDERER], 2)
-    check(status == 0 and sleeps >= 1,
-          "a process under Contents/Frameworks alone still counts as the app running")
+    out, status, sleeps = run_wait([], 0, always=[CRASHPAD, RENDERER], stdin="n\n")
+    check(status == 0 and sleeps == 0,
+          "processes under Contents/Frameworks alone (a crash handler that outlives the app) are not the app")
 
     out, status, sleeps = run_wait([], 0, always=AGENTS, stdin="n\n")
     check(status == 0 and sleeps == 0,
@@ -298,6 +410,12 @@ def main() -> int:
     out, status, sleeps = run_wait([MAIN], 40, stdin="y\n")
     check(status == 0 and out.count("ASKED: Copilot is still running. Keep waiting?") == 1 and "has exited" in out,
           "an app that exits after the first prompt ends the wait successfully")
+
+    # 32 ps calls: the first check, then one per poll until the minute is up. The 33rd - the
+    # re-check after 'n' - finds it gone.
+    out, status, sleeps = run_wait([MAIN], 32, stdin="n\n")
+    check(status == 0 and out.count("ASKED: Copilot is still running. Keep waiting?") == 1 and "has exited" in out,
+          "an app quit while the question was on screen counts as quit, even after 'n'")
 
     print("\n  control: a naive `ps | grep -q \"$bundle\"` must fail the cases above")
     _, status, sleeps = run_wait([], 0, always=AGENTS, stdin="n\n", app_running=NAIVE_APP_RUNNING)
@@ -342,6 +460,35 @@ def main() -> int:
           "macOS 13 is 'unsupported'")
     check(run_state("copilot_desktop_state", macos="14.0") == "absent",
           "nothing installed on macOS 14 is 'absent' (will install)")
+
+    print("\ninstall_copilot_desktop: nothing is removed before its replacement is verified")
+    order, leftover, _ = run_install(migrate=True)
+    check(order == ["curl", "pkgutil-sig", "spctl", "brew-uninstall", "installer"] and not leftover,
+          f"migration: download, verify, THEN remove the cask, then install; package cleaned up ({order})")
+    order, leftover, _ = run_install(migrate=False)
+    check(order == ["curl", "pkgutil-sig", "spctl", "installer"] and not leftover,
+          f"fresh install: download, verify, install - no Homebrew uninstall ({order})")
+    order, leftover, _ = run_install(migrate=True, curl_ok=False)
+    check("brew-uninstall" not in order and "installer" not in order and not leftover,
+          f"a failed download removes nothing ({order})")
+    order, leftover, _ = run_install(migrate=True, sig=FORGED_SIG)
+    check("brew-uninstall" not in order and "installer" not in order and not leftover,
+          f"Microsoft's name on a certificate Apple did not issue is refused, and removes nothing ({order})")
+    order, leftover, _ = run_install(migrate=True, gatekeeper="")
+    check("brew-uninstall" not in order and "installer" not in order and not leftover,
+          f"a package Gatekeeper rejects is refused, and removes nothing ({order})")
+    order, leftover, _ = run_install(migrate=True, noninteractive=True, sudo_n_ok=False)
+    check("curl" not in order and "brew-uninstall" not in order,
+          f"with nobody to type a sudo password, nothing is downloaded or removed ({order})")
+    order, leftover, _ = run_install(migrate=True, running=True, noninteractive=True)
+    check("curl" not in order and "brew-uninstall" not in order and "todo" in order,
+          f"a Copilot that is running is not replaced, and the person gets a to-do ({order})")
+    order, leftover, _ = run_install(migrate=True, receipt=False)
+    check("curl" not in order and "brew-uninstall" not in order,
+          f"a Homebrew Copilot whose app cannot be found is refused, not replaced unwatched ({order})")
+    order, leftover, _ = run_install(migrate=True, uninstall_ok=False)
+    check("installer" not in order and not leftover,
+          f"if the cask will not uninstall, nothing is installed over it ({order})")
 
     print()
     if failures:

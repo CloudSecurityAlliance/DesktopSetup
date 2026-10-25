@@ -29,7 +29,7 @@
 
 set -euo pipefail
 
-SCRIPT_VERSION="2026.10251430"
+SCRIPT_VERSION="2026.10251454"
 
 # ── CSA plugin marketplaces ─────────────────────────────────────────
 # Plugin marketplaces to register with Claude Code. Each entry is an
@@ -394,21 +394,24 @@ get_app_bundle_id() {
 # A desktop app must not be replaced while it runs: its files are swapped underneath it, and a
 # pkg or cask install over a live app leaves it half-old until it crashes or is relaunched.
 #
-# "Running" means the app's main executable, or anything under its Frameworks (the window and
-# renderer processes, which exit with it), belongs to THIS user. It deliberately does not count
-# the background agents a vendor registers from inside the bundle - Copilot's
-# Library/LoginItems/CopilotAppHost, Gemini's Helpers/GeminiAppLauncher, an updater in
-# Library/LaunchServices. Those are launchd jobs (seen in `launchctl list` beside the running
-# apps, 2026-10-24), which launchd may keep alive or relaunch on its own, so a wait that counted
-# them might never finish. The vendor's own installer is what stops and restarts them.
+# "Running" means the app's MAIN executable - the thing the person quits - runs as THIS user.
+# Nothing else in the bundle counts, because nothing else is reliably gone once they have quit:
+#   - the vendor's launchd jobs: Copilot's Library/LoginItems/CopilotAppHost, Gemini's
+#     Helpers/GeminiAppLauncher, updaters in Library/LaunchServices (seen in `launchctl list`
+#     beside the running apps, 2026-10-24); launchd may keep them alive or relaunch them;
+#   - even under Frameworks: on 2026-10-25 three of Copilot's crash handlers there had launchd,
+#     not Copilot, as their parent (ppid 1), so they may outlive it.
+# A wait that counted any of those might never end. The window and renderer processes exit with
+# the main one; the vendor's own installer stops and restarts the rest.
 #
 # Identified by PATH, not by name, for the reason Get-RunningAiClients gives on Windows: a name
-# says what somebody called a file. `ps -o comm=` on macOS prints the full executable path.
+# says what somebody called a file. `ps -o comm=` prints the full executable path for an app
+# LaunchServices started - all four main executables did, 2026-10-25 - but a RELATIVE one for
+# some launchd jobs (`Contents/Library/LoginItems/...`), which therefore never match here.
 app_running() {
   local bundle="$1"
   ps -x -U "$(id -u)" -o comm= 2>/dev/null \
-    | awk -v main="$bundle/Contents/MacOS/" -v fw="$bundle/Contents/Frameworks/" \
-        'index($0, main) == 1 || index($0, fw) == 1 { found = 1 } END { exit !found }'
+    | awk -v main="$bundle/Contents/MacOS/" 'index($0, main) == 1 { found = 1 } END { exit !found }'
 }
 
 # Wait for the person to quit an app fully before it is replaced. Returns 0 once it has exited
@@ -434,7 +437,11 @@ wait_for_app_exit() {
   while app_running "$bundle"; do
     if [[ $waited -ge 60 ]]; then
       if ! confirm "$name is still running. Keep waiting?"; then
-        return 1
+        # Asked again, not assumed: they may have quit it while the question was on screen.
+        if app_running "$bundle"; then
+          return 1
+        fi
+        break
       fi
       waited=0
     fi
@@ -737,7 +744,7 @@ preflight() {
       echo "  Copilot Desktop ... skip — needs macOS 14 or later"
       ;;
     *)
-      echo "  Copilot Desktop ... install Microsoft's .pkg (about 400 MB; asks for your password)"
+      echo "  Copilot Desktop ... install Microsoft's .pkg (a download of several hundred MB; asks for your password)"
       ;;
   esac
 
@@ -1356,13 +1363,18 @@ GEMINI_DESKTOP_ID="com.google.GeminiMacOS"
 COPILOT_APP="/Applications/Copilot.app"
 COPILOT_RECEIPT="com.microsoft.m365copilot"
 # Microsoft's per-architecture links for the unified Copilot app, from
-# learn.microsoft.com/windows/client-management/deploy-unified-copilot-app. The download page's
-# own link is a 764 MB universal package; these are about 410 MB each.
+# learn.microsoft.com/windows/client-management/deploy-unified-copilot-app. Sizes move with each
+# release: 413 MB (arm64) on 2026-10-24, 531 MB (arm64) and 576 MB (Intel) on 2026-10-25.
 COPILOT_PKG_ARM64="https://go.microsoft.com/fwlink/?linkid=2375510"
 COPILOT_PKG_X64="https://go.microsoft.com/fwlink/?linkid=2375509"
-# Read off the arm64 package on 2026-10-24 with `pkgutil --check-signature` (notarized). A
-# package not signed by this identity is not installed - this file runs `sudo installer` on it.
+# Read off the arm64 package on 2026-10-24 with `pkgutil --check-signature` and `spctl`
+# (notarized). A package not signed by this identity is not installed - this file runs
+# `sudo installer` on it.
 COPILOT_SIGNER="Developer ID Installer: Microsoft Corporation (UBF8T346G9)"
+# A fixed path rather than mktemp: this file's EXIT trap belongs to csa_on_exit, so an
+# interrupted download cannot be cleaned up by a second trap. At a fixed path it is at worst one
+# file in Caches, overwritten next run, instead of one more half-gigabyte in $TMPDIR per attempt.
+COPILOT_PKG_CACHE="$HOME/Library/Caches/csa-desktopsetup/Copilot.pkg"
 
 macos_major() {
   local v
@@ -1479,28 +1491,36 @@ copilot_desktop_state() {
 
 # The cask's Copilot is replaced, not left beside the new one: both claim the same receipt, and
 # the cask installs it with Microsoft AutoUpdate deselected, so it would sit at whatever version
-# Homebrew last recorded. The person quits it first - see wait_for_app_exit.
-migrate_copilot() {
+# Homebrew last recorded.
+#
+# Finds the Homebrew Copilot and waits for the person to quit it. Returns 1, having changed
+# nothing, when it cannot be found or is still running. Refusing when it cannot be FOUND is the
+# point: the receipt layout was measured for the unified app only, and a wait that silently
+# skipped because it had no path to watch would replace an app that is open.
+copilot_ready_to_replace() {
   local bundle
   bundle="$(copilot_app_path)"
-  info "Replacing the Homebrew Copilot (Microsoft's former Microsoft 365 Copilot app) with Microsoft's own Copilot"
-  if [[ -n "$bundle" ]] && ! wait_for_app_exit "Copilot" "$bundle"; then
+  if [[ -z "$bundle" ]]; then
+    warn "Homebrew lists microsoft-365-copilot, but its app could not be found; leaving it alone"
+    return 1
+  fi
+  if ! wait_for_app_exit "Copilot" "$bundle"; then
     warn "Left the Homebrew Copilot in place."
     if ! csa_todo_add 43 "Quit Copilot fully (Quit from its menu, not just its window), then re-run this installer to replace the Homebrew Copilot with Microsoft's own" - -; then
       echo "  Quit Copilot fully, then re-run this installer to replace it."
     fi
     return 1
   fi
-  if ! brew uninstall --cask microsoft-365-copilot; then
-    warn "Could not remove the Homebrew Copilot; leaving it in place"
-    return 1
-  fi
   return 0
 }
 
+# Nothing is removed until its replacement is on disk and verified. The cask's own uninstall
+# deletes the app (`pkgutil: com.microsoft.m365copilot`), so removing it first and then failing
+# to download, verify or get sudo would leave the person with no Copilot at all.
 install_copilot_desktop() {
   ensure_brew_in_path
 
+  local migrating=0
   case "$(copilot_desktop_state)" in
     installed)
       info "Copilot Desktop already installed; it updates itself"
@@ -1511,30 +1531,59 @@ install_copilot_desktop() {
       return 0
       ;;
     migrate)
-      migrate_copilot || return 0
+      migrating=1
+      info "Replacing the Homebrew Copilot (Microsoft's former Microsoft 365 Copilot app) with Microsoft's own Copilot"
+      copilot_ready_to_replace || return 0
       ;;
   esac
 
-  local url tmp pkg sig
+  # Asked BEFORE a half-gigabyte download, not after: with nobody at the keyboard, a password
+  # prompt nobody answers is a certain failure, and only `sudo -n` says so in advance.
+  if [[ -n "${NONINTERACTIVE-}" ]] && ! sudo -n true 2>/dev/null; then
+    warn "Installing Copilot Desktop needs an administrator password, and nobody is here to type it; skipping"
+    return 0
+  fi
+
+  local url pkg sig gatekeeper
   if is_apple_silicon; then url="$COPILOT_PKG_ARM64"; else url="$COPILOT_PKG_X64"; fi
-  if ! tmp="$(mktemp -d)"; then
-    warn "Could not create a temporary directory; skipping Copilot Desktop"
+  pkg="$COPILOT_PKG_CACHE"
+  if ! mkdir -p "$(dirname "$pkg")"; then
+    warn "Could not create $(dirname "$pkg"); skipping Copilot Desktop"
     return 0
   fi
-  pkg="$tmp/Copilot.pkg"
 
-  info "Downloading Copilot Desktop from Microsoft (about 400 MB)"
-  if ! curl -fL --progress-bar -o "$pkg" "$url"; then
+  info "Downloading Copilot Desktop from Microsoft (several hundred MB)"
+  # --speed-limit/--speed-time: give up on a stalled transfer instead of hanging the run.
+  if ! curl -fL --progress-bar --speed-limit 1024 --speed-time 60 -o "$pkg" "$url"; then
     warn "Failed to download Copilot Desktop"
-    rm -rf "$tmp"
+    rm -f "$pkg"
     return 0
   fi
 
+  # Three conditions, because a name alone is a string anyone can put in a certificate: pkgutil
+  # must say Apple issued the certificate for distribution, the chain must name Microsoft's
+  # installer identity, and Gatekeeper must accept the package (which also checks notarization).
   sig="$(pkgutil --check-signature "$pkg" 2>&1)" || sig=""
-  if [[ "$sig" != *"$COPILOT_SIGNER"* ]]; then
-    warn "The downloaded Copilot package is not signed by Microsoft; not installing it"
-    rm -rf "$tmp"
+  gatekeeper="$(spctl -a -vv -t install "$pkg" 2>&1)" || gatekeeper=""
+  if [[ "$sig" != *"Status: signed by a developer certificate issued by Apple for distribution"* ]] \
+    || [[ "$sig" != *"$COPILOT_SIGNER"* ]] \
+    || [[ "$gatekeeper" != *"origin=$COPILOT_SIGNER"* ]]; then
+    warn "The downloaded Copilot package is not signed and notarized as Microsoft's; not installing it"
+    rm -f "$pkg"
     return 0
+  fi
+
+  if [[ $migrating -eq 1 ]]; then
+    # Again, because the download took minutes and Copilot may have been reopened meanwhile.
+    if ! copilot_ready_to_replace; then
+      rm -f "$pkg"
+      return 0
+    fi
+    if ! brew uninstall --cask microsoft-365-copilot; then
+      warn "Could not remove the Homebrew Copilot; leaving it in place"
+      rm -f "$pkg"
+      return 0
+    fi
   fi
 
   info "Installing Copilot Desktop (macOS asks for your password)"
@@ -1545,7 +1594,7 @@ install_copilot_desktop() {
   else
     if sudo installer -pkg "$pkg" -target /; then installed=1; fi
   fi
-  rm -rf "$tmp"
+  rm -f "$pkg"
   if [[ $installed -eq 1 ]]; then
     success "Copilot Desktop installed; Edge's updater keeps it current"
   else

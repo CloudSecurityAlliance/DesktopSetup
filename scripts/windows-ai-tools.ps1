@@ -23,7 +23,7 @@
 
 $ErrorActionPreference = 'Stop'
 
-$ScriptVersion = "2026.10251430"
+$ScriptVersion = "2026.10251454"
 
 # ── CSA plugin marketplaces ─────────────────────────────────────────
 # Plugin marketplaces to register with Claude Code. Each entry is an
@@ -1779,8 +1779,13 @@ function Install-1PasswordCLI {
 
 # The old Squirrel (.exe) build of Claude Desktop. winget's Anthropic.Claude installed it until
 # the manifest moved to an MSIX (the 0.14.x manifests say `InstallerType: exe`,
-# `ProductCode: AnthropicClaude`), and Anthropic's docs say that build has no Cowork. It is the
-# old build when its Update.exe exists and no Claude MSIX is registered for this user.
+# `ProductCode: AnthropicClaude`), and Anthropic's docs say that build has no Cowork.
+#
+# It counts only when it is still a LIVE install: Update.exe, an app-*\claude.exe beside it, no
+# `.dead` marker, and no Claude MSIX registered for this user. Squirrel's uninstall can leave
+# Update.exe and a `.dead` marker behind; treating that residue as an install would stop Claude
+# Desktop ever being installed again for somebody who had followed the to-do below. (Squirrel's
+# leftovers are as Squirrel.Windows documents them, not measured here - #161.)
 #
 # Detected, and NOT migrated automatically. Anthropic documents no in-place migration, their
 # tracker has ClaudeSetup.exe run over an old install leaving it where it was
@@ -1788,8 +1793,12 @@ function Install-1PasswordCLI {
 # %APPDATA%\Claude\claude_desktop_config.json - where the CSA servers are registered - has not
 # been measured. #161 holds the checks that would make an automated migration safe.
 function Test-ClaudeLegacyExe {
-    $update = Join-Path $env:LOCALAPPDATA 'AnthropicClaude\Update.exe'
-    if (-not (Test-Path $update)) { return $false }
+    $root = Join-Path $env:LOCALAPPDATA 'AnthropicClaude'
+    if (-not (Test-Path (Join-Path $root 'Update.exe'))) { return $false }
+    if (Test-Path (Join-Path $root '.dead')) { return $false }
+    $live = @(Get-ChildItem -Path $root -Directory -Filter 'app-*' -ErrorAction SilentlyContinue |
+              Where-Object { Test-Path (Join-Path $_.FullName 'claude.exe') })
+    if ($live.Count -eq 0) { return $false }
     return (-not [bool](Get-AppxPackage -Name Claude -ErrorAction SilentlyContinue))
 }
 
