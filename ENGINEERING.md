@@ -61,7 +61,7 @@ Ten scripts, five macOS/Windows pairs. Each is self-contained and idempotent.
 | macOS | Windows | What |
 |---|---|---|
 | `macos-work-tools.sh` | `windows-work-tools.ps1` | Core work apps (1Password, Slack, Zoom, Chrome, Office, Git, GitHub CLI) plus an optional dev profile (VS Code, AWS CLI, Wrangler) |
-| `macos-ai-tools.sh` | `windows-ai-tools.ps1` | The AI layer: Claude Desktop and ChatGPT Desktop; Claude Code, Codex and Gemini CLIs; uv, Python, Node; the doc toolchain; plugin marketplaces; the CSA MCP server; and every internal CSA MCP server |
+| `macos-ai-tools.sh` | `windows-ai-tools.ps1` | The AI layer: Claude, ChatGPT, Gemini and Copilot desktop apps ([why each source](docs/desktop-ai-apps.md)); Claude Code, Codex and Gemini CLIs; uv, Python, Node; the doc toolchain; plugin marketplaces; the CSA MCP server; and every internal CSA MCP server |
 | `macos-update.sh` | `windows-update.ps1` | Update everything — Homebrew/winget, npm globals, pip, `claude update` — then the plugin and MCP sync. Snapshots versions first, for rollback |
 | `macos-plugins.sh` | `windows-plugins.ps1` | **The CSA layer only**: plugins *and* every CSA MCP server, with no Homebrew/winget/npm/pip. The fast path |
 | `clone-and-claude.sh` | `clone-and-claude.ps1` | Clone a CSA repo into `~/GitHub/Org/Repo` and print how to start Claude Code |
@@ -90,9 +90,11 @@ tools/
   check-*.py                 # eleven repo-specific checks; all eleven also run in CI
   sweep-csa-sources.sh       # weekly drift sweep (network + gh; NOT in check-all.sh)
 tests/
-  test_*.py                  # nine standalone executables — run one directly with python3
+  test_*.py                  # ten standalone executables — run one directly with python3
   NativeWrappers.Tests.ps1   # Pester; the only suite that needs real 5.1 to mean anything
+  DesktopApps.Tests.ps1      # Pester; windows-update.ps1's wait before replacing a running app
 docs/
+  desktop-ai-apps.md         # where each desktop AI app comes from, and how it stays current
   periodic-sweep.md          # the weekly sweep runbook
   mcp-servers.md             # historical third-party MCP config reference
 archives/                    # previous script versions, for reference
@@ -351,7 +353,7 @@ every file that uses it** — `check-duplication.py` enforces byte-identical beh
 
 ## The guard layer
 
-Eleven checkers in `tools/` and ten test files in `tests/`. **`./tools/check-all.sh` mirrors CI
+Eleven checkers in `tools/` and twelve test files in `tests/`. **`./tools/check-all.sh` mirrors CI
 exactly** — run it before pushing.
 
 A guard here is added only for a mistake that actually shipped, names its issue in the file, and

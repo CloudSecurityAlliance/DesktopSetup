@@ -96,6 +96,8 @@ PLAN_LABEL: dict[str, str | dict[str, str]] = {
     "install_1password_cli": "1Password CLI",
     "install_claude_desktop": "Claude Desktop",
     "install_chatgpt": "ChatGPT Desktop",
+    "install_gemini_desktop": "Gemini Desktop",
+    "install_copilot_desktop": "Copilot Desktop",
     "install_claude": "Claude Code",
     "install_codex": "Codex CLI",
     "install_gemini": "Gemini CLI",

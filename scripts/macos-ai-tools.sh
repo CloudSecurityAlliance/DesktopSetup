@@ -16,16 +16,20 @@
 #  10. Claude Desktop (via Homebrew cask; app self-updates, so direct-
 #      download copies are detected and left alone)
 #  11. ChatGPT Desktop (via Homebrew cask; same self-update story)
-#  12. Claude Code (native installer, auto-updates)
-#  13. OpenAI Codex CLI (via npm)
-#  14. Google Gemini CLI (via npm)
+#  12. Gemini Desktop (via Homebrew cask `google-gemini`, NOT `gemini`; Apple
+#      Silicon and macOS 15 only; Google's updater keeps it current)
+#  13. Copilot Desktop (Microsoft's own .pkg, NOT the `microsoft-365-copilot`
+#      cask; Edge's updater keeps it current) — see docs/desktop-ai-apps.md
+#  14. Claude Code (native installer, auto-updates)
+#  15. OpenAI Codex CLI (via npm)
+#  16. Google Gemini CLI (via npm)
 #
 # Usage:
 #   bash -c "$(curl -fsSL https://raw.githubusercontent.com/CloudSecurityAlliance/DesktopSetup/HEAD/scripts/macos-ai-tools.sh)"
 
 set -euo pipefail
 
-SCRIPT_VERSION="2026.10021546"
+SCRIPT_VERSION="2026.10251430"
 
 # ── CSA plugin marketplaces ─────────────────────────────────────────
 # Plugin marketplaces to register with Claude Code. Each entry is an
@@ -378,6 +382,69 @@ get_app_mtime() {
   date -r "$1" +%Y-%m-%d 2>/dev/null
 }
 
+# Echo the .app bundle's CFBundleIdentifier. Empty on failure. The name on disk is not the
+# identity: `brew install --cask gemini` puts MacPaw's duplicate-file cleaner in /Applications,
+# and Google's Gemini is also "Gemini.app" - only the identifier tells them apart.
+get_app_bundle_id() {
+  defaults read "$1/Contents/Info.plist" CFBundleIdentifier 2>/dev/null
+}
+
+# ── Desktop apps that are running ───────────────────────────────────
+#
+# A desktop app must not be replaced while it runs: its files are swapped underneath it, and a
+# pkg or cask install over a live app leaves it half-old until it crashes or is relaunched.
+#
+# "Running" means the app's main executable, or anything under its Frameworks (the window and
+# renderer processes, which exit with it), belongs to THIS user. It deliberately does not count
+# the background agents a vendor registers from inside the bundle - Copilot's
+# Library/LoginItems/CopilotAppHost, Gemini's Helpers/GeminiAppLauncher, an updater in
+# Library/LaunchServices. Those are launchd jobs (seen in `launchctl list` beside the running
+# apps, 2026-10-24), which launchd may keep alive or relaunch on its own, so a wait that counted
+# them might never finish. The vendor's own installer is what stops and restarts them.
+#
+# Identified by PATH, not by name, for the reason Get-RunningAiClients gives on Windows: a name
+# says what somebody called a file. `ps -o comm=` on macOS prints the full executable path.
+app_running() {
+  local bundle="$1"
+  ps -x -U "$(id -u)" -o comm= 2>/dev/null \
+    | awk -v main="$bundle/Contents/MacOS/" -v fw="$bundle/Contents/Frameworks/" \
+        'index($0, main) == 1 || index($0, fw) == 1 { found = 1 } END { exit !found }'
+}
+
+# Wait for the person to quit an app fully before it is replaced. Returns 0 once it has exited
+# (or was never running), 1 when it is still running and the caller must leave it alone.
+#
+# Never quits the app on the person's behalf: an app can hold unsaved work, and only they know.
+# With nobody at the keyboard (NONINTERACTIVE) there is nobody to quit it, so it does not wait
+# at all - waiting would hang a headless run forever. Interactively it polls, and every minute
+# asks whether to keep waiting, so an app that will not exit cannot trap the run either.
+wait_for_app_exit() {
+  local name="$1" bundle="$2" waited=0
+  app_running "$bundle" || return 0
+
+  if [[ -n "${NONINTERACTIVE-}" ]]; then
+    warn "$name is running, and nobody is here to quit it - leaving it as it is."
+    return 1
+  fi
+
+  warn "$name is running. Quit it fully so it can be replaced:"
+  echo "  choose Quit from its menu, or press ⌘Q while it is in front - closing its window"
+  echo "  is not enough, it keeps running in the menu bar."
+  echo "  Waiting for it to exit..."
+  while app_running "$bundle"; do
+    if [[ $waited -ge 60 ]]; then
+      if ! confirm "$name is still running. Keep waiting?"; then
+        return 1
+      fi
+      waited=0
+    fi
+    sleep 2
+    waited=$((waited + 2))
+  done
+  success "$name has exited"
+  return 0
+}
+
 confirm() {
   if [[ -n "${NONINTERACTIVE-}" ]]; then return 0; fi
   local reply
@@ -456,6 +523,7 @@ csa_brew_upgrade() {
 claude_needs_migration=""   # "brew" or "npm" if installed wrong
 codex_needs_migration=""    # "brew" if installed via homebrew
 gemini_needs_migration=""   # "brew" if installed via homebrew
+copilot_needs_migration=""  # "brew" if the microsoft-365-copilot cask is installed
 path_updated=0              # set to 1 if ~/.local/bin was added to shell config
 
 detect_migrations() {
@@ -480,6 +548,14 @@ detect_migrations() {
     gemini_needs_migration="brew"
   elif has_command brew && brew list --cask gemini-cli >/dev/null 2>&1; then
     gemini_needs_migration="brew"
+  fi
+
+  # Copilot: should be Microsoft's unified app, not the cask. `microsoft-365-copilot` installs
+  # what Microsoft now calls "the former Microsoft 365 Copilot app" (the AutoUpdate build, 1.x)
+  # with AutoUpdate deselected, and the cask had not moved since 2026-09-30 when this was
+  # written. A Copilot from anywhere else is left alone: its own updater owns it.
+  if has_command brew && brew list --cask microsoft-365-copilot >/dev/null 2>&1; then
+    copilot_needs_migration="brew"
   fi
 }
 
@@ -625,6 +701,45 @@ preflight() {
   else
     echo "  ChatGPT Desktop ... install via Homebrew cask"
   fi
+
+  # Gemini Desktop and Copilot Desktop. Each row is printed from the same *_state function the
+  # install step acts on, so the plan and the run cannot describe two different decisions.
+  local gemini_app_ver gemini_app_dt
+  case "$(gemini_desktop_state)" in
+    cask|direct)
+      gemini_app_ver="$(get_app_version "$GEMINI_DESKTOP_APP")" || gemini_app_ver=""
+      gemini_app_dt="$(get_app_mtime "$GEMINI_DESKTOP_APP")" || gemini_app_dt=""
+      echo "  Gemini Desktop .... installed${gemini_app_ver:+ (v$gemini_app_ver${gemini_app_dt:+ · $gemini_app_dt})}"
+      ;;
+    other)
+      echo "  Gemini Desktop .... skip — $GEMINI_DESKTOP_APP is a different app, not Google's"
+      ;;
+    unsupported)
+      echo "  Gemini Desktop .... skip — needs Apple Silicon and macOS 15 or later"
+      ;;
+    *)
+      echo "  Gemini Desktop .... install via Homebrew cask (google-gemini)"
+      ;;
+  esac
+
+  local copilot_app copilot_app_ver copilot_app_dt
+  case "$(copilot_desktop_state)" in
+    migrate)
+      echo "  Copilot Desktop ... replace the Homebrew cask (Microsoft's former app) with Microsoft's own — quit Copilot first"
+      ;;
+    installed)
+      copilot_app="$(copilot_app_path)"
+      copilot_app_ver="$(get_app_version "$copilot_app")" || copilot_app_ver=""
+      copilot_app_dt="$(get_app_mtime "$copilot_app")" || copilot_app_dt=""
+      echo "  Copilot Desktop ... installed${copilot_app_ver:+ (v$copilot_app_ver${copilot_app_dt:+ · $copilot_app_dt})}"
+      ;;
+    unsupported)
+      echo "  Copilot Desktop ... skip — needs macOS 14 or later"
+      ;;
+    *)
+      echo "  Copilot Desktop ... install Microsoft's .pkg (about 400 MB; asks for your password)"
+      ;;
+  esac
 
   # Claude Code
   if [[ -n "$claude_needs_migration" ]]; then
@@ -1227,6 +1342,215 @@ install_chatgpt() {
 
   info "Installing ChatGPT Desktop"
   brew install --cask chatgpt || warn "Failed to install ChatGPT Desktop"
+}
+
+# ── Gemini Desktop and Copilot Desktop ──────────────────────────────
+# Both update themselves through a vendor service that runs whether the app is open or not -
+# Google's updater and Edge's updater - so this installs once and then stays out of the way.
+# Why each source was chosen, and the look-alike packages that were rejected:
+# docs/desktop-ai-apps.md.
+
+GEMINI_DESKTOP_APP="/Applications/Gemini.app"
+GEMINI_DESKTOP_ID="com.google.GeminiMacOS"
+
+COPILOT_APP="/Applications/Copilot.app"
+COPILOT_RECEIPT="com.microsoft.m365copilot"
+# Microsoft's per-architecture links for the unified Copilot app, from
+# learn.microsoft.com/windows/client-management/deploy-unified-copilot-app. The download page's
+# own link is a 764 MB universal package; these are about 410 MB each.
+COPILOT_PKG_ARM64="https://go.microsoft.com/fwlink/?linkid=2375510"
+COPILOT_PKG_X64="https://go.microsoft.com/fwlink/?linkid=2375509"
+# Read off the arm64 package on 2026-10-24 with `pkgutil --check-signature` (notarized). A
+# package not signed by this identity is not installed - this file runs `sudo installer` on it.
+COPILOT_SIGNER="Developer ID Installer: Microsoft Corporation (UBF8T346G9)"
+
+macos_major() {
+  local v
+  v="$(sw_vers -productVersion 2>/dev/null)" || v=""
+  echo "${v%%.*}"
+}
+
+# hw.optional.arm64, not `uname -m`: a shell running under Rosetta reports x86_64 on Apple
+# Silicon, and would pick the Intel package on an arm64 Mac.
+is_apple_silicon() {
+  local arm
+  arm="$(sysctl -n hw.optional.arm64 2>/dev/null)" || arm=""
+  [[ "$arm" == "1" ]]
+}
+
+# One answer for the plan and the install: cask | direct | other | unsupported | absent.
+gemini_desktop_state() {
+  if has_command brew && brew list --cask google-gemini >/dev/null 2>&1; then
+    echo "cask"
+    return 0
+  fi
+  if [[ -d "$GEMINI_DESKTOP_APP" ]]; then
+    local id
+    id="$(get_app_bundle_id "$GEMINI_DESKTOP_APP")" || id=""
+    if [[ "$id" == "$GEMINI_DESKTOP_ID" ]]; then
+      echo "direct"
+    else
+      # Not Google's. Installing over it would fail anyway - the cask's app is also Gemini.app.
+      echo "other"
+    fi
+    return 0
+  fi
+  local major
+  major="$(macos_major)"
+  if ! is_apple_silicon || [[ -z "$major" ]] || [[ "$major" -lt 15 ]]; then
+    echo "unsupported"
+    return 0
+  fi
+  echo "absent"
+}
+
+install_gemini_desktop() {
+  ensure_brew_in_path
+
+  case "$(gemini_desktop_state)" in
+    cask)
+      info "Gemini Desktop already installed; skipping"
+      return 0
+      ;;
+    direct)
+      info "Gemini Desktop already installed (non-Homebrew); skipping"
+      return 0
+      ;;
+    other)
+      warn "$GEMINI_DESKTOP_APP is not Google's Gemini; leaving it alone and not installing Gemini Desktop"
+      return 0
+      ;;
+    unsupported)
+      info "Gemini Desktop needs Apple Silicon and macOS 15 or later; skipping"
+      return 0
+      ;;
+  esac
+
+  # `google-gemini`, never `gemini`: that cask is MacPaw's duplicate-file cleaner.
+  info "Installing Gemini Desktop"
+  brew install --cask google-gemini || warn "Failed to install Gemini Desktop"
+}
+
+# Where the installed Copilot lives, or nothing. Asked of the package receipt first, because
+# the former app and the unified one share the receipt id but are not known to share a name,
+# and the receipt records where it installed (`volume: /`, `location: Applications`) rather
+# than leaving that to be assumed. A receipt survives an app dragged to the Trash, hence the -d
+# test on what it names.
+copilot_app_path() {
+  local info files volume location app path
+  # Captured whole, then parsed: a reader that stopped early could SIGPIPE pkgutil, and under
+  # pipefail the `|| x=""` would then throw away the line that was found.
+  info="$(pkgutil --pkg-info "$COPILOT_RECEIPT" 2>/dev/null)" || info=""
+  files="$(pkgutil --files "$COPILOT_RECEIPT" 2>/dev/null)" || files=""
+  volume="$(printf '%s\n' "$info" | awk -F': ' '$1 == "volume" { print $2 }')" || volume=""
+  location="$(printf '%s\n' "$info" | awk -F': ' '$1 == "location" { print $2 }')" || location=""
+  app="$(printf '%s\n' "$files" | awk -F/ 'NF == 1 && /\.app$/ && !seen { print; seen = 1 }')" || app=""
+  if [[ -n "$app" ]] && [[ -n "$volume" ]]; then
+    path="${volume%/}/${location:+$location/}$app"
+    if [[ -d "$path" ]]; then
+      echo "$path"
+      return 0
+    fi
+  fi
+  if [[ -d "$COPILOT_APP" ]]; then
+    echo "$COPILOT_APP"
+  fi
+  return 0
+}
+
+# One answer for the plan and the install: migrate | installed | unsupported | absent.
+copilot_desktop_state() {
+  if [[ "$copilot_needs_migration" == "brew" ]]; then
+    echo "migrate"
+    return 0
+  fi
+  if [[ -n "$(copilot_app_path)" ]]; then
+    echo "installed"
+    return 0
+  fi
+  local major
+  major="$(macos_major)"
+  if [[ -z "$major" ]] || [[ "$major" -lt 14 ]]; then
+    echo "unsupported"
+    return 0
+  fi
+  echo "absent"
+}
+
+# The cask's Copilot is replaced, not left beside the new one: both claim the same receipt, and
+# the cask installs it with Microsoft AutoUpdate deselected, so it would sit at whatever version
+# Homebrew last recorded. The person quits it first - see wait_for_app_exit.
+migrate_copilot() {
+  local bundle
+  bundle="$(copilot_app_path)"
+  info "Replacing the Homebrew Copilot (Microsoft's former Microsoft 365 Copilot app) with Microsoft's own Copilot"
+  if [[ -n "$bundle" ]] && ! wait_for_app_exit "Copilot" "$bundle"; then
+    warn "Left the Homebrew Copilot in place."
+    if ! csa_todo_add 43 "Quit Copilot fully (Quit from its menu, not just its window), then re-run this installer to replace the Homebrew Copilot with Microsoft's own" - -; then
+      echo "  Quit Copilot fully, then re-run this installer to replace it."
+    fi
+    return 1
+  fi
+  if ! brew uninstall --cask microsoft-365-copilot; then
+    warn "Could not remove the Homebrew Copilot; leaving it in place"
+    return 1
+  fi
+  return 0
+}
+
+install_copilot_desktop() {
+  ensure_brew_in_path
+
+  case "$(copilot_desktop_state)" in
+    installed)
+      info "Copilot Desktop already installed; it updates itself"
+      return 0
+      ;;
+    unsupported)
+      info "Copilot Desktop needs macOS 14 or later; skipping"
+      return 0
+      ;;
+    migrate)
+      migrate_copilot || return 0
+      ;;
+  esac
+
+  local url tmp pkg sig
+  if is_apple_silicon; then url="$COPILOT_PKG_ARM64"; else url="$COPILOT_PKG_X64"; fi
+  if ! tmp="$(mktemp -d)"; then
+    warn "Could not create a temporary directory; skipping Copilot Desktop"
+    return 0
+  fi
+  pkg="$tmp/Copilot.pkg"
+
+  info "Downloading Copilot Desktop from Microsoft (about 400 MB)"
+  if ! curl -fL --progress-bar -o "$pkg" "$url"; then
+    warn "Failed to download Copilot Desktop"
+    rm -rf "$tmp"
+    return 0
+  fi
+
+  sig="$(pkgutil --check-signature "$pkg" 2>&1)" || sig=""
+  if [[ "$sig" != *"$COPILOT_SIGNER"* ]]; then
+    warn "The downloaded Copilot package is not signed by Microsoft; not installing it"
+    rm -rf "$tmp"
+    return 0
+  fi
+
+  info "Installing Copilot Desktop (macOS asks for your password)"
+  # -n with nobody at the keyboard: fail at once rather than wait on a password nobody types.
+  local installed=0
+  if [[ -n "${NONINTERACTIVE-}" ]]; then
+    if sudo -n installer -pkg "$pkg" -target /; then installed=1; fi
+  else
+    if sudo installer -pkg "$pkg" -target /; then installed=1; fi
+  fi
+  rm -rf "$tmp"
+  if [[ $installed -eq 1 ]]; then
+    success "Copilot Desktop installed; Edge's updater keeps it current"
+  else
+    warn "Failed to install Copilot Desktop"
+  fi
 }
 
 setup_git_identity() {
@@ -1887,6 +2211,12 @@ summary() {
   if brew list --cask chatgpt >/dev/null 2>&1 || [[ -d "/Applications/ChatGPT.app" ]]; then
     echo "  ChatGPT Desktop ... installed"
   fi
+  case "$(gemini_desktop_state)" in
+    cask|direct) echo "  Gemini Desktop .... installed" ;;
+  esac
+  if [[ -n "$(copilot_app_path)" ]]; then
+    echo "  Copilot Desktop ... installed"
+  fi
   if has_command claude; then
     echo "  Claude Code ....... $(get_version claude --version)"
   fi
@@ -1976,6 +2306,8 @@ main() {
   install_1password_cli
   install_claude_desktop
   install_chatgpt
+  install_gemini_desktop
+  install_copilot_desktop
   install_claude
   install_codex
   install_gemini

@@ -36,7 +36,8 @@ see [Other scripts](#other-scripts) at the end. **You do not need it today.**
 
 ## What a run gives you
 
-Claude Desktop and ChatGPT Desktop; the Claude Code, Codex and Gemini CLIs;
+Claude Desktop, ChatGPT Desktop, Gemini Desktop and Microsoft Copilot, each kept current by its
+own updater; the Claude Code, Codex and Gemini CLIs;
 1Password (app + CLI); Git and GitHub CLI with your identity configured from your GitHub
 profile; Node, Python (via uv), `pandoc` and `typst`; a curated set of Claude Code plugins; and
 **four CSA MCP servers** if your GitHub account has CSA-Internal access:

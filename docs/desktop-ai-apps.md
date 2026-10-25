@@ -1,0 +1,183 @@
+# Desktop AI apps: where each one comes from, and how it stays current
+
+Four desktop AI apps are installed by `macos-ai-tools.sh` and `windows-ai-tools.ps1`: Claude
+Desktop, ChatGPT Desktop, Gemini Desktop and Microsoft Copilot. This note records why each
+comes from the source it does. It was researched on 2026-10-23 and 2026-10-24, from a Mac with
+all four apps installed, from the vendors' own documentation, and from the package manifests
+themselves. **The Windows half has not run on Windows**; [#161](https://github.com/CloudSecurityAlliance/DesktopSetup/issues/161)
+lists what to measure.
+
+## The rule
+
+**Every one of these apps updates itself, on macOS and on Windows. On Linux, none of them do.**
+So the installer's job is narrow: put the vendor's own build on the machine, in a way that
+registers it with the vendor's updater, and then stay out of the way. Whether a package manager
+carries the newest version matters much less than whether the source is official and hooked up
+to that updater. A winget manifest three days behind is harmless. A Homebrew cask that installs
+a retired build with its updater switched off is not.
+
+## What is installed, by platform
+
+| App | macOS | Windows | Updated by |
+|---|---|---|---|
+| Claude | `brew install --cask claude` | `winget install --id Anthropic.Claude` (now an MSIX) | its own updater, about every 4 h; a restart is forced within 72 h of a download |
+| ChatGPT | `brew install --cask chatgpt` | Microsoft Store `9PLM9XGG6VKS` via `--source msstore` | Sparkle on macOS; the Store plus a built-in updater on Windows |
+| Gemini | `brew install --cask google-gemini`, Apple Silicon and macOS 15+ only | `winget install --exact --id Google.GeminiDesktop` | Google's updater (Keystone/GoogleUpdater) on macOS; a Google update client built into the app on Windows |
+| Copilot | Microsoft's own `.pkg`, per architecture, signature-checked, `sudo installer` | `winget install --exact --id Microsoft.Copilot` (machine-wide MSI) | Edge's updater on both platforms |
+
+## Two kinds of updater, and why the difference matters
+
+| | Runs with the app closed? | Apps |
+|---|---|---|
+| Inside the app | No, only while it is open | Claude, ChatGPT on macOS |
+| A system service | Yes, a launchd job or Windows service | Gemini on macOS (Google's updater), Copilot on both (Edge's updater) |
+
+Seen on this Mac on 2026-10-23. Claude's updater log showed an update applied the day before.
+Copilot was registered with Edge's updater at the current version. ChatGPT's Sparkle had last
+checked on 10-20, while the app was closed, and sat two releases behind one published that day.
+An in-app updater keeps an app current only if the app gets opened. A status report should
+compare against the vendor's feed, not just confirm the app exists.
+
+## Per app
+
+### Claude
+
+- The macOS cask matched Anthropic's update feed exactly (3.6556.2, 2026-10-22).
+- On Windows, **winget's `Anthropic.Claude` changed from the old Squirrel `.exe` to an MSIX.**
+  The 0.14.x manifests say `InstallerType: exe` and `ProductCode: AnthropicClaude`; current
+  ones say `InstallerType: msix`. Anthropic says only the MSIX has Cowork, and that a per-user
+  MSIX install **without administrator rights is refused (`0x80073D28`)**. That matters because
+  `windows-ai-tools.ps1` refuses to run as Administrator. Possibly an existing defect on fresh
+  machines; #161 item 1.
+- winget lags. On 2026-10-23 it offered 2.42304.2 while five 3.x submissions sat in review. The
+  app updates itself within hours of installing, so the lag costs little.
+- **The old `.exe` build is detected, not migrated.** `Install-ClaudeDesktop` sees it
+  (`%LOCALAPPDATA%\AnthropicClaude\Update.exe` present, no `Claude` MSIX registered) and adds a
+  to-do with the manual steps. Anthropic documents no in-place migration. Their tracker has
+  `ClaudeSetup.exe` run over an old install leaving it in place (anthropics/claude-code#79832).
+  And nobody has measured whether uninstalling keeps `claude_desktop_config.json`, where the CSA
+  servers are registered.
+
+### ChatGPT
+
+- OpenAI's current desktop app is built from its Codex app. On macOS the bundle identifier is
+  `com.openai.codex`, and the `chatgpt` cask downloads from `codex-app-prod`. Nothing here keys
+  on bundle identifiers, so nothing broke.
+- On Windows the Store is OpenAI's documented route. **On 2026-10-23 a community manifest,
+  `OpenAI.ChatGPT`, appeared in the regular winget source.** It installs the same Store-signed
+  MSIX straight from OpenAI's CDN. It is not used yet; #161 item 5 decides whether it becomes the
+  fallback for a failed Store install.
+
+### Gemini
+
+- macOS: `google-gemini`. **Never `gemini`**, which is MacPaw's duplicate-file cleaner. Google's
+  app is also named `Gemini.app`, so `gemini_desktop_state` checks the bundle identifier
+  (`com.google.GeminiMacOS`). A `Gemini.app` that is not Google's is neither counted as
+  installed nor installed over.
+- Windows: `Google.GeminiDesktop` is a **community** manifest, but every installer it names is
+  pinned by SHA-256 to Google's own `dl.google.com` download. The checksum was confirmed by
+  downloading the 1.16.0 x64 installer. That file is the full electron-builder NSIS installer
+  (per-user). Its bytes contain Google's update client (`gemini_helper` with
+  `OmahaUpdateCheckResult`, and a "Restart to update" string), so a winget install should update
+  itself. That is inferred, not observed; #161 item 3.
+- The macOS app bundles its own MCP servers (`autodesk_mcp_server`, `blender_mcp_server`) and an
+  Antigravity launcher (`agy`). They are its own, not CSA's.
+- No official Linux app exists. The snap and AppImage "Gemini Desktop" packages are unofficial
+  web wrappers.
+
+### Copilot
+
+- Microsoft merged "Microsoft Copilot" and "Microsoft 365 Copilot" into one app
+  ([deploy-unified-copilot-app](https://learn.microsoft.com/en-us/windows/client-management/deploy-unified-copilot-app)).
+  The merged app is built on Edge's engine and updated by Edge's updater. On macOS it keeps the
+  bundle identifier and package receipt `com.microsoft.m365copilot`, at version 153.x.
+- **The `microsoft-365-copilot` cask installs the *former* app**: the Microsoft AutoUpdate build,
+  1.2609, with AutoUpdate deselected. The cask had not moved since 2026-09-30. Its `homepage`
+  is the Copilot download page, but its `url` is a different binary, so following the cask's own
+  link is what exposed the mismatch. A Copilot already installed from that cask is replaced, only
+  after the person quits it (below). A Copilot from anywhere else is left to its own updater.
+- macOS source: Microsoft's per-architecture links from the deployment doc (`fwlink 2375510`
+  for arm64, `2375509` for Intel, about 410 MB each). The download page's own link is a 764 MB
+  universal package. The arm64 package checked on 2026-10-24 was signed `Developer ID Installer:
+  Microsoft Corporation (UBF8T346G9)` and notarized, with payload `./Copilot.app`. The script
+  refuses a package without that signer, because it runs `sudo installer` on it.
+- Windows: `Microsoft.Copilot` is published by Microsoft's own pipeline (`esrp-winget-prod[bot]`).
+  It is the same `CopilotStableEnterprise*.msi` Microsoft documents for offline deployment, and
+  it installs machine-wide. Detection also checks `Program Files (x86)\Microsoft\Copilot\Application`,
+  because Edge's updater installed Copilot on many machines by itself in April 2026.
+
+## Look-alikes that were rejected
+
+| Name | What it actually is |
+|---|---|
+| `brew install --cask gemini` | MacPaw's duplicate-file cleaner ("Gemini 2") |
+| `brew install copilot` (formula) | AWS Copilot, a CLI for Amazon ECS and Fargate |
+| `brew install --cask microsoft-365-copilot` | The *former* Microsoft 365 Copilot app, with its updater deselected |
+| winget `Microsoft.365Copilot` | The former app: the Office hub, renamed (`Microsoft.MicrosoftOfficeHub`) |
+| winget `j178.ChatGPT`, `lencx.ChatGPT`, `sonnylab.chatgpt` | Third-party ChatGPT wrappers |
+| snap `gemini-desktop`, `bwendell/gemini-desktop` | Unofficial Gemini web wrappers |
+
+## Replacing an app that is running
+
+An app is never replaced while it runs: its files would be swapped underneath it. The scripts
+replace a desktop app in exactly two places:
+
+- `macos-ai-tools.sh`, when it swaps a Homebrew `microsoft-365-copilot` for Microsoft's own
+  Copilot (`migrate_copilot`).
+- `windows-update.ps1`, when `winget upgrade --all` is about to upgrade a desktop app that is
+  running (`Update-Winget`). The plan names any such app before the person agrees to the run.
+
+`macos-update.sh` has no equivalent. `brew upgrade` without `--greedy` skips casks that update
+themselves, and all of these do.
+
+**What counts as running.** The app's main executable, or anything under its `Frameworks`
+(the window and renderer processes, which exit with it), for the current user. On Windows: a
+process whose image path matches the app's install location, in the current session. The
+vendors' background agents are **not** counted: Copilot's `LoginItems/CopilotAppHost`, Gemini's
+`GeminiAppLauncher`, updaters under `LaunchServices`, and on Windows the session-0 services
+(Claude's Cowork service, Copilot's proxy). launchd and the Service Control Manager keep these
+alive, so a wait that counted them might never end. The vendor's installer stops and restarts
+them itself. Apps are identified by path, never by process name, for the reasons recorded at
+`Get-RunningAiClients`.
+
+**How the wait behaves.**
+
+- It never quits the app on the person's behalf. An app can hold unsaved work, and only they know.
+- It explains how to quit fully: from the menu or menu-bar icon on macOS, from the tray icon on
+  Windows. Closing the window leaves all of these apps running.
+- It polls every two seconds, and every minute asks whether to keep waiting, so an app that will
+  not exit cannot trap the run. Declining leaves the app as it is. The Copilot migration adds a
+  to-do; the Windows update warns that winget may fail for that app, which still updates itself.
+- With nobody at the keyboard (`NONINTERACTIVE`) it does not wait at all.
+
+Tested by `tests/test_desktop_apps.py` (macOS logic, with a control showing a naive name match
+fails it) and `tests/DesktopApps.Tests.ps1` (Windows logic). Neither proves the Windows paths
+are right; that is #161.
+
+## Linux
+
+Not installed by anything here. The Linux tier is headless, for AI agents
+([DEC-013](https://github.com/CloudSecurityAlliance-Internal/CINO-Platform-Engineering/blob/main/DECISIONS.md)),
+and a desktop app has no place on it. If a Linux desktop tier is ever added:
+
+| App | Status (2026-10-23) |
+|---|---|
+| Claude | Official beta since 2026-06-30. Anthropic's APT repository, Ubuntu 22.04+ and Debian 12+, amd64 and arm64. No self-update: `apt upgrade` delivers it (3.6556.2, the same as macOS) |
+| ChatGPT | Official preview since 2026-08-11. The `.deb`/`.rpm` sets up OpenAI's signed repository; there is a script for Arch. Updated by apt, dnf or pacman |
+| Gemini, Copilot | No official Linux app |
+
+## Sources
+
+- Claude: [Installation and setup](https://claude.com/docs/third-party/claude-desktop/installation),
+  [Deploy Claude Desktop for Windows](https://support.claude.com/en/articles/12622703-deploy-claude-desktop-for-windows),
+  [Claude Desktop on Linux](https://code.claude.com/docs/en/desktop-linux)
+- ChatGPT: [Deploy the Windows app](https://learn.chatgpt.com/docs/enterprise/windows-deployment),
+  [Manage app updates](https://learn.chatgpt.com/docs/enterprise/manage-app-updates),
+  [Linux app](https://learn.chatgpt.com/docs/linux/linux-app)
+- Gemini: [gemini.google/desktop](https://gemini.google/desktop/),
+  [Use the Gemini app for Windows](https://support.google.com/gemini/answer/18263854)
+- Copilot: [Deploy the unified Microsoft Copilot application](https://learn.microsoft.com/en-us/windows/client-management/deploy-unified-copilot-app),
+  [Microsoft Copilot update policies](https://learn.microsoft.com/en-us/windows/client-management/copilot-update-policy-control)
+- Manifests: `microsoft/winget-pkgs` (`Anthropic.Claude`, `OpenAI.ChatGPT`, `Google.GeminiDesktop`,
+  `Microsoft.Copilot`, `Microsoft.365Copilot`) and `Homebrew/homebrew-cask` (`claude`, `chatgpt`,
+  `google-gemini`, `gemini`, `microsoft-365-copilot`), read 2026-10-23.

@@ -17,7 +17,7 @@
 
 $ErrorActionPreference = 'Stop'
 
-$ScriptVersion = "2026.10021000"
+$ScriptVersion = "2026.10251430"
 
 # ── Snapshot location ───────────────────────────────────────
 
@@ -1062,6 +1062,111 @@ function Save-Snapshot {
 
 # ── Updaters ────────────────────────────────────────────────────────
 
+# ── Desktop apps that must be quit before winget replaces them ──────
+#
+# `winget upgrade --all` reaches the four desktop AI apps windows-ai-tools.ps1 installs, and
+# replacing one while it runs fails or leaves it half-old: an MSIX update of a running Claude
+# Desktop fails with 0x80073D02 (anthropics/claude-code#63397). All four update themselves, so
+# winget usually has nothing newer and this never fires; it matters when an app's own updater
+# has stalled, which is exactly when winget is the thing that fixes it.
+#
+# `brew upgrade` has no equivalent problem: without --greedy it skips casks that update
+# themselves, which all four macOS casks do (see update_brew in macos-update.sh).
+#
+# Identified by image PATH, for the reason Get-RunningAiClients in windows-ai-tools.ps1 gives, and
+# only in this user's session: Claude's Cowork service and Copilot's proxy run in session 0 as
+# services, never exit when the app is quit, and would make a wait endless. None of these paths
+# has been measured on Windows yet - #161.
+$DesktopApps = @(
+    @{ Name = 'Claude Desktop';  Id = 'Anthropic.Claude';     Source = '';
+       Paths = @('*\WindowsApps\Claude_*', '*\AnthropicClaude\*') },
+    @{ Name = 'ChatGPT Desktop'; Id = '9PLM9XGG6VKS';         Source = 'msstore';
+       Paths = @('*\WindowsApps\OpenAI.Codex_*') },
+    @{ Name = 'Gemini Desktop';  Id = 'Google.GeminiDesktop'; Source = '';
+       Paths = @('*\Gemini.exe') },
+    @{ Name = 'Copilot Desktop'; Id = 'Microsoft.Copilot';    Source = '';
+       Paths = @('*\Microsoft\Copilot\Application\*') }
+)
+$script:desktopAppsToClose = @()
+
+function Get-RunningDesktopApps {
+    $session = (Get-Process -Id $PID).SessionId
+    $running = @{}
+    foreach ($proc in (Get-Process -ErrorAction SilentlyContinue)) {
+        if ($proc.SessionId -ne $session) { continue }
+        $path = ''
+        try { $path = $proc.Path } catch { }
+        if (-not $path) { continue }
+        foreach ($app in $DesktopApps) {
+            foreach ($pattern in $app.Paths) {
+                if ($path -like $pattern) { $running[$app.Name] = $true }
+            }
+        }
+    }
+    return @($DesktopApps | Where-Object { $running.ContainsKey($_.Name) })
+}
+
+function Test-DesktopAppRunning {
+    param([string]$Name)
+    return [bool](@(Get-RunningDesktopApps) | Where-Object { $_.Name -eq $Name })
+}
+
+function Test-WingetUpgradePending {
+    param([string]$Id, [string]$Source)
+    if ($Source) {
+        $out = Invoke-NativeOutput { winget list --exact --id $Id --source $Source --upgrade-available --accept-source-agreements }
+    } else {
+        $out = Invoke-NativeOutput { winget list --exact --id $Id --upgrade-available --accept-source-agreements }
+    }
+    return [bool]($out -and ($out | Select-String -SimpleMatch $Id))
+}
+
+# Running AND about to be replaced. Asked of winget only for the apps that are running, so a run
+# with every app closed costs no extra winget calls.
+function Get-DesktopAppsAwaitingClose {
+    $due = @()
+    foreach ($app in @(Get-RunningDesktopApps)) {
+        if (Test-WingetUpgradePending $app.Id $app.Source) { $due += $app }
+    }
+    return $due
+}
+
+# Wait for the person to quit an app fully. $true once it has exited (or was never running),
+# $false when it is still running.
+#
+# Never closes the app for them: it may hold unsaved work, and only they know. With nobody at
+# the keyboard (NONINTERACTIVE) it does not wait at all, or a headless run would hang forever.
+# Interactively it polls, and every minute asks whether to keep waiting, so an app that will
+# not exit cannot trap the run either.
+function Wait-ForAppExit {
+    param([string]$Name)
+    if (-not (Test-DesktopAppRunning $Name)) { return $true }
+
+    if ($env:NONINTERACTIVE -eq '1') {
+        Write-Warn "$Name is running, and nobody is here to quit it - leaving it as it is."
+        return $false
+    }
+
+    Write-Warn "$Name is running. Quit it fully so it can be updated:"
+    Write-Host "   right-click its icon in the system tray (by the clock) and choose Quit -"
+    Write-Host "   closing its window is not enough, it keeps running there."
+    Write-Host "   Waiting for it to exit..."
+    # Logged, because this blocks on a person: "waiting for you" and "hung" must not look the
+    # same in a debug log (#96).
+    Write-CsaLog "waiting for $Name to exit" 'prompt'
+    $waited = 0
+    while (Test-DesktopAppRunning $Name) {
+        if ($waited -ge 60) {
+            if (-not (Confirm-Step "$Name is still running. Keep waiting?")) { return $false }
+            $waited = 0
+        }
+        Start-Sleep -Seconds 2
+        $waited += 2
+    }
+    Write-Success "$Name has exited"
+    return $true
+}
+
 # `winget upgrade --all` is the counterpart of `brew upgrade`: everything the package manager
 # manages, not just what CSA installed. Same scope, same reasoning - a user running "update
 # everything" means everything, and a curated list would silently leave the rest to rot.
@@ -1070,6 +1175,13 @@ function Update-Winget {
 
     Write-Info "Refreshing winget sources"
     $null = Invoke-NativeShow { winget source update }
+
+    # Decided in Show-Preflight, so the person was told before agreeing to the run.
+    foreach ($app in @($script:desktopAppsToClose)) {
+        if (-not (Wait-ForAppExit $app.Name)) {
+            Write-Warn "  winget may fail to update $($app.Name) while it runs. It updates itself, so nothing is lost."
+        }
+    }
 
     Write-Info "Upgrading winget packages"
     $null = Invoke-NativeShow { winget upgrade --all --accept-package-agreements --accept-source-agreements }
@@ -1133,8 +1245,16 @@ function Show-Preflight {
     Write-Info "Update plan:"
     Write-Host ""
 
-    if (Has-Command winget) { Write-Host "  winget packages    : upgrade all" }
-    else                    { Write-Host "  winget packages    : skipped (winget not installed)" }
+    if (Has-Command winget) {
+        Write-Host "  winget packages    : upgrade all"
+        # Named here, before the person agrees: the run will stop and ask them to quit these.
+        $script:desktopAppsToClose = @(Get-DesktopAppsAwaitingClose)
+        foreach ($app in $script:desktopAppsToClose) {
+            Write-Host "                       $($app.Name) is running and has an update - you will be asked to quit it first"
+        }
+    } else {
+        Write-Host "  winget packages    : skipped (winget not installed)"
+    }
     if (Has-Command npm)    { Write-Host "  npm globals        : npm update -g" }
     else                    { Write-Host "  npm globals        : skipped (npm not installed)" }
     if (Has-Command python) { Write-Host "  pip packages       : upgrade pip, then every outdated package" }

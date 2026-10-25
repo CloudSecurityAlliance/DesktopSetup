@@ -11,16 +11,19 @@
 #   7. 1Password CLI (via winget)
 #   8. Claude Desktop (via winget, auto-updates)
 #   9. ChatGPT Desktop (via the Microsoft Store, auto-updates)
-#  10. Claude Code (native installer, auto-updates)
-#  11. OpenAI Codex CLI (via npm)
-#  12. Google Gemini CLI (via npm)
+#  10. Gemini Desktop (via winget Google.GeminiDesktop, auto-updates)
+#  11. Copilot Desktop (via winget Microsoft.Copilot - Microsoft's own package,
+#      machine-wide; Edge Update keeps it current) - see docs/desktop-ai-apps.md
+#  12. Claude Code (native installer, auto-updates)
+#  13. OpenAI Codex CLI (via npm)
+#  14. Google Gemini CLI (via npm)
 #
 # Usage:
 #   irm https://raw.githubusercontent.com/CloudSecurityAlliance/DesktopSetup/HEAD/scripts/windows-ai-tools.ps1 | iex
 
 $ErrorActionPreference = 'Stop'
 
-$ScriptVersion = "2026.10030129"
+$ScriptVersion = "2026.10251430"
 
 # ── CSA plugin marketplaces ─────────────────────────────────────────
 # Plugin marketplaces to register with Claude Code. Each entry is an
@@ -1082,9 +1085,12 @@ function Show-Preflight {
         Write-Host "  1Password CLI ..... install via winget"
     }
 
-    # Claude Desktop
+    # Claude Desktop. The old .exe build is checked first and decided the same way
+    # Install-ClaudeDesktop decides it, so the plan cannot promise one thing and the run do another.
     $claudeDesktop = Invoke-NativeOutput { winget list --id Anthropic.Claude --accept-source-agreements }
-    if ($claudeDesktop -and ($claudeDesktop | Select-String 'Anthropic.Claude')) {
+    if (Test-ClaudeLegacyExe) {
+        Write-Host "  Claude Desktop .... installed (the old .exe build, no Cowork - left as it is; the steps to move it are in the to-do list)"
+    } elseif ($claudeDesktop -and ($claudeDesktop | Select-String 'Anthropic.Claude')) {
         $v = Get-WingetVersion 'Anthropic.Claude'
         $suffix = if ($v) { ", v$v" } else { '' }
         Write-Host "  Claude Desktop .... installed (winget$suffix)"
@@ -1100,6 +1106,24 @@ function Show-Preflight {
         Write-Host "  ChatGPT Desktop ... installed (Microsoft Store$suffix)"
     } else {
         Write-Host "  ChatGPT Desktop ... install via the Microsoft Store"
+    }
+
+    # Gemini Desktop and Copilot Desktop, from the same Test-* functions the installs act on.
+    if (Test-GeminiDesktop) {
+        $gemEntry = Get-GeminiDesktopEntry
+        $gv = if ($gemEntry -and $gemEntry.DisplayVersion) { $gemEntry.DisplayVersion } else { Get-WingetVersion 'Google.GeminiDesktop' }
+        $suffix = if ($gv) { " (v$gv)" } else { '' }
+        Write-Host "  Gemini Desktop .... installed$suffix"
+    } else {
+        Write-Host "  Gemini Desktop .... install via winget (Google.GeminiDesktop)"
+    }
+
+    if (Test-CopilotDesktop) {
+        $cv = Get-CopilotDesktopVersion
+        $suffix = if ($cv) { " (v$cv)" } else { '' }
+        Write-Host "  Copilot Desktop ... installed$suffix"
+    } else {
+        Write-Host "  Copilot Desktop ... install via winget (Microsoft.Copilot, for every user - Windows asks for permission)"
     }
 
     # Claude Code
@@ -1173,10 +1197,15 @@ function Migrate-Claude {
     }
 }
 
-# ChatGPT Desktop comes from the MICROSOFT STORE, not winget. `OpenAI.ChatGPT` exists in no
-# source - measured 2026-09-29, `winget show --exact --id OpenAI.ChatGPT` answers "No package
-# found matching input criteria" - so three runs in one log each reported "Failed to install
-# ChatGPT Desktop" for an app that was already installed.
+# ChatGPT Desktop comes from the MICROSOFT STORE, the route OpenAI documents. On 2026-09-29
+# `OpenAI.ChatGPT` existed in no winget source - `winget show --exact --id OpenAI.ChatGPT`
+# answered "No package found matching input criteria" - and asking for it made three runs in one
+# log report "Failed to install ChatGPT Desktop" for an app that was already installed.
+#
+# That changed on 2026-10-23: a COMMUNITY manifest named `OpenAI.ChatGPT` now installs the same
+# Store-signed MSIX straight from OpenAI's CDN. It is not used here yet, because nobody has run
+# it on a machine without the Store or OpenAI's licence file; #161 decides whether it becomes
+# the fallback for a failed Store install.
 #
 # The Store package installs an MSIX whose package identity is `OpenAI.Codex`, which is ALSO the
 # winget id of the entirely unrelated Codex CLI. Test-CodexInstalledViaWinget below exists
@@ -1748,7 +1777,32 @@ function Install-1PasswordCLI {
     Refresh-Path
 }
 
+# The old Squirrel (.exe) build of Claude Desktop. winget's Anthropic.Claude installed it until
+# the manifest moved to an MSIX (the 0.14.x manifests say `InstallerType: exe`,
+# `ProductCode: AnthropicClaude`), and Anthropic's docs say that build has no Cowork. It is the
+# old build when its Update.exe exists and no Claude MSIX is registered for this user.
+#
+# Detected, and NOT migrated automatically. Anthropic documents no in-place migration, their
+# tracker has ClaudeSetup.exe run over an old install leaving it where it was
+# (anthropics/claude-code#79832), and whether uninstalling it keeps
+# %APPDATA%\Claude\claude_desktop_config.json - where the CSA servers are registered - has not
+# been measured. #161 holds the checks that would make an automated migration safe.
+function Test-ClaudeLegacyExe {
+    $update = Join-Path $env:LOCALAPPDATA 'AnthropicClaude\Update.exe'
+    if (-not (Test-Path $update)) { return $false }
+    return (-not [bool](Get-AppxPackage -Name Claude -ErrorAction SilentlyContinue))
+}
+
 function Install-ClaudeDesktop {
+    if (Test-ClaudeLegacyExe) {
+        Write-Warn "Claude Desktop is the old .exe build, which has no Cowork; leaving it in place"
+        $move = "Move Claude Desktop to the current build (the old .exe has no Cowork): quit Claude " +
+                "from its tray icon, uninstall 'Claude' in Settings > Apps, install it again from " +
+                "https://claude.com/download and approve the administrator prompt, then re-run this installer"
+        if (-not (Add-CsaTodo 43 $move '-' '-')) { Write-Host "   $move" }
+        return
+    }
+
     $wingetCheck = Invoke-NativeOutput { winget list --id Anthropic.Claude --accept-source-agreements }
     if ($wingetCheck -and ($wingetCheck | Select-String 'Anthropic.Claude')) {
         Write-Info "Claude Desktop already installed; skipping"
@@ -1767,9 +1821,10 @@ function Install-ChatGPT {
         return
     }
 
-    # --source msstore is required: this package exists in no other source, and without it
-    # winget resolves the name to third-party wrappers (j178.ChatGPT, lencx.ChatGPT,
-    # sonnylab.chatgpt are all in the winget source) which are emphatically not OpenAI's app.
+    # --source msstore is required: 9PLM9XGG6VKS is a Store id, and without the source winget
+    # resolves the name to third-party wrappers (j178.ChatGPT, lencx.ChatGPT, sonnylab.chatgpt
+    # are all in the winget source) which are emphatically not OpenAI's app. The community
+    # OpenAI.ChatGPT manifest is the one exception, and is not used yet - see $ChatGptStoreId.
     Write-Info "Installing ChatGPT Desktop from the Microsoft Store"
     $null = Invoke-NativeShow { winget install --exact --id $ChatGptStoreId --source msstore --accept-package-agreements --accept-source-agreements }
     if ($LASTEXITCODE -ne 0) {
@@ -1778,6 +1833,91 @@ function Install-ChatGPT {
         Write-Warn "  If this keeps failing, install ChatGPT from the Microsoft Store app."
     }
     Refresh-Path
+}
+
+# ── Gemini Desktop and Copilot Desktop ─────────────────────────────
+# Both update themselves - Gemini through the Google update client built into the app, Copilot
+# through Edge Update - so these install once and then stay out of the way. Why each source was
+# chosen, and the look-alikes that were rejected: docs/desktop-ai-apps.md. Nothing below has run
+# on Windows yet; #161 lists what to measure.
+
+# Gemini Desktop's uninstall entry, or $null. Asked of the uninstall registry because both of
+# Google's routes run the same per-user NSIS installer - winget's offline package and the
+# GeminiSetup.exe bootstrapper on gemini.google/desktop - so either writes this entry, while
+# `winget list` only recognises what it can correlate with its own manifest. Matched on name AND
+# publisher, because "Gemini" alone is not an identity.
+function Get-GeminiDesktopEntry {
+    $roots = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall',
+             'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall',
+             'HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall'
+    foreach ($root in $roots) {
+        $entries = Get-ChildItem -Path $root -ErrorAction SilentlyContinue |
+                   Get-ItemProperty -ErrorAction SilentlyContinue
+        foreach ($entry in $entries) {
+            if ($entry.DisplayName -eq 'Gemini' -and $entry.Publisher -like 'Google*') { return $entry }
+        }
+    }
+    return $null
+}
+
+function Test-GeminiDesktop {
+    if (Get-GeminiDesktopEntry) { return $true }
+    return [bool](Get-WingetVersion 'Google.GeminiDesktop')
+}
+
+function Install-GeminiDesktop {
+    if (Test-GeminiDesktop) {
+        Write-Info "Gemini Desktop already installed; skipping"
+        return
+    }
+
+    # --exact: winget's search would otherwise also offer community wrappers named "Gemini".
+    # Google.GeminiDesktop is a community manifest too, but every installer it names is pinned by
+    # SHA-256 to Google's own dl.google.com download.
+    Write-Info "Installing Gemini Desktop via winget"
+    $null = Invoke-NativeShow { winget install --exact --id Google.GeminiDesktop --accept-package-agreements --accept-source-agreements }
+    if ($LASTEXITCODE -ne 0) { Write-Warn "Failed to install Gemini Desktop (exit $LASTEXITCODE)" }
+}
+
+# Where the unified Copilot app lives once installed, by any route: Microsoft's MSI, the
+# download page's installer, the Store, or Edge Update installing it unasked (which it did on
+# many machines in April 2026). $null on 32-bit Windows, which has no Program Files (x86).
+function Get-CopilotDesktopDir {
+    if (-not ${env:ProgramFiles(x86)}) { return $null }
+    return (Join-Path ${env:ProgramFiles(x86)} 'Microsoft\Copilot\Application')
+}
+
+function Test-CopilotDesktop {
+    $dir = Get-CopilotDesktopDir
+    if ($dir -and (Test-Path $dir)) { return $true }
+    return [bool](Get-WingetVersion 'Microsoft.Copilot')
+}
+
+# Chromium-style layout: the Application folder holds one folder per installed version.
+function Get-CopilotDesktopVersion {
+    $dir = Get-CopilotDesktopDir
+    if (-not $dir -or -not (Test-Path $dir)) { return $null }
+    $versions = Get-ChildItem -Path $dir -Directory -ErrorAction SilentlyContinue |
+                Where-Object { $_.Name -match '^\d+(\.\d+){3}$' } |
+                ForEach-Object { [version]$_.Name } |
+                Sort-Object
+    if (-not $versions) { return $null }
+    return [string]@($versions)[-1]
+}
+
+function Install-CopilotDesktop {
+    if (Test-CopilotDesktop) {
+        Write-Info "Copilot Desktop already installed; it updates itself"
+        return
+    }
+
+    # Microsoft.Copilot is published by Microsoft's own pipeline, and is the
+    # CopilotStableEnterprise MSI Microsoft documents for offline deployment of the unified app.
+    # NOT Microsoft.365Copilot: that is the former app (the old Office hub, renamed). The MSI is
+    # machine-wide, so Windows asks for permission.
+    Write-Info "Installing Copilot Desktop via winget (Windows asks for permission: it installs for every user)"
+    $null = Invoke-NativeShow { winget install --exact --id Microsoft.Copilot --accept-package-agreements --accept-source-agreements }
+    if ($LASTEXITCODE -ne 0) { Write-Warn "Failed to install Copilot Desktop (exit $LASTEXITCODE)" }
 }
 
 function Install-Claude {
@@ -2422,6 +2562,12 @@ function Show-Summary {
     if (Test-ChatGptDesktop) {
         Write-Host "  ChatGPT Desktop ... installed"
     }
+    if (Test-GeminiDesktop) {
+        Write-Host "  Gemini Desktop .... installed"
+    }
+    if (Test-CopilotDesktop) {
+        Write-Host "  Copilot Desktop ... installed"
+    }
     if (Has-Command claude) {
         $claudeVer = Get-ToolVersion claude '--version'
         Write-Host "  Claude Code ....... $claudeVer"
@@ -2507,6 +2653,8 @@ function Main {
     Install-1PasswordCLI
     Install-ClaudeDesktop
     Install-ChatGPT
+    Install-GeminiDesktop
+    Install-CopilotDesktop
     Install-Claude
     Install-Codex
     Install-Gemini
