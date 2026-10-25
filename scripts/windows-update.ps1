@@ -17,7 +17,7 @@
 
 $ErrorActionPreference = 'Stop'
 
-$ScriptVersion = "2026.10252215"
+$ScriptVersion = "2026.10252223"
 
 # ── Snapshot location ───────────────────────────────────────
 
@@ -1078,7 +1078,8 @@ function Save-Snapshot {
 # services, never exit when the app is quit, and would make a wait endless. Measured 2026-10-25
 # (#161): ChatGPT ran from WindowsApps\OpenAI.Codex_*\app\ChatGPT.exe, Gemini 1.16.0 from
 # <InstallLocation>\app-1.16.0\Gemini.exe, Copilot from Application\copilotapp.exe and
-# Application\undocked_copilot\. Claude's MSIX path and the old build's are still unmeasured.
+# Application\undocked_copilot\. Claude's MSIX path is still unmeasured. Only Claude's current
+# build (the MSIX) is supported, so the old Squirrel build's folder is not looked for.
 #
 # Gemini installs per user wherever its installer chose, so its folder is read from its
 # uninstall entry (Get-DesktopAppPatterns). Its `Paths` here are only the FALLBACK when that
@@ -1101,7 +1102,7 @@ function Save-Snapshot {
 $DesktopApps = @(
     @{ Name = 'Claude Desktop';
        Ids = @(@{ Id = 'Anthropic.Claude'; Source = '' });
-       Paths = @('*\WindowsApps\Claude_*', '*\AnthropicClaude\*') },
+       Paths = @('*\WindowsApps\Claude_*') },
     @{ Name = 'ChatGPT Desktop';
        Ids = @(@{ Id = 'OpenAI.ChatGPT'; Source = '' }, @{ Id = '9PLM9XGG6VKS'; Source = 'msstore' });
        Paths = @('*\WindowsApps\OpenAI.Codex_*') },

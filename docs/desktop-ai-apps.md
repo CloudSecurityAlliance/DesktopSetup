@@ -4,8 +4,13 @@ Four desktop AI apps are installed by `macos-ai-tools.sh` and `windows-ai-tools.
 Desktop, ChatGPT Desktop, Gemini Desktop and Microsoft Copilot. This note records why each
 comes from the source it does. It was researched on 2026-10-23 and 2026-10-24, from a Mac with
 all four apps installed, from the vendors' own documentation, and from the package manifests
-themselves. **The Windows half has not run on Windows**; [#161](https://github.com/CloudSecurityAlliance/DesktopSetup/issues/161)
-lists what to measure.
+themselves. Most of the Windows half was then measured on a Windows 11 machine on 2026-10-25;
+[#161](https://github.com/CloudSecurityAlliance/DesktopSetup/issues/161) holds the results and
+what is still open.
+
+**What is supported.** The current build of each app, from a source that keeps it current. On
+Windows that assumes the **Microsoft Store is present**: ChatGPT comes from it, and there is no
+no-Store fallback. Old builds are not detected or migrated.
 
 ## The rule
 
@@ -43,22 +48,19 @@ compare against the vendor's feed, not just confirm the app exists.
 ### Claude
 
 - The macOS cask matched Anthropic's update feed exactly (3.6556.2, 2026-10-22).
-- On Windows, **winget's `Anthropic.Claude` changed from the old Squirrel `.exe` to an MSIX.**
-  The 0.14.x manifests say `InstallerType: exe` and `ProductCode: AnthropicClaude`; current
-  ones say `InstallerType: msix`. Anthropic says only the MSIX has Cowork, and that a per-user
-  MSIX install **without administrator rights is refused (`0x80073D28`)**. That matters because
-  `windows-ai-tools.ps1` refuses to run as Administrator. Possibly an existing defect on fresh
-  machines; #161 item 1.
+- On Windows, **every current `Anthropic.Claude` manifest carries both an MSIX and the old
+  Squirrel `.exe`** (`ProductCode: AnthropicClaude`, `Scope: user`); measured on the manifests
+  2.26454.2 to 2.42304.2. Anthropic says only the MSIX has Cowork, and that a per-user MSIX
+  install **without administrator rights is refused (`0x80073D28`)**. From a non-elevated prompt,
+  `winget show` selects the **`.exe`**, so a plain `winget install` on a fresh machine probably
+  gets the old build. That matters because `windows-ai-tools.ps1` refuses to run as
+  Administrator. Inferred from winget's installer selection, not from a fresh install; #161
+  item 1.
 - winget lags. On 2026-10-23 it offered 2.42304.2 while five 3.x submissions sat in review. The
   app updates itself within hours of installing, so the lag costs little.
-- **The old `.exe` build is detected, not migrated.** `Install-ClaudeDesktop` sees it only as a
-  *live* install: `%LOCALAPPDATA%\AnthropicClaude\Update.exe` plus an `app-*\claude.exe`, no
-  `.dead` marker, and no `Claude` MSIX registered. Squirrel's uninstall can leave `Update.exe` and
-  `.dead` behind, and counting that residue would stop Claude Desktop ever being installed again.
-  When it finds a live install, it adds a to-do with the manual steps. Anthropic documents no in-place migration. Their tracker has
-  `ClaudeSetup.exe` run over an old install leaving it in place (anthropics/claude-code#79832).
-  And nobody has measured whether uninstalling keeps `claude_desktop_config.json`, where the CSA
-  servers are registered.
+- **The old `.exe` build is not supported**, and is neither detected nor migrated. Only the
+  current build is. (An earlier draft detected it and added a to-do; it was dropped on
+  2026-10-25 because no old install remains to test a migration against.)
 
 ### ChatGPT
 
@@ -67,8 +69,12 @@ compare against the vendor's feed, not just confirm the app exists.
   on bundle identifiers, so nothing broke.
 - On Windows the Store is OpenAI's documented route. **On 2026-10-23 a community manifest,
   `OpenAI.ChatGPT`, appeared in the regular winget source.** It installs the same Store-signed
-  MSIX straight from OpenAI's CDN. It is not used yet; #161 item 5 decides whether it becomes the
-  fallback for a failed Store install.
+  MSIX straight from OpenAI's CDN. **It is not used to install.** The Store is assumed, so there
+  is no no-Store fallback.
+- winget **correlates the Store copy with `OpenAI.ChatGPT`** (measured 2026-10-25): `winget
+  upgrade` lists ChatGPT under that id, not under `9PLM9XGG6VKS`. So `winget upgrade --all` may
+  upgrade it through the community package. That is intended: that run upgrades everything it
+  can. The wait before it asks winget about both ids, and holds back whichever one is pending.
 
 ### Gemini
 
@@ -81,7 +87,10 @@ compare against the vendor's feed, not just confirm the app exists.
   downloading the 1.16.0 x64 installer. That file is the full electron-builder NSIS installer
   (per-user). Its bytes contain Google's update client (`gemini_helper` with
   `OmahaUpdateCheckResult`, and a "Restart to update" string), so a winget install should update
-  itself. That is inferred, not observed; #161 item 3.
+  itself. That is inferred, not observed yet; #161 item 3.
+- Measured 2026-10-25: a non-elevated `winget install` exits 0 with no UAC prompt, and writes
+  `HKCU\…\Uninstall\Gemini` (`Publisher: Google LLC`, `InstallLocation:
+  %LOCALAPPDATA%\Google\Gemini`). The app runs from `<InstallLocation>\app-<version>\Gemini.exe`.
 - The macOS app bundles its own MCP servers (`autodesk_mcp_server`, `blender_mcp_server`) and an
   Antigravity launcher (`agy`). They are its own, not CSA's.
 - No official Linux app exists. The snap and AppImage "Gemini Desktop" packages are unofficial
@@ -122,7 +131,13 @@ compare against the vendor's feed, not just confirm the app exists.
 - Windows: `Microsoft.Copilot` is published by Microsoft's own pipeline (`esrp-winget-prod[bot]`).
   It is the same `CopilotStableEnterprise*.msi` Microsoft documents for offline deployment, and
   it installs machine-wide. Detection also checks `Program Files (x86)\Microsoft\Copilot\Application`,
-  because Edge's updater installed Copilot on many machines by itself in April 2026.
+  because Edge's updater installed Copilot on many machines by itself in April 2026. winget lists
+  that copy as **`Microsoft.365Copilot`**, not `Microsoft.Copilot` (measured 2026-10-25), so the
+  wait asks about both.
+- Windows: **Copilot pre-launches at sign-in** (`copilotapp.exe --no-startup-window`), with no
+  window and no tray icon, and stays resident after its window is closed. So on Windows Copilot
+  counts as open only while it has a window. Its updates are Chromium-style, one folder per
+  version beside the running one, and land while it runs.
 
 ## Look-alikes that were rejected
 
@@ -192,10 +207,11 @@ Tested by `tests/test_desktop_apps.py` and `tests/DesktopApps.Tests.ps1`.
 - The macOS tests cover the wait, the states, and the Copilot install's order. Their control
   shows that a naive name match fails them, and in-memory mutations of the shipping code
   (including the exact ordering bug the review found) are each caught.
-- The Windows tests cover the wait, the hold and its release, Gemini's location rule, and the old
-  Claude build's detection.
+- The Windows tests cover the wait, the hold and its release, every winget id an app may be
+  upgraded through, Copilot's window rule, and Gemini's location rule.
 
-Neither proves the Windows paths or winget's `list` and `pin` behaviour; that is #161.
+The tests do not prove the Windows paths or winget's behaviour. Those were measured on
+2026-10-25 for ChatGPT, Gemini, Copilot and `winget pin`; #161 holds the results.
 
 ## Linux
 

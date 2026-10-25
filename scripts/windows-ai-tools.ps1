@@ -23,7 +23,7 @@
 
 $ErrorActionPreference = 'Stop'
 
-$ScriptVersion = "2026.10252215"
+$ScriptVersion = "2026.10252223"
 
 # ── CSA plugin marketplaces ─────────────────────────────────────────
 # Plugin marketplaces to register with Claude Code. Each entry is an
@@ -1088,12 +1088,8 @@ function Show-Preflight {
         Write-Host "  1Password CLI ..... install via winget"
     }
 
-    # Claude Desktop. The old .exe build is checked first and decided the same way
-    # Install-ClaudeDesktop decides it, so the plan cannot promise one thing and the run do another.
     $claudeDesktop = Invoke-NativeOutput { winget list --id Anthropic.Claude --accept-source-agreements }
-    if (Test-ClaudeLegacyExe) {
-        Write-Host "  Claude Desktop .... installed (the old .exe build, no Cowork - left as it is; the steps to move it are in the to-do list)"
-    } elseif ($claudeDesktop -and ($claudeDesktop | Select-String 'Anthropic.Claude')) {
+    if ($claudeDesktop -and ($claudeDesktop | Select-String 'Anthropic.Claude')) {
         $v = Get-WingetVersion 'Anthropic.Claude'
         $suffix = if ($v) { ", v$v" } else { '' }
         Write-Host "  Claude Desktop .... installed (winget$suffix)"
@@ -1206,9 +1202,11 @@ function Migrate-Claude {
 # log report "Failed to install ChatGPT Desktop" for an app that was already installed.
 #
 # That changed on 2026-10-23: a COMMUNITY manifest named `OpenAI.ChatGPT` now installs the same
-# Store-signed MSIX straight from OpenAI's CDN. It is not used here yet, because nobody has run
-# it on a machine without the Store or OpenAI's licence file; #161 decides whether it becomes
-# the fallback for a failed Store install.
+# Store-signed MSIX straight from OpenAI's CDN. It is not used to install, and there is no
+# no-Store fallback: these scripts assume the Microsoft Store is present. winget DOES correlate
+# the Store copy with `OpenAI.ChatGPT` (measured 2026-10-25), so `winget upgrade --all` in
+# windows-update.ps1 may upgrade it through that package - which is intended, since that run
+# upgrades everything it can.
 #
 # The Store package installs an MSIX whose package identity is `OpenAI.Codex`, which is ALSO the
 # winget id of the entirely unrelated Codex CLI. Test-CodexInstalledViaWinget below exists
@@ -1780,41 +1778,10 @@ function Install-1PasswordCLI {
     Refresh-Path
 }
 
-# The old Squirrel (.exe) build of Claude Desktop. winget's Anthropic.Claude installed it until
-# the manifest moved to an MSIX (the 0.14.x manifests say `InstallerType: exe`,
-# `ProductCode: AnthropicClaude`), and Anthropic's docs say that build has no Cowork.
-#
-# It counts only when it is still a LIVE install: Update.exe, an app-*\claude.exe beside it, no
-# `.dead` marker, and no Claude MSIX registered for this user. Squirrel's uninstall can leave
-# Update.exe and a `.dead` marker behind; treating that residue as an install would stop Claude
-# Desktop ever being installed again for somebody who had followed the to-do below. (Squirrel's
-# leftovers are as Squirrel.Windows documents them, not measured here - #161.)
-#
-# Detected, and NOT migrated automatically. Anthropic documents no in-place migration, their
-# tracker has ClaudeSetup.exe run over an old install leaving it where it was
-# (anthropics/claude-code#79832), and whether uninstalling it keeps
-# %APPDATA%\Claude\claude_desktop_config.json - where the CSA servers are registered - has not
-# been measured. #161 holds the checks that would make an automated migration safe.
-function Test-ClaudeLegacyExe {
-    $root = Join-Path $env:LOCALAPPDATA 'AnthropicClaude'
-    if (-not (Test-Path (Join-Path $root 'Update.exe'))) { return $false }
-    if (Test-Path (Join-Path $root '.dead')) { return $false }
-    $live = @(Get-ChildItem -Path $root -Directory -Filter 'app-*' -ErrorAction SilentlyContinue |
-              Where-Object { Test-Path (Join-Path $_.FullName 'claude.exe') })
-    if ($live.Count -eq 0) { return $false }
-    return (-not [bool](Get-AppxPackage -Name Claude -ErrorAction SilentlyContinue))
-}
-
+# Only the current build of Claude Desktop is supported - the MSIX, which has Cowork. The old
+# Squirrel .exe build is neither detected nor migrated: there is no old install left to test a
+# migration against, and the app's own updater has moved people on.
 function Install-ClaudeDesktop {
-    if (Test-ClaudeLegacyExe) {
-        Write-Warn "Claude Desktop is the old .exe build, which has no Cowork; leaving it in place"
-        $move = "Move Claude Desktop to the current build (the old .exe has no Cowork): quit Claude " +
-                "from its tray icon, uninstall 'Claude' in Settings > Apps, install it again from " +
-                "https://claude.com/download and approve the administrator prompt, then re-run this installer"
-        if (-not (Add-CsaTodo 43 $move '-' '-')) { Write-Host "   $move" }
-        return
-    }
-
     $wingetCheck = Invoke-NativeOutput { winget list --id Anthropic.Claude --accept-source-agreements }
     if ($wingetCheck -and ($wingetCheck | Select-String 'Anthropic.Claude')) {
         Write-Info "Claude Desktop already installed; skipping"
@@ -1836,7 +1803,7 @@ function Install-ChatGPT {
     # --source msstore is required: 9PLM9XGG6VKS is a Store id, and without the source winget
     # resolves the name to third-party wrappers (j178.ChatGPT, lencx.ChatGPT, sonnylab.chatgpt
     # are all in the winget source) which are emphatically not OpenAI's app. The community
-    # OpenAI.ChatGPT manifest is the one exception, and is not used yet - see $ChatGptStoreId.
+    # OpenAI.ChatGPT manifest is the one exception, and is not used to install - see $ChatGptStoreId.
     Write-Info "Installing ChatGPT Desktop from the Microsoft Store"
     $null = Invoke-NativeShow { winget install --exact --id $ChatGptStoreId --source msstore --accept-package-agreements --accept-source-agreements }
     if ($LASTEXITCODE -ne 0) {

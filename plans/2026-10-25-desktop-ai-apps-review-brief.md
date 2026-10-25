@@ -71,7 +71,7 @@ rules are in [`ENGINEERING.md`](../ENGINEERING.md) and apply in full:
 | 9 | **An app still running is not replaced on Windows**: held back with a temporary pin, which is always removed; the person's own pin is never touched | `Update-Winget`, `Add-WingetHold` | `Invoke-Pester tests/DesktopApps.Tests.ps1` | the "held back from the upgrade" and "placing the hold" blocks pass, including "releases its pin even when the upgrade itself fails" |
 | 10 | Nothing quits an app on the person's behalf | both waits | `git diff 8799fbb...feat/gemini-copilot-desktop -- scripts/ \| grep '^+' \| grep -E 'pkill\|killall\|Stop-Process\|osascript.*quit'` | no output |
 | 11 | The plan names every new step and every running app the update expects to ask about | preflights | `python3 tools/check-plan-covers-steps.py`; read `Show-Preflight` in `windows-update.ps1` | passes. The run asks again after refreshing sources, so it can find more than the plan named, never fewer |
-| 12 | Claude's old `.exe` build on Windows is detected only as a live install, and is not touched | `Test-ClaudeLegacyExe`, `Install-ClaudeDesktop` | the Pester block for it; read `Install-ClaudeDesktop` | five cases pass; no uninstall or install on that path, a to-do instead |
+| 12 | ~~Claude's old `.exe` build on Windows is detected only as a live install~~ **Dropped 2026-10-25:** only the current build is supported, so the detection, its to-do and its tests were removed | - | - | - |
 | 13 | `brew upgrade` never replaces a running desktop app | `update_brew` comment | `brew info --cask claude chatgpt google-gemini \| grep auto_updates` | all three `auto_updates` |
 | 14 | Both platforms changed together | parity | `python3 tools/check-parity.py` | passes with the two new `EQUIV` pairs |
 | 15 | Windows paths, IDs, and winget's `list`/`pin` behaviour are right on a real machine | `windows-ai-tools.ps1`, `windows-update.ps1` | **#161** | **not yet checkable from here; taken on trust** |
@@ -110,9 +110,11 @@ Windows PowerShell 5.1, 43 passed each.
 
 ## Known limits and deliberate choices
 
-- **No automated Claude `.exe` → MSIX migration** on Windows. It is unmeasured, and it touches the
-  file where CSA servers are registered (#161 item 2).
-- **`OpenAI.ChatGPT` (winget) is not used** until it is tested without the Store (#161 item 5).
+- **Only the current Claude build is supported** on Windows. The old `.exe` build is neither
+  detected nor migrated (decided 2026-10-25; #161 item 2 dropped).
+- **The Microsoft Store is assumed** on Windows. `OpenAI.ChatGPT` is not used to install and there
+  is no no-Store fallback (decided 2026-10-25; #161 item 5 dropped). `winget upgrade --all` may
+  still upgrade the Store copy through it, by design: that run upgrades everything it can.
 - **The wait never quits an app for the person**, and asks every minute whether to keep waiting.
   Declining leaves the app as it is: macOS adds a to-do; Windows holds it back from winget for
   that run.

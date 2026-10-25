@@ -1,6 +1,5 @@
 # Pester tests for the Windows desktop-AI-app logic: windows-update.ps1's wait before
-# `winget upgrade --all` replaces a running app (Claude, ChatGPT, Gemini, Copilot), and
-# windows-ai-tools.ps1's detection of Claude Desktop's old .exe build.
+# `winget upgrade --all` replaces a running app (Claude, ChatGPT, Gemini, Copilot).
 #
 # What this proves, and what it does not. It locks down the DECISIONS, which are pure logic and
 # testable on any runtime: which processes count as the app (by image path, in this user's
@@ -394,54 +393,5 @@ Describe 'windows-update.ps1' {
             Mock Invoke-NativeQuiet { 1 }
             Add-WingetHold $script:ClaudeDue | Should -Be 'failed'
         }
-    }
-}
-
-Describe 'windows-ai-tools.ps1: Claude Desktop''s old .exe build' {
-    BeforeAll {
-        foreach ($text in (Get-FunctionClosure -Path "$PSScriptRoot/../scripts/windows-ai-tools.ps1" -Roots @('Test-ClaudeLegacyExe'))) {
-            . ([scriptblock]::Create($text))
-        }
-        # Get-AppxPackage exists only on Windows; Pester can only mock a command that exists.
-        if (-not (Get-Command Get-AppxPackage -ErrorAction SilentlyContinue)) {
-            function script:Get-AppxPackage { param([string]$Name, $ErrorAction) }
-        }
-    }
-
-    BeforeEach {
-        $script:savedLocalAppData = $env:LOCALAPPDATA
-        $env:LOCALAPPDATA = Join-Path $TestDrive ([guid]::NewGuid().ToString())
-        $script:root = Join-Path $env:LOCALAPPDATA 'AnthropicClaude'
-        $null = New-Item -ItemType Directory -Path (Join-Path $script:root 'app-0.14.10') -Force
-        $null = New-Item -ItemType File -Path (Join-Path $script:root 'Update.exe') -Force
-        $null = New-Item -ItemType File -Path (Join-Path (Join-Path $script:root 'app-0.14.10') 'claude.exe') -Force
-        Mock Get-AppxPackage { $null }
-    }
-    AfterEach {
-        $env:LOCALAPPDATA = $script:savedLocalAppData
-    }
-
-    It 'is the old build when it is a live install and no Claude MSIX is registered' {
-        Test-ClaudeLegacyExe | Should -BeTrue
-    }
-
-    It 'is not, once a Claude MSIX is registered' {
-        Mock Get-AppxPackage { [pscustomobject]@{ Name = 'Claude' } }
-        Test-ClaudeLegacyExe | Should -BeFalse
-    }
-
-    It "is not, when Squirrel has marked it .dead (an uninstall's residue)" {
-        $null = New-Item -ItemType File -Path (Join-Path $script:root '.dead') -Force
-        Test-ClaudeLegacyExe | Should -BeFalse
-    }
-
-    It 'is not, when only Update.exe is left and no app folder holds claude.exe' {
-        Remove-Item -Recurse -Force (Join-Path $script:root 'app-0.14.10')
-        Test-ClaudeLegacyExe | Should -BeFalse
-    }
-
-    It 'is not, when there is no Update.exe at all' {
-        Remove-Item -Force (Join-Path $script:root 'Update.exe')
-        Test-ClaudeLegacyExe | Should -BeFalse
     }
 }
