@@ -439,3 +439,144 @@ Describe 'windows-ai-tools.ps1: installing Copilot Desktop' {
         Should -Invoke Invoke-NativeShow -Times 1 -Exactly -ParameterFilter { $Call.ToString() -match 'Microsoft\.Copilot' }
     }
 }
+
+# Measured 2026-10-25 (#161): non-elevated winget picks Claude's old .exe build, and its MSIX is
+# refused without admin, so Claude Desktop comes from Anthropic's ClaudeSetup.exe, which raises its
+# own UAC prompt. These lock down what is run, and when it is not.
+Describe 'windows-ai-tools.ps1: installing Claude Desktop' {
+    BeforeAll {
+        foreach ($text in (Get-FunctionClosure -Path "$PSScriptRoot/../scripts/windows-ai-tools.ps1" -Roots @('Install-ClaudeDesktop'))) {
+            . ([scriptblock]::Create($text))
+        }
+        $script:ClaudeSetupUrl = 'https://api.anthropic.com/api/desktop/win32/{0}/setup/latest/redirect'
+        $script:ClaudeDownloadPage = 'https://claude.com/download'
+        # Windows-only cmdlets; Pester can only mock a command that exists.
+        if (-not (Get-Command Get-AuthenticodeSignature -ErrorAction SilentlyContinue)) {
+            function script:Get-AuthenticodeSignature { param([string]$FilePath) }
+        }
+        # Loaded only if the code under test calls them; a stub makes "never called" assertable
+        # whether it does or not.
+        if (-not (Get-Command Invoke-NativeShow -ErrorAction SilentlyContinue)) {
+            function script:Invoke-NativeShow { param([scriptblock]$Call) }
+        }
+        if (-not (Get-Command Get-NativeArch -ErrorAction SilentlyContinue)) {
+            function script:Get-NativeArch { 'x64' }
+        }
+        if (-not (Get-Command Add-CsaTodo -ErrorAction SilentlyContinue)) {
+            function script:Add-CsaTodo { param($Order, $Title, $InClaude, $Terminal) $true }
+        }
+        if (-not (Get-Command Write-CsaLog -ErrorAction SilentlyContinue)) {
+            function script:Write-CsaLog { param($Message, $Kind) }
+        }
+    }
+    BeforeEach {
+        Mock Invoke-NativeOutput { @() }   # winget list: not installed
+        Mock Invoke-NativeShow { }
+        Mock Get-NativeArch { 'x64' }
+        Mock Invoke-WebRequest { }
+        Mock Get-AuthenticodeSignature {
+            $script:order += 'verify'
+            [pscustomobject]@{ Status = 'Valid'; SignerCertificate = [pscustomobject]@{
+                Subject = 'OID.1.3.6.1.4.1.311.60.2.1.3=US, SERIALNUMBER=4860621, C=US, S=California, L=San Francisco, O="Anthropic, PBC", CN="Anthropic, PBC"' } }
+        }
+        Mock Start-Process { $script:order += 'run'; [pscustomobject]@{ ExitCode = 0 } }
+        Mock Remove-Item { }
+        Mock New-Item { }
+        $script:order = @()
+        Mock Open-ReadOnlyLock {
+            $script:order += 'lock'
+            $l = New-Object PSObject
+            Add-Member -InputObject $l -MemberType ScriptMethod -Name Dispose -Value { $script:order += 'unlock' }
+            return $l
+        }
+        Mock Add-CsaTodo { $true }
+        Mock Write-Host { }
+        Mock Write-CsaLog { }
+        $script:savedNonInteractive = $env:NONINTERACTIVE
+        $env:NONINTERACTIVE = $null
+    }
+    AfterEach {
+        $env:NONINTERACTIVE = $script:savedNonInteractive
+    }
+
+    It 'runs the current ClaudeSetup.exe from api.anthropic.com, never winget' {
+        Install-ClaudeDesktop
+        Should -Invoke Invoke-WebRequest -Times 1 -Exactly -ParameterFilter { $Uri -eq 'https://api.anthropic.com/api/desktop/win32/x64/setup/latest/redirect' }
+        Should -Invoke Start-Process -Times 1 -Exactly
+        Should -Invoke Invoke-NativeShow -Times 0 -Exactly
+        Should -Invoke Add-CsaTodo -Times 0 -Exactly
+        Should -Invoke Remove-Item -Times 1 -Exactly
+    }
+
+    It 'asks for the Arm installer on an Arm machine' {
+        Mock Get-NativeArch { 'arm64' }
+        Install-ClaudeDesktop
+        Should -Invoke Invoke-WebRequest -Times 1 -Exactly -ParameterFilter { $Uri -like '*/win32/arm64/setup/*' }
+    }
+
+    It 'does nothing when Claude Desktop is already installed' {
+        Mock Invoke-NativeOutput { @('Name   Id               Version', 'Claude Anthropic.Claude 3.6556.2.0') }
+        Install-ClaudeDesktop
+        Should -Invoke Invoke-WebRequest -Times 0 -Exactly
+    }
+
+    It 'with nobody at the keyboard, downloads and runs nothing, and leaves a to-do' {
+        $env:NONINTERACTIVE = '1'
+        Install-ClaudeDesktop
+        Should -Invoke Invoke-WebRequest -Times 0 -Exactly
+        Should -Invoke Start-Process -Times 0 -Exactly
+        Should -Invoke Add-CsaTodo -Times 1 -Exactly
+    }
+
+    It 'never runs an installer that is not signed by Anthropic' {
+        Mock Get-AuthenticodeSignature {
+            [pscustomobject]@{ Status = 'Valid'; SignerCertificate = [pscustomobject]@{ Subject = 'O="Someone Else", CN="Anthropic, PBC"' } }
+        }
+        Install-ClaudeDesktop
+        Should -Invoke Start-Process -Times 0 -Exactly
+        Should -Invoke Add-CsaTodo -Times 1 -Exactly
+        Should -Invoke Remove-Item -Times 1 -Exactly
+    }
+
+    It 'never runs an installer whose signature is not valid' {
+        Mock Get-AuthenticodeSignature { [pscustomobject]@{ Status = 'HashMismatch'; SignerCertificate = $null } }
+        Install-ClaudeDesktop
+        Should -Invoke Start-Process -Times 0 -Exactly
+    }
+
+    It 'a declined or timed-out admin prompt (exit 1, measured) leaves a to-do' {
+        Mock Start-Process { [pscustomobject]@{ ExitCode = 1 } }
+        Install-ClaudeDesktop
+        Should -Invoke Add-CsaTodo -Times 1 -Exactly
+        Should -Invoke Remove-Item -Times 1 -Exactly
+    }
+
+    It 'a failed download leaves a to-do and runs nothing' {
+        Mock Invoke-WebRequest { throw '403' }
+        Install-ClaudeDesktop
+        Should -Invoke Start-Process -Times 0 -Exactly
+        Should -Invoke Add-CsaTodo -Times 1 -Exactly
+    }
+
+    It 'locks the file before checking its signature, and holds it until after the run' {
+        Install-ClaudeDesktop
+        $script:order | Should -Be @('lock', 'verify', 'run', 'unlock')
+    }
+
+    It 'a folder it cannot create leaves a to-do instead of stopping the installer' {
+        Mock New-Item { throw 'Access is denied' }
+        { Install-ClaudeDesktop } | Should -Not -Throw
+        Should -Invoke Start-Process -Times 0 -Exactly
+        Should -Invoke Add-CsaTodo -Times 1 -Exactly
+    }
+
+    It 'accepts only an organisation of exactly "Anthropic, PBC", not one containing it' {
+        $sig = { param($subject) [pscustomobject]@{ Status = 'Valid'; SignerCertificate = [pscustomobject]@{ Subject = $subject } } }
+        Test-AnthropicSigner (& $sig 'O="Anthropic, PBC", CN="Anthropic, PBC"') | Should -BeTrue
+        Test-AnthropicSigner (& $sig 'O="Anthropic, PBC Holdings", CN="Anthropic, PBC"') | Should -BeFalse
+        Test-AnthropicSigner (& $sig 'O="Evil O=""Anthropic, PBC"" Ltd", CN=x') | Should -BeFalse
+        Test-AnthropicSigner (& $sig 'O="anthropic, pbc"') | Should -BeFalse
+        Test-AnthropicSigner (& $sig 'not a distinguished name ===') | Should -BeFalse
+        Test-AnthropicSigner $null | Should -BeFalse
+    }
+}

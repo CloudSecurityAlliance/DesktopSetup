@@ -9,7 +9,7 @@
 #      pymupdf (via pip) — required by the document-pipeline plugin
 #   6. 1Password (via winget, GUI app — needed for biometric CLI unlock)
 #   7. 1Password CLI (via winget)
-#   8. Claude Desktop (via winget, auto-updates)
+#   8. Claude Desktop (Anthropic's ClaudeSetup.exe, which asks for admin; auto-updates)
 #   9. ChatGPT Desktop (via the Microsoft Store, auto-updates)
 #  10. Gemini Desktop (via winget Google.GeminiDesktop, auto-updates)
 #  11. Copilot Desktop (via winget Microsoft.Copilot - Microsoft's own package,
@@ -23,7 +23,7 @@
 
 $ErrorActionPreference = 'Stop'
 
-$ScriptVersion = "2026.10252328"
+$ScriptVersion = "2026.10260504"
 
 # ── CSA plugin marketplaces ─────────────────────────────────────────
 # Plugin marketplaces to register with Claude Code. Each entry is an
@@ -1094,7 +1094,7 @@ function Show-Preflight {
         $suffix = if ($v) { ", v$v" } else { '' }
         Write-Host "  Claude Desktop .... installed (winget$suffix)"
     } else {
-        Write-Host "  Claude Desktop .... install via winget"
+        Write-Host "  Claude Desktop .... install with Anthropic's installer (Windows asks for permission)"
     }
 
     # ChatGPT Desktop. Version comes from the MSIX, not Get-WingetVersion: winget has no
@@ -1778,9 +1778,68 @@ function Install-1PasswordCLI {
     Refresh-Path
 }
 
-# Only the current build of Claude Desktop is supported - the MSIX, which has Cowork. The old
-# Squirrel .exe build is neither detected nor migrated: there is no old install left to test a
-# migration against, and the app's own updater has moved people on.
+# Claude Desktop comes from ANTHROPIC'S OWN INSTALLER, ClaudeSetup.exe, not winget. Only the
+# current build is supported - the MSIX, which has Cowork. Measured 2026-10-25 on Windows 11,
+# Windows PowerShell 5.1, non-elevated (#161):
+#
+#   - winget cannot install it from here. Every current Anthropic.Claude manifest carries both the
+#     MSIX and the old Squirrel .exe, and non-elevated winget SELECTS THE .EXE - the old build,
+#     without Cowork. Forcing `--installer-type msix` is refused with 0x80073D28 ("administrator
+#     privileges are required"), even as an upgrade, because the MSIX never installs without its
+#     Cowork service. This script will not run as Administrator, so winget is a dead end.
+#   - ClaudeSetup.exe raises its own UAC prompt, installs the MSIX (in place over an older one:
+#     2.26454.2.0 -> 3.6556.2.0, exit 0, 26 s, Cowork service intact, no second copy), removes a
+#     Squirrel build if it finds one, and opens Claude when it is done. It also handles a standard
+#     user who approves with somebody else's admin account ("split-account" in its log), which a
+#     `Start-Process winget -Verb RunAs` would get wrong by installing for the admin instead.
+#   - It must be the CURRENT ClaudeSetup.exe. The fixed URL downloads.claude.ai/releases/win32/
+#     ClaudeSetup.exe serves one from 2026-03-26 whose signing certificate expired 2026-10-20; it
+#     pins that certificate, so every current MSIX fails its check ("MSIX signer does not match
+#     bootstrapper", though both subjects read the same). The current one is reached through
+#     api.anthropic.com, which answered both curl.exe and Invoke-WebRequest; the same path on
+#     claude.ai is behind a bot check that answered 403.
+#   - Windows' UAC prompt gives up after 2 minutes and counts as a refusal; the first measured
+#     attempt timed out at exactly 2:00 because the prompt never got noticed. Hence the warning
+#     printed before it appears.
+#
+# The old Squirrel .exe build is neither detected nor migrated here; ClaudeSetup.exe removes it.
+$ClaudeSetupUrl = 'https://api.anthropic.com/api/desktop/win32/{0}/setup/latest/redirect'
+$ClaudeDownloadPage = 'https://claude.com/download'
+
+# The machine's own architecture, not this process's: an x64 PowerShell on an Arm PC reports
+# AMD64 in $env:PROCESSOR_ARCHITECTURE. The system environment key does not depend on the
+# process. Unmeasured on Arm.
+function Get-NativeArch {
+    $key = 'HKLM:\SYSTEM\CurrentControlSet\Control\Session Manager\Environment'
+    $arch = (Get-ItemProperty -Path $key -Name PROCESSOR_ARCHITECTURE -ErrorAction SilentlyContinue).PROCESSOR_ARCHITECTURE
+    if ($arch -eq 'ARM64') { return 'arm64' }
+    return 'x64'
+}
+
+# Opens a file so that nothing can write or delete it while the handle is held, but it can still
+# be read and run. Measured 2026-10-25 under 5.1: writing and Remove-Item were both refused, and
+# Start-Process ran the held file (exit 0).
+function Open-ReadOnlyLock {
+    param([string]$Path)
+    return [System.IO.File]::Open($Path, [System.IO.FileMode]::Open, [System.IO.FileAccess]::Read, [System.IO.FileShare]::Read)
+}
+
+# $true only for a valid signature whose subject has an organisation of exactly "Anthropic, PBC".
+# The subject is parsed into its parts and the O= part compared exactly: a substring test would
+# accept an organisation that merely contains that text. Measured on 5.1 and 7 against the real
+# subject (accepted) and two look-alikes (rejected).
+function Test-AnthropicSigner {
+    param($Signature)
+    if (-not $Signature -or [string]$Signature.Status -ne 'Valid' -or -not $Signature.SignerCertificate) { return $false }
+    try {
+        $dn = New-Object System.Security.Cryptography.X509Certificates.X500DistinguishedName ([string]$Signature.SignerCertificate.Subject)
+        $parts = $dn.Decode([System.Security.Cryptography.X509Certificates.X500DistinguishedNameFlags]::UseNewLines) -split "`r?`n"
+    } catch {
+        return $false
+    }
+    return [bool]($parts | Where-Object { $_ -ceq 'O="Anthropic, PBC"' })
+}
+
 function Install-ClaudeDesktop {
     $wingetCheck = Invoke-NativeOutput { winget list --id Anthropic.Claude --accept-source-agreements }
     if ($wingetCheck -and ($wingetCheck | Select-String 'Anthropic.Claude')) {
@@ -1788,10 +1847,70 @@ function Install-ClaudeDesktop {
         return
     }
 
-    Write-Info "Installing Claude Desktop via winget"
-    $null = Invoke-NativeShow { winget install --id Anthropic.Claude --accept-package-agreements --accept-source-agreements }
-    if ($LASTEXITCODE -ne 0) { Write-Warn "Failed to install Claude Desktop" }
-    Refresh-Path
+    $manual = "Install Claude Desktop from $ClaudeDownloadPage and approve the administrator prompt " +
+              "(without it, Claude installs without Cowork)"
+
+    # Its installer raises a UAC prompt, which nobody answers in a headless run.
+    if ($env:NONINTERACTIVE -eq '1') {
+        Write-Warn "Installing Claude Desktop needs administrator permission, and nobody is here to give it; skipping"
+        if (-not (Add-CsaTodo 43 $manual '-' '-')) { Write-Host "   $manual" }
+        return
+    }
+
+    # A folder of its own, named afresh each run, rather than a fixed name in %TEMP% that anything
+    # running as this user could have prepared in advance.
+    $dir = Join-Path $env:TEMP ('csa-claude-setup-' + [guid]::NewGuid().ToString('N'))
+    $setup = Join-Path $dir 'ClaudeSetup.exe'
+    $lock = $null
+    try {
+        Write-Info "Downloading Claude Desktop's installer from Anthropic"
+        $savedProgress = $ProgressPreference
+        try {
+            # A progress bar under 5.1 slows Invoke-WebRequest by an order of magnitude.
+            $ProgressPreference = 'SilentlyContinue'
+            $null = New-Item -ItemType Directory -Path $dir -Force -ErrorAction Stop
+            Invoke-WebRequest -Uri ($ClaudeSetupUrl -f (Get-NativeArch)) -OutFile $setup -UseBasicParsing -ErrorAction Stop
+            # Held from BEFORE the signature check until after the run, so the file that was
+            # checked is the file that runs with the person's admin approval.
+            $lock = Open-ReadOnlyLock $setup
+        } catch {
+            Write-Warn "Could not download Claude Desktop's installer ($($_.Exception.Message))"
+            if (-not (Add-CsaTodo 43 $manual '-' '-')) { Write-Host "   $manual" }
+            return
+        } finally {
+            $ProgressPreference = $savedProgress
+        }
+
+        # The subject, not a thumbprint: the certificate is rotated (it was on 2026-10-20), and
+        # pinning one is exactly what broke the old ClaudeSetup.exe.
+        if (-not (Test-AnthropicSigner (Get-AuthenticodeSignature -FilePath $setup))) {
+            Write-Warn "The downloaded Claude installer is not signed by Anthropic; not running it"
+            if (-not (Add-CsaTodo 43 $manual '-' '-')) { Write-Host "   $manual" }
+            return
+        }
+
+        Write-Info "Installing Claude Desktop. Windows will ask for administrator permission:"
+        Write-Host "   approve it within 2 minutes - if no prompt appears, look for a flashing shield"
+        Write-Host "   in the taskbar. Claude opens by itself when it is done."
+        Write-CsaLog "waiting for ClaudeSetup.exe and its UAC prompt" 'prompt'
+        try {
+            $proc = Start-Process -FilePath $setup -Wait -PassThru -ErrorAction Stop
+        } catch {
+            Write-Warn "Could not start Claude Desktop's installer ($($_.Exception.Message))"
+            if (-not (Add-CsaTodo 43 $manual '-' '-')) { Write-Host "   $manual" }
+            return
+        }
+        if ($proc.ExitCode -eq 0) {
+            Write-Success "Claude Desktop installed; it updates itself"
+        } else {
+            # Exit 1 when the prompt was declined or timed out (measured); its own log says why.
+            Write-Warn "Claude Desktop's installer did not finish (exit $($proc.ExitCode)); its log is $env:TEMP\ClaudeSetup.log"
+            if (-not (Add-CsaTodo 43 $manual '-' '-')) { Write-Host "   $manual" }
+        }
+    } finally {
+        if ($lock) { $lock.Dispose() }
+        Remove-Item -Path $dir -Recurse -Force -ErrorAction SilentlyContinue
+    }
 }
 
 function Install-ChatGPT {
