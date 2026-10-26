@@ -16,7 +16,7 @@ This file is *how*.
 |---|---|
 | [`main` IS the release](#main-is-the-release) | before merging anything |
 | [What the scripts are](#what-the-scripts-are) | orienting; ten scripts, five pairs |
-| [Script versioning](#script-versioning) | you changed a script — the format is `YYYY.MMDDHHMM` |
+| [Script versioning](#script-versioning) | you changed a script — the format is `YYYY-MM-DDTHH:MMZ` |
 | [The target runtime is Windows PowerShell 5.1](#the-target-runtime-is-windows-powershell-51) | touching any `.ps1`. The `Invoke-Native*` tables are here |
 | [Conventions](#conventions) | writing new code in either language |
 | [Duplicated state: the six-script lists](#duplicated-state-the-six-script-lists) | adding a marketplace, plugin or MCP server |
@@ -108,11 +108,15 @@ Project documents — `BUSINESS-CASE.md`, `GOALS.md`, `RACI.md`, `DECISIONS-ADR.
 
 ## Script versioning
 
-Every script declares a version near the top: `SCRIPT_VERSION="YYYY.MMDDHHMM"` in bash,
-`$ScriptVersion = "YYYY.MMDDHHMM"` in PowerShell. **Minutes, not seconds** — UTC.
+Every script declares a version near the top: the UTC time of the change, ISO 8601 to the
+minute. `SCRIPT_VERSION="2026-10-26T05:04Z"` in bash, `$ScriptVersion = "2026-10-26T05:04Z"`
+in PowerShell. **Minutes, not seconds**, and always `Z`. It is printed as is, with no `v`
+in front, in the banner and the debug log, so a log says when its code was written.
+Until 2026-10-26 it was `YYYY.MMDDHHMM`; the checker still reads that form, so the
+switch could be checked as moving forwards, but refuses it as a new value.
 
 ```bash
-python3 -c "import datetime;print(datetime.datetime.now(datetime.timezone.utc).strftime('%Y.%m%d%H%M'))"
+python3 -c "import datetime;print(datetime.datetime.now(datetime.timezone.utc).strftime('%Y-%m-%dT%H:%MZ'))"
 ```
 
 `tools/check-script-versions.py` refuses a changed script that did not bump, comparing the merge

@@ -16,7 +16,7 @@
 
 $ErrorActionPreference = 'Stop'
 
-$ScriptVersion = "2026.10020500"
+$ScriptVersion = "2026-10-26T15:12Z"
 
 # ── Output helpers ──────────────────────────────────────────────────
 
@@ -176,7 +176,7 @@ function Write-CsaLog {
 function Write-CsaLogTail {
     if (-not $CsaLog) { return }
     $how = if ($script:CsaCompleted) { 'completed' } else { 'ENDED EARLY (aborted, or threw)' }
-    Write-CsaLog ("=== end of {0} v{1}: {2} ===" -f $SCRIPT_LABEL, $ScriptVersion, $how) 'info'
+    Write-CsaLog ("=== end of {0} {1}: {2} ===" -f $SCRIPT_LABEL, $ScriptVersion, $how) 'info'
 }
 
 function Show-CsaDebugHint {
@@ -326,7 +326,7 @@ if ($CsaDebug -and $CsaLog) {
     # and then the path announced above names a file that does not exist. "Send me the log"
     # then sends nothing, and the one fact worth having (which check refused to proceed) is
     # lost with it.
-    Write-CsaLog ("{0} v{1} starting; CSA_DEBUG=1, no argument vector (irm|iex)" -f $SCRIPT_LABEL, $ScriptVersion) 'info'
+    Write-CsaLog ("{0} {1} starting; CSA_DEBUG=1, no argument vector (irm|iex)" -f $SCRIPT_LABEL, $ScriptVersion) 'info'
 }
 
 
@@ -436,7 +436,7 @@ $Repo = $RepoSlug.Split('/')[1]
 # which is the runtime this script targets.
 $DefaultBase = Join-Path (Join-Path $HOME "GitHub") $Org
 
-Write-Info "Cloud Security Alliance - Clone & Claude v$ScriptVersion"
+Write-Info "Cloud Security Alliance - Clone & Claude $ScriptVersion"
 Write-Host ""
 Write-Host "  Repository: $RepoSlug"
 Write-Host ""

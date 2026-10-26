@@ -17,7 +17,7 @@
 
 set -euo pipefail
 
-SCRIPT_VERSION="2026.10251430"
+SCRIPT_VERSION="2026-10-26T15:12Z"
 
 # ── CSA plugin marketplaces ─────────────────────────────────────────
 # Each update run will add any entries from this list that aren't yet
@@ -175,14 +175,14 @@ CSA_LOG_INHERITED=""
 if csa_debug_requested; then
   if [[ -n "${CSA_LOG:-}" ]]; then
     CSA_LOG_INHERITED=1
-    printf '\n--- %s v%s ---\n' "${SCRIPT_LABEL:-desktopsetup}" "${SCRIPT_VERSION}" >> "$CSA_LOG"
+    printf '\n--- %s %s ---\n' "${SCRIPT_LABEL:-desktopsetup}" "${SCRIPT_VERSION}" >> "$CSA_LOG"
   else
     CSA_LOG="${HOME}/desktopsetup-$(date +%Y%m%d-%H%M%S).log"
     ( umask 077; : > "$CSA_LOG" )      # 0600 from creation, not chmod-ed afterwards
     {
       echo "=== DesktopSetup $(date -u +%Y-%m-%dT%H:%M:%SZ) ==="
       echo "This log is REDACTED for known credential shapes, but review it before sharing."
-      echo "$(uname -sr) · bash ${BASH_VERSION} · ${SCRIPT_LABEL:-desktopsetup} v${SCRIPT_VERSION}"
+      echo "$(uname -sr) · bash ${BASH_VERSION} · ${SCRIPT_LABEL:-desktopsetup} ${SCRIPT_VERSION}"
     } >> "$CSA_LOG"
   fi
   CSA_DEBUG=1                        # normalised, so a child sees 1 whatever was typed
@@ -1015,7 +1015,7 @@ summary() {
 # ── Main ────────────────────────────────────────────────────────────
 
 main() {
-  info "Cloud Security Alliance — macOS Update v${SCRIPT_VERSION}"
+  info "Cloud Security Alliance — macOS Update ${SCRIPT_VERSION}"
 
   ensure_brew_in_path
   snapshot
