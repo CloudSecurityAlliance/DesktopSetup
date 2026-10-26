@@ -475,11 +475,20 @@ Describe 'windows-ai-tools.ps1: installing Claude Desktop' {
         Mock Get-NativeArch { 'x64' }
         Mock Invoke-WebRequest { }
         Mock Get-AuthenticodeSignature {
+            $script:order += 'verify'
             [pscustomobject]@{ Status = 'Valid'; SignerCertificate = [pscustomobject]@{
-                Subject = 'SERIALNUMBER=4860621, C=US, S=California, L=San Francisco, O="Anthropic, PBC", CN="Anthropic, PBC"' } }
+                Subject = 'OID.1.3.6.1.4.1.311.60.2.1.3=US, SERIALNUMBER=4860621, C=US, S=California, L=San Francisco, O="Anthropic, PBC", CN="Anthropic, PBC"' } }
         }
-        Mock Start-Process { [pscustomobject]@{ ExitCode = 0 } }
+        Mock Start-Process { $script:order += 'run'; [pscustomobject]@{ ExitCode = 0 } }
         Mock Remove-Item { }
+        Mock New-Item { }
+        $script:order = @()
+        Mock Open-ReadOnlyLock {
+            $script:order += 'lock'
+            $l = New-Object PSObject
+            Add-Member -InputObject $l -MemberType ScriptMethod -Name Dispose -Value { $script:order += 'unlock' }
+            return $l
+        }
         Mock Add-CsaTodo { $true }
         Mock Write-Host { }
         Mock Write-CsaLog { }
@@ -547,5 +556,27 @@ Describe 'windows-ai-tools.ps1: installing Claude Desktop' {
         Install-ClaudeDesktop
         Should -Invoke Start-Process -Times 0 -Exactly
         Should -Invoke Add-CsaTodo -Times 1 -Exactly
+    }
+
+    It 'locks the file before checking its signature, and holds it until after the run' {
+        Install-ClaudeDesktop
+        $script:order | Should -Be @('lock', 'verify', 'run', 'unlock')
+    }
+
+    It 'a folder it cannot create leaves a to-do instead of stopping the installer' {
+        Mock New-Item { throw 'Access is denied' }
+        { Install-ClaudeDesktop } | Should -Not -Throw
+        Should -Invoke Start-Process -Times 0 -Exactly
+        Should -Invoke Add-CsaTodo -Times 1 -Exactly
+    }
+
+    It 'accepts only an organisation of exactly "Anthropic, PBC", not one containing it' {
+        $sig = { param($subject) [pscustomobject]@{ Status = 'Valid'; SignerCertificate = [pscustomobject]@{ Subject = $subject } } }
+        Test-AnthropicSigner (& $sig 'O="Anthropic, PBC", CN="Anthropic, PBC"') | Should -BeTrue
+        Test-AnthropicSigner (& $sig 'O="Anthropic, PBC Holdings", CN="Anthropic, PBC"') | Should -BeFalse
+        Test-AnthropicSigner (& $sig 'O="Evil O=""Anthropic, PBC"" Ltd", CN=x') | Should -BeFalse
+        Test-AnthropicSigner (& $sig 'O="anthropic, pbc"') | Should -BeFalse
+        Test-AnthropicSigner (& $sig 'not a distinguished name ===') | Should -BeFalse
+        Test-AnthropicSigner $null | Should -BeFalse
     }
 }

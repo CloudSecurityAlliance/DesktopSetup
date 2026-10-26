@@ -23,7 +23,7 @@
 
 $ErrorActionPreference = 'Stop'
 
-$ScriptVersion = "2026.10260340"
+$ScriptVersion = "2026.10260504"
 
 # ── CSA plugin marketplaces ─────────────────────────────────────────
 # Plugin marketplaces to register with Claude Code. Each entry is an
@@ -1816,6 +1816,30 @@ function Get-NativeArch {
     return 'x64'
 }
 
+# Opens a file so that nothing can write or delete it while the handle is held, but it can still
+# be read and run. Measured 2026-10-25 under 5.1: writing and Remove-Item were both refused, and
+# Start-Process ran the held file (exit 0).
+function Open-ReadOnlyLock {
+    param([string]$Path)
+    return [System.IO.File]::Open($Path, [System.IO.FileMode]::Open, [System.IO.FileAccess]::Read, [System.IO.FileShare]::Read)
+}
+
+# $true only for a valid signature whose subject has an organisation of exactly "Anthropic, PBC".
+# The subject is parsed into its parts and the O= part compared exactly: a substring test would
+# accept an organisation that merely contains that text. Measured on 5.1 and 7 against the real
+# subject (accepted) and two look-alikes (rejected).
+function Test-AnthropicSigner {
+    param($Signature)
+    if (-not $Signature -or [string]$Signature.Status -ne 'Valid' -or -not $Signature.SignerCertificate) { return $false }
+    try {
+        $dn = New-Object System.Security.Cryptography.X509Certificates.X500DistinguishedName ([string]$Signature.SignerCertificate.Subject)
+        $parts = $dn.Decode([System.Security.Cryptography.X509Certificates.X500DistinguishedNameFlags]::UseNewLines) -split "`r?`n"
+    } catch {
+        return $false
+    }
+    return [bool]($parts | Where-Object { $_ -ceq 'O="Anthropic, PBC"' })
+}
+
 function Install-ClaudeDesktop {
     $wingetCheck = Invoke-NativeOutput { winget list --id Anthropic.Claude --accept-source-agreements }
     if ($wingetCheck -and ($wingetCheck | Select-String 'Anthropic.Claude')) {
@@ -1833,28 +1857,33 @@ function Install-ClaudeDesktop {
         return
     }
 
-    $setup = Join-Path $env:TEMP 'ClaudeSetup.exe'
-    Write-Info "Downloading Claude Desktop's installer from Anthropic"
-    $savedProgress = $ProgressPreference
+    # A folder of its own, named afresh each run, rather than a fixed name in %TEMP% that anything
+    # running as this user could have prepared in advance.
+    $dir = Join-Path $env:TEMP ('csa-claude-setup-' + [guid]::NewGuid().ToString('N'))
+    $setup = Join-Path $dir 'ClaudeSetup.exe'
+    $lock = $null
     try {
-        # A progress bar under 5.1 slows Invoke-WebRequest by an order of magnitude.
-        $ProgressPreference = 'SilentlyContinue'
-        Invoke-WebRequest -Uri ($ClaudeSetupUrl -f (Get-NativeArch)) -OutFile $setup -UseBasicParsing -ErrorAction Stop
-    } catch {
-        Write-Warn "Could not download Claude Desktop's installer ($($_.Exception.Message))"
-        if (-not (Add-CsaTodo 43 $manual '-' '-')) { Write-Host "   $manual" }
-        return
-    } finally {
-        $ProgressPreference = $savedProgress
-    }
+        Write-Info "Downloading Claude Desktop's installer from Anthropic"
+        $savedProgress = $ProgressPreference
+        try {
+            # A progress bar under 5.1 slows Invoke-WebRequest by an order of magnitude.
+            $ProgressPreference = 'SilentlyContinue'
+            $null = New-Item -ItemType Directory -Path $dir -Force -ErrorAction Stop
+            Invoke-WebRequest -Uri ($ClaudeSetupUrl -f (Get-NativeArch)) -OutFile $setup -UseBasicParsing -ErrorAction Stop
+            # Held from BEFORE the signature check until after the run, so the file that was
+            # checked is the file that runs with the person's admin approval.
+            $lock = Open-ReadOnlyLock $setup
+        } catch {
+            Write-Warn "Could not download Claude Desktop's installer ($($_.Exception.Message))"
+            if (-not (Add-CsaTodo 43 $manual '-' '-')) { Write-Host "   $manual" }
+            return
+        } finally {
+            $ProgressPreference = $savedProgress
+        }
 
-    try {
-        # It is about to be run with the person's admin approval, so it must be Anthropic's. The
-        # subject, not a thumbprint: the certificate is rotated (it was on 2026-10-20), and pinning
-        # one is exactly what broke the old ClaudeSetup.exe.
-        $sig = Get-AuthenticodeSignature -FilePath $setup
-        if ($sig.Status -ne 'Valid' -or -not $sig.SignerCertificate -or
-            $sig.SignerCertificate.Subject -notmatch 'O="Anthropic, PBC"') {
+        # The subject, not a thumbprint: the certificate is rotated (it was on 2026-10-20), and
+        # pinning one is exactly what broke the old ClaudeSetup.exe.
+        if (-not (Test-AnthropicSigner (Get-AuthenticodeSignature -FilePath $setup))) {
             Write-Warn "The downloaded Claude installer is not signed by Anthropic; not running it"
             if (-not (Add-CsaTodo 43 $manual '-' '-')) { Write-Host "   $manual" }
             return
@@ -1879,7 +1908,8 @@ function Install-ClaudeDesktop {
             if (-not (Add-CsaTodo 43 $manual '-' '-')) { Write-Host "   $manual" }
         }
     } finally {
-        Remove-Item -Path $setup -Force -ErrorAction SilentlyContinue
+        if ($lock) { $lock.Dispose() }
+        Remove-Item -Path $dir -Recurse -Force -ErrorAction SilentlyContinue
     }
 }
 
