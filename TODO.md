@@ -1,5 +1,21 @@
 # TODO — Code Audit Findings
 
+> ## Start here: open handoffs (updated 2026-10-26)
+>
+> Picking up work cold, as a new AI session or a person? Each line below is a **handoff issue**:
+> the resume point for one piece of work, with its status, a file map, the reasoning, tasks in
+> order, known weak points, and what was decided against. Open the one for your work and read
+> it before anything else. This file lists findings; the handoffs say what to do next.
+>
+> | Work | Handoff | First task |
+> |---|---|---|
+> | **Desktop AI apps:** Claude, ChatGPT, Gemini, Copilot desktop, and the wait before replacing a running app | [#168](https://github.com/CloudSecurityAlliance/DesktopSetup/issues/168) | [#163](https://github.com/CloudSecurityAlliance/DesktopSetup/issues/163) / [#169](https://github.com/CloudSecurityAlliance/DesktopSetup/issues/169): `check-all.sh` is red on a Windows host and on a Mac, each for its own reason |
+> | **Everything that needs a Mac** | [#119](https://github.com/CloudSecurityAlliance/DesktopSetup/issues/119) | read its latest comment first |
+>
+> Before starting, run `git pull`, `gh issue list` and `gh pr list`: a handoff is a snapshot, and
+> another session may have moved things since. When a handoff's work is finished, close its issue
+> and remove its row here.
+
 Audit performed 2026-02-24. Issues grouped by priority.
 
 **Citations name a function, never a line number.** The original `file:line` citations rotted
@@ -21,10 +37,10 @@ than no citation because it looks right. A function name survives edits; a line 
 > fix — which was reported *on* macOS and is unverified there. Its 2026-10-25 comment adds the
 > five macOS checks the desktop-app work (#162) brings.
 >
-> **On Windows?** [#161](https://github.com/CloudSecurityAlliance/DesktopSetup/issues/161) is the
-> handoff for the desktop-app work (#162): Gemini, Copilot, Claude's MSIX, and the winget hold
-> before replacing a running app. None of it has run on Windows. Start with its section 1, which
-> may already be breaking Claude Desktop installs on fresh machines.
+> **On Windows?** The desktop-app work's Windows checks were done in
+> [#161](https://github.com/CloudSecurityAlliance/DesktopSetup/issues/161), closed 2026-10-26
+> with its measurements in the comments. What is still unmeasured on Windows is task 4 of
+> [#168](https://github.com/CloudSecurityAlliance/DesktopSetup/issues/168).
 
 ---
 
