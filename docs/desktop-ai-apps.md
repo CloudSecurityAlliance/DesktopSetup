@@ -27,7 +27,7 @@ a retired build with its updater switched off is not.
 
 | App | macOS | Windows | Updated by |
 |---|---|---|---|
-| Claude | `brew install --cask claude` | `winget install --id Anthropic.Claude` (now an MSIX) | its own updater, about every 4 h; a restart is forced within 72 h of a download |
+| Claude | `brew install --cask claude` | Anthropic's `ClaudeSetup.exe`, from `api.anthropic.com` (installs the MSIX; asks for admin) | its own updater, about every 4 h; a restart is forced within 72 h of a download |
 | ChatGPT | `brew install --cask chatgpt` | Microsoft Store `9PLM9XGG6VKS` via `--source msstore` | Sparkle on macOS; the Store plus a built-in updater on Windows |
 | Gemini | `brew install --cask google-gemini`, Apple Silicon and macOS 15+ only | `winget install --exact --id Google.GeminiDesktop` | Google's updater (Keystone/GoogleUpdater) on macOS; a Google update client built into the app on Windows |
 | Copilot | Microsoft's own `.pkg`, per architecture, signature-checked, `sudo installer` | `winget install --exact --id Microsoft.Copilot` (machine-wide MSI) | Edge's updater on both platforms |
@@ -50,19 +50,36 @@ compare against the vendor's feed, not just confirm the app exists.
 ### Claude
 
 - The macOS cask matched Anthropic's update feed exactly (3.6556.2, 2026-10-22).
-- On Windows, **every current `Anthropic.Claude` manifest carries both an MSIX and the old
-  Squirrel `.exe`** (`ProductCode: AnthropicClaude`, `Scope: user`); measured on the manifests
-  2.26454.2 to 2.42304.2. Anthropic says only the MSIX has Cowork, and that a per-user MSIX
-  install **without administrator rights is refused (`0x80073D28`)**. From a non-elevated prompt,
-  `winget show` selects the **`.exe`**, so a plain `winget install` on a fresh machine probably
-  gets the old build. That matters because `windows-ai-tools.ps1` refuses to run as
-  Administrator. Inferred from winget's installer selection, not from a fresh install; #161
-  item 1.
+- On Windows, **winget cannot install the current build from a non-elevated script.**
+  Measured 2026-10-25 on Windows 11 under Windows PowerShell 5.1 (#161 item 1):
+  - Every current `Anthropic.Claude` manifest (2.26454.2 to 2.42304.2) carries both an MSIX and
+    the old Squirrel `.exe` (`ProductCode: AnthropicClaude`, `Scope: user`). Non-elevated,
+    winget **selects the `.exe`**, the old build without Cowork.
+  - `--installer-type msix` is **refused with `0x80073D28`**, even as an upgrade. The MSIX never
+    installs without its Cowork service, and that service needs admin.
+  - `windows-ai-tools.ps1` refuses to run as Administrator, so winget is a dead end here.
+- So Windows uses **Anthropic's `ClaudeSetup.exe`**, their documented route. It raises its own UAC
+  prompt and installs the MSIX. Measured: an in-place update, 2.26454.2.0 to 3.6556.2.0, exit 0
+  in 26 s, with the Cowork service intact and no second copy. It removes a Squirrel build if it
+  finds one, and it opens Claude when done. It also handles a standard user who approves with
+  another account's admin credentials, which `Start-Process winget -Verb RunAs` would get wrong.
+  - It must be the **current** `ClaudeSetup.exe`, downloaded from
+    `api.anthropic.com/api/desktop/win32/<arch>/setup/latest/redirect`.
+    - The fixed URL `downloads.claude.ai/releases/win32/ClaudeSetup.exe` serves a build from
+      2026-03-26. Its signing certificate expired 2026-10-20, and it pins that certificate, so
+      it rejects every current MSIX: "MSIX signer does not match bootstrapper", although both
+      subjects read the same.
+    - The same redirect on `claude.ai` sits behind a bot check that answered 403.
+  - It is run only if its Authenticode signature is valid and names `O="Anthropic, PBC"`. The
+    check uses the subject, not a thumbprint, because the certificate rotates.
+  - UAC's prompt gives up after 2 minutes, and that counts as a refusal (setup exits 1). The
+    first measured attempt timed out because the prompt was never noticed, so the script says
+    to watch for it **before** it appears. With nobody at the keyboard, it is skipped and
+    becomes a to-do.
 - winget lags. On 2026-10-23 it offered 2.42304.2 while five 3.x submissions sat in review. The
   app updates itself within hours of installing, so the lag costs little.
-- **The old `.exe` build is not supported**, and is neither detected nor migrated. Only the
-  current build is. (An earlier draft detected it and added a to-do; it was dropped on
-  2026-10-25 because no old install remains to test a migration against.)
+- **The old `.exe` build is not supported.** The script neither detects nor migrates it;
+  `ClaudeSetup.exe` removes it.
 
 ### ChatGPT
 
