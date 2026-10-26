@@ -8,9 +8,24 @@ desktop app to be quit before replacing it: the macOS Copilot cask migration, an
 `windows-update.ps1` before `winget upgrade --all`. An app the person will not quit is left as it
 is.
 
-State: **open PR, not merged**, after one independent review round whose findings are all fixed.
-The macOS half is tested and run against live apps. **The Windows half has never run on Windows**;
-its decision logic has passed under Windows PowerShell 5.1 in CI.
+**Final state (recorded 2026-10-26).**
+
+- **Merged.** #162 was squash-merged by Kurt on 2026-10-25 as `f2f6473`, after one independent
+  review round (all findings fixed) and a Windows session. That session measured #161 under
+  Windows PowerShell 5.1 and added four commits to the PR before it merged (`acd4b17`, `71d1d57`,
+  `3ad8c73`, `cf29c28`):
+  - fixes for four Windows defects;
+  - two decisions: only the current Claude build is supported, and the Microsoft Store is assumed;
+  - one further fix: Copilot is never lost to a failed password.
+- **Follow-up.** #165 (`e87689c`) then fixed Claude Desktop's Windows install.
+- **What is left** is tracked in the handoff
+  [#168](https://github.com/CloudSecurityAlliance/DesktopSetup/issues/168), not here. This brief
+  describes the work as reviewed; the claims below were written against `5cd697d` and the review
+  history stops there.
+
+As it read at review time: open PR, after one independent review round whose findings were all
+fixed. The macOS half tested and run against live apps; the Windows half never run on Windows,
+its decision logic passing under Windows PowerShell 5.1 in CI.
 
 ## Where everything is
 
