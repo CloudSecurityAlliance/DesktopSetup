@@ -10,6 +10,7 @@
 > | Work | Handoff | First task |
 > |---|---|---|
 > | **Desktop AI apps:** Claude, ChatGPT, Gemini, Copilot desktop, and the wait before replacing a running app | [#168](https://github.com/CloudSecurityAlliance/DesktopSetup/issues/168) | [#163](https://github.com/CloudSecurityAlliance/DesktopSetup/issues/163) / [#169](https://github.com/CloudSecurityAlliance/DesktopSetup/issues/169): `check-all.sh` is red on a Windows host and on a Mac, each for its own reason |
+> | **Gemini CLI → Antigravity CLI:** Gemini CLI no longer accepts personal Google sign-in | [#172](https://github.com/CloudSecurityAlliance/DesktopSetup/issues/172) | [#171](https://github.com/CloudSecurityAlliance/DesktopSetup/issues/171): research Gemini CLI vs Antigravity CLI before changing any script |
 > | **Everything that needs a Mac** | [#119](https://github.com/CloudSecurityAlliance/DesktopSetup/issues/119) | read its latest comment first |
 >
 > Before starting, run `git pull`, `gh issue list` and `gh pr list`: a handoff is a snapshot, and
