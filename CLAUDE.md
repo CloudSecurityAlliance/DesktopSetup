@@ -46,4 +46,5 @@ Then [`BUSINESS-CASE.md`](BUSINESS-CASE.md) for why any of it exists, and
   together; `check-parity.py` will reject a one-sided one, and declaring it `PLATFORM_ONLY` to
   get past that creates the exact divergence
   [#111](https://github.com/CloudSecurityAlliance/DesktopSetup/issues/111) exists to find.
-- **Bump `SCRIPT_VERSION`** on any script you change — `YYYY.MMDDHHMM`, UTC, **minutes**.
+- **Bump `SCRIPT_VERSION`** on any script you change — the UTC time, ISO 8601 to the **minute**:
+  `2026-10-26T05:04Z`.

@@ -63,7 +63,8 @@ client still needs its macOS/Windows counterpart.
   together; `check-parity.py` will reject a one-sided one, and declaring it `PLATFORM_ONLY` to
   get past that creates the exact divergence
   [#111](https://github.com/CloudSecurityAlliance/DesktopSetup/issues/111) exists to find.
-- **Bump `SCRIPT_VERSION`** on any script you change — `YYYY.MMDDHHMM`, UTC, **minutes**.
+- **Bump `SCRIPT_VERSION`** on any script you change — the UTC time, ISO 8601 to the **minute**:
+  `2026-10-26T05:04Z`.
 - **Editing these files through a shell heredoc mangles backslashes.** They are full of `printf
   '\n\033[1m'`, PowerShell backticks and regex in string literals; it went wrong four times in
   one session. Write the patch to a file and run it. See [FRICTION-002](FRICTION.md).
