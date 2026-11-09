@@ -3,7 +3,7 @@
 Read off this repository's record — 23 closed issues, 102 merged pull requests, 167 commits
 across 42 active days — rather than written from intention. Every claim links its evidence, so
 the next reader can check rather than trust. Method and its blind spot:
-[`goals-decay-in-the-direction-that-flatters`](https://github.com/CloudSecurityAlliance-Internal/CINO-Platform-Engineering/blob/main/insights/goals-decay-in-the-direction-that-flatters.md).
+[`goals-decay-in-the-direction-that-flatters`](https://github.com/CloudSecurityAlliance-Internal/CINO-Engineering/blob/main/insights/goals-decay-in-the-direction-that-flatters.md).
 
 ## North star
 
@@ -25,7 +25,7 @@ upcoming.
 |---|---|
 | Both platforms reach the same baseline from one command | Ten scripts, five pairs; `tools/check-parity.py` compares `main()` call sequences and reports stale allowlist entries |
 | Every CSA MCP server installs and upgrades without being named by the user | Four servers fetched from the private gate repo and enumerated in the plan from one list ([#99](https://github.com/CloudSecurityAlliance/DesktopSetup/pull/99), [#101](https://github.com/CloudSecurityAlliance/DesktopSetup/pull/101) — both PRs) |
-| The interpreter is chosen, not inherited | uv as the provider with `--python` on every call, per [DEC-012](https://github.com/CloudSecurityAlliance-Internal/CINO-Platform-Engineering/blob/main/DECISIONS.md); without it four servers landed on 3.10 by nobody's decision |
+| The interpreter is chosen, not inherited | uv as the provider with `--python` on every call, per [DEC-012](https://github.com/CloudSecurityAlliance-Internal/CINO-Engineering/blob/main/DECISIONS.md); without it four servers landed on 3.10 by nobody's decision |
 | The closing instructions are one ordered list, not five styles across 200 lines | [#110](https://github.com/CloudSecurityAlliance/DesktopSetup/issues/110) — the `CSA_TODO_FILE` ledger; ten records from five sources render as seven items |
 | A person can say which version they ran | [#113](https://github.com/CloudSecurityAlliance/DesktopSetup/issues/113) — every script carries a UTC version, it reaches the debug log, and CI refuses a changed script that did not bump it |
 | The debug log describes the machine, not just the commands | [#96](https://github.com/CloudSecurityAlliance/DesktopSetup/issues/96), [#121](https://github.com/CloudSecurityAlliance/DesktopSetup/issues/121) — screen output is logged, a state snapshot is taken, and base64 blobs are replaced by a hash and a size |
@@ -88,7 +88,7 @@ at least once.
 | **Resilience makes a defect invisible.** Skipping a missing thing is right, and saying nothing about it is not | [#95](https://github.com/CloudSecurityAlliance/DesktopSetup/issues/95) — a missing setup script was skipped with no output at all |
 | **`main` ships while red.** Every documented one-liner fetches `HEAD` | [#132](https://github.com/CloudSecurityAlliance/DesktopSetup/issues/132) — red for six commits, because the run was grepped for a string sub-checks also print |
 | **The log misdiagnoses.** It records what ran and not what the machine was | [#96](https://github.com/CloudSecurityAlliance/DesktopSetup/issues/96), [#121](https://github.com/CloudSecurityAlliance/DesktopSetup/issues/121) — 82% of the log was base64 |
-| **An exit code is read as a state** | Eight occurrences, generalised in [`an-exit-code-is-not-a-state`](https://github.com/CloudSecurityAlliance-Internal/CINO-Platform-Engineering/blob/main/insights/an-exit-code-is-not-a-state.md) |
+| **An exit code is read as a state** | Eight occurrences, generalised in [`an-exit-code-is-not-a-state`](https://github.com/CloudSecurityAlliance-Internal/CINO-Engineering/blob/main/insights/an-exit-code-is-not-a-state.md) |
 
 ## How to check this file
 
@@ -104,7 +104,7 @@ failed** across csa-google-workspace, csa-skilljar, csa-zendesk and csa-google-g
 That matters here because this repo's job is to leave a machine where those servers work, and
 until that run the Windows side of it was an assumption. Twelve of the 81 skips are
 symlink-escape refusals that cannot execute without Developer Mode
-([CINO-PE#182](https://github.com/CloudSecurityAlliance-Internal/CINO-Platform-Engineering/issues/182)).
+([CINO-PE#182](https://github.com/CloudSecurityAlliance-Internal/CINO-Engineering/issues/182)).
 
 Two things this repository's own record cannot tell you, and they are the ones worth asking a
 person about:

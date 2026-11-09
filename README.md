@@ -436,7 +436,7 @@ remove any you no longer use, then revoke the token at the service. Nothing remo
 
 The CINO standard file set. Written after reading the repository rather than from a template, and
 where something does not apply it says so and says why — per
-[`a-standard-file-filled-from-the-template-is-worse-than-a-missing-one`](https://github.com/CloudSecurityAlliance-Internal/CINO-Platform-Engineering/blob/main/insights/a-standard-file-filled-from-the-template-is-worse-than-a-missing-one.md).
+[`a-standard-file-filled-from-the-template-is-worse-than-a-missing-one`](https://github.com/CloudSecurityAlliance-Internal/CINO-Engineering/blob/main/insights/a-standard-file-filled-from-the-template-is-worse-than-a-missing-one.md).
 
 - **[`ENGINEERING.md`](ENGINEERING.md)** — **start here if you are changing anything.** The
   repository's facts: the ten scripts, why `main` is the release, the PowerShell 5.1 behaviour

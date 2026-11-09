@@ -1032,7 +1032,7 @@ find_usable_python() {
   return 1
 }
 
-# uv is the CSA Python toolchain standard (CINO-Platform-Engineering DEC-012). Installed here
+# uv is the CSA Python toolchain standard (CINO-Engineering DEC-012). Installed here
 # for two jobs: provisioning interpreters (below), and later `uv tool install` for CSA's own
 # Python CLIs once they are packaged. Chosen over pipx because it also provisions the
 # interpreter - pipx needs a working Python first, which is the bootstrap problem one layer up.

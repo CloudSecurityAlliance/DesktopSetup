@@ -48,7 +48,7 @@ Each of those is a person stopped, and each one converts an AI question into an 
 
 ## Who it is for, in order
 
-Per [`BUILD-FOR-YOURSELF-FIRST.md`](https://github.com/CloudSecurityAlliance-Internal/CINO-Platform-Engineering/blob/main/BUILD-FOR-YOURSELF-FIRST.md):
+Per [`BUILD-FOR-YOURSELF-FIRST.md`](https://github.com/CloudSecurityAlliance-Internal/CINO-Engineering/blob/main/BUILD-FOR-YOURSELF-FIRST.md):
 
 1. **The person building the AI tooling** — because when the builder is the constraint, every
    hour spent re-provisioning a laptop is an hour not spent building.

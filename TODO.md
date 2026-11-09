@@ -115,7 +115,7 @@ rather than half-built. Scope and package traps are settled (see #57); these are
 
 - [ ] **T2 — AWS credentials on a headless box.** Several viable routes and no comparison yet:
   the AWS CLI's own configuration, static API keys, AWS SSO (another browser flow), or — most
-  promising — an **EC2 instance role**, since [DEC-006](https://github.com/CloudSecurityAlliance-Internal/CINO-Platform-Engineering/blob/main/DECISIONS.md)
+  promising — an **EC2 instance role**, since [DEC-006](https://github.com/CloudSecurityAlliance-Internal/CINO-Engineering/blob/main/DECISIONS.md)
   already mandates IAM-first with no stored credentials. If tier-2 VMs run inside AWS, the
   instance role solves this *by construction* and much of T1 with it — but that would make
   "runs in AWS" a tier-2 requirement, which is exactly the kind of constraint worth choosing on
