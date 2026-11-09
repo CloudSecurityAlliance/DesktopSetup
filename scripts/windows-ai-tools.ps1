@@ -1609,7 +1609,7 @@ function Find-UsablePython {
     return $null
 }
 
-# uv is the CSA Python toolchain standard (CINO-Platform-Engineering DEC-012). Installed for
+# uv is the CSA Python toolchain standard (CINO-Engineering DEC-012). Installed for
 # two jobs: provisioning interpreters, and later `uv tool install` for CSA's own Python CLIs.
 function Install-Uv {
     if (Has-Command uv) {

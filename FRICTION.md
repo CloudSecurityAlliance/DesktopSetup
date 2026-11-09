@@ -82,7 +82,7 @@ sub-checks also print — and piped through `head`, which is how
 commits.
 
 Already generalised at fleet level:
-[`a-green-check-is-only-evidence-about-what-it-ran-on`](https://github.com/CloudSecurityAlliance-Internal/CINO-Platform-Engineering/blob/main/insights/a-green-check-is-only-evidence-about-what-it-ran-on.md).
+[`a-green-check-is-only-evidence-about-what-it-ran-on`](https://github.com/CloudSecurityAlliance-Internal/CINO-Engineering/blob/main/insights/a-green-check-is-only-evidence-about-what-it-ran-on.md).
 Kept here because the *project-local* remedy is concrete and partly done: `check-all.sh` now
 names the checks that exited 77 rather than only counting them, and `check-script-versions.py`
 can see uncommitted work instead of passing about the empty set. What remains is habit — read

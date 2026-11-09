@@ -64,7 +64,7 @@ written, and #119 exists so nothing has to be rediscovered.
 
 **Decided: accept the migration, do not pin.** `ubuntu-latest` is taken as it comes; whatever
 breaks after 2026-10-19 gets fixed then. Reasoning recorded on
-[CINO-PE#178](https://github.com/CloudSecurityAlliance-Internal/CINO-Platform-Engineering/issues/178):
+[CINO-PE#178](https://github.com/CloudSecurityAlliance-Internal/CINO-Engineering/issues/178):
 the exposure is CI rather than production, a breaking job is visible and attributable, and an
 unexpiring pin is the same silent drift that left `actions/checkout` three majors behind until a
 deprecation notice happened to be read. The rollover is staged rather than a cutover, so
@@ -80,7 +80,7 @@ Kept rather than deleted, because the useful part is not the answer but what ans
 34-job measurement is what turned this from a worry into a decision.
 
 **Original entry, for the record.** Blocked: nothing yet, and that was the hazard.
-[CINO-PE#178](https://github.com/CloudSecurityAlliance-Internal/CINO-Platform-Engineering/issues/178)
+[CINO-PE#178](https://github.com/CloudSecurityAlliance-Internal/CINO-Engineering/issues/178)
 holds the measurement: 34 `ubuntu-latest` jobs across six repositories, none pinned, with
 `ubuntu-latest` beginning to mean Ubuntu 26 from **2026-10-19**
 ([runner-images#14748](https://github.com/actions/runner-images/issues/14748)).

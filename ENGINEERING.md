@@ -276,7 +276,7 @@ Homebrew/winget for system tools and desktop apps; the native installer for Clau
 auto-updates); npm for the Codex and Gemini CLIs and for Wrangler; **uv for Python**.
 
 - **Python comes from uv, Homebrew/winget as fallback**
-  ([DEC-012](https://github.com/CloudSecurityAlliance-Internal/CINO-Platform-Engineering/blob/main/DECISIONS.md)).
+  ([DEC-012](https://github.com/CloudSecurityAlliance-Internal/CINO-Engineering/blob/main/DECISIONS.md)).
   `install_uv` runs before `install_python`. **`--python` is not optional** on any `uv tool`
   call: without it uv picks its own managed default and ignores both PATH and anything the
   installer provisioned — which is how four CSA servers once landed on Python 3.10, the floor of
@@ -320,7 +320,7 @@ A husk is `pyvenv.cfg` + `Scripts/` with no importable package, which `uv tool l
 *"Failed find package"* while exiting 0. Four working servers became four husks in one run that
 way. So: **ask the environment, never the exit code**, and refuse a rebuild before calling uv if
 any entry point is held. Generalised fleet-wide as
-[`an-exit-code-is-not-a-state`](https://github.com/CloudSecurityAlliance-Internal/CINO-Platform-Engineering/blob/main/insights/an-exit-code-is-not-a-state.md).
+[`an-exit-code-is-not-a-state`](https://github.com/CloudSecurityAlliance-Internal/CINO-Engineering/blob/main/insights/an-exit-code-is-not-a-state.md).
 
 ---
 
@@ -640,5 +640,5 @@ The macOS `bash -c "$(...)"` form — **not** a pipe — is required to preserve
    scope, its own runtime, its own ability to fail. A control that cannot fail proves nothing.
 
 Both generalised at fleet level:
-[`an-exit-code-is-not-a-state`](https://github.com/CloudSecurityAlliance-Internal/CINO-Platform-Engineering/blob/main/insights/an-exit-code-is-not-a-state.md),
-[`a-green-check-is-only-evidence-about-what-it-ran-on`](https://github.com/CloudSecurityAlliance-Internal/CINO-Platform-Engineering/blob/main/insights/a-green-check-is-only-evidence-about-what-it-ran-on.md).
+[`an-exit-code-is-not-a-state`](https://github.com/CloudSecurityAlliance-Internal/CINO-Engineering/blob/main/insights/an-exit-code-is-not-a-state.md),
+[`a-green-check-is-only-evidence-about-what-it-ran-on`](https://github.com/CloudSecurityAlliance-Internal/CINO-Engineering/blob/main/insights/a-green-check-is-only-evidence-about-what-it-ran-on.md).

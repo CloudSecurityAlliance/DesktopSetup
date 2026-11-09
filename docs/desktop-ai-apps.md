@@ -235,7 +235,7 @@ The tests do not prove the Windows paths or winget's behaviour. Those were measu
 ## Linux
 
 Not installed by anything here. The Linux tier is headless, for AI agents
-([DEC-013](https://github.com/CloudSecurityAlliance-Internal/CINO-Platform-Engineering/blob/main/DECISIONS.md)),
+([DEC-013](https://github.com/CloudSecurityAlliance-Internal/CINO-Engineering/blob/main/DECISIONS.md)),
 and a desktop app has no place on it. If a Linux desktop tier is ever added:
 
 | App | Status (2026-10-23) |

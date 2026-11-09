@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """A headless run must never block on a prompt. This is tier 2's primary path.
 
-[DEC-013](CINO-Platform-Engineering) commits CSA to Linux as a supported tier — "the machine AI
+[DEC-013](CINO-Engineering) commits CSA to Linux as a supported tier — "the machine AI
 works on", where **non-interactive is the primary path, not a fallback**. Nothing enforced that:
 before this file, `grep -rn NONINTERACTIVE tests/ tools/` returned nothing at all. A commitment
 in a decision record with no check behind it is a convention, and this repo's own doctrine is
