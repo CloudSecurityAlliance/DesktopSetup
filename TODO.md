@@ -1,6 +1,6 @@
 # TODO — Code Audit Findings
 
-> ## Start here: open handoffs (updated 2026-10-26)
+> ## Start here: open handoffs (updated 2026-11-10)
 >
 > Picking up work cold, as a new AI session or a person? Each line below is a **handoff issue**:
 > the resume point for one piece of work, with its status, a file map, the reasoning, tasks in
@@ -11,6 +11,7 @@
 > |---|---|---|
 > | **Desktop AI apps:** Claude, ChatGPT, Gemini, Copilot desktop, and the wait before replacing a running app | [#168](https://github.com/CloudSecurityAlliance/DesktopSetup/issues/168) | [#163](https://github.com/CloudSecurityAlliance/DesktopSetup/issues/163) / [#169](https://github.com/CloudSecurityAlliance/DesktopSetup/issues/169): `check-all.sh` is red on a Windows host and on a Mac, each for its own reason |
 > | **Gemini CLI → Antigravity CLI:** Gemini CLI no longer accepts personal Google sign-in | [#172](https://github.com/CloudSecurityAlliance/DesktopSetup/issues/172) | [#171](https://github.com/CloudSecurityAlliance/DesktopSetup/issues/171): research Gemini CLI vs Antigravity CLI before changing any script |
+> | **Python 3.14 on Windows:** #179's Windows halves (the CSA Python resolver, the gate `.ps1` rebuild, document deps) | [#184](https://github.com/CloudSecurityAlliance/DesktopSetup/issues/184) | measure `Py_GIL_DISABLED` and uv's build preference on Windows before writing code (task 1 of #184) |
 > | **Everything that needs a Mac** | [#119](https://github.com/CloudSecurityAlliance/DesktopSetup/issues/119) | read its latest comment first |
 >
 > Before starting, run `git pull`, `gh issue list` and `gh pr list`: a handoff is a snapshot, and
