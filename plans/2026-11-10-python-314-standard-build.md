@@ -30,6 +30,11 @@ functions, Pester 5.7.1.
 Its seven decisions, D1 to D7:
 - **D1 is decided by the CINO (2026-11-10): rebuild `~/.default_venv` even when it is active.** He chose the option
   "Rebuild even if active (Recommended)".
+- **The venv layout is decided by the CINO (2026-11-10):** *"lets build ~/.default_venv-3.14 and then switch to it
+  with zshrc or whatever?"* `~/.default_venv` becomes a relative symlink to a versioned directory,
+  `~/.default_venv-3.14`. The AI chose the symlink as the "whatever": `~/.zshrc` only tests `-d`/`-f` on the path,
+  and both follow a symlink. It was applied by hand on the CINO's Mac the same day. Task 3 makes it the installer's
+  behaviour, and this makes D1 hold by construction: the active venv's real directory never moves.
 - **D5 is decided by the CINO (2026-11-10): hold the Windows halves as drafts for a Windows session.** He chose the
   option "Hold as drafts for a Windows session". macOS ships first, and the platforms diverge until a session on
   a real Windows machine runs Tasks 4W and 5W end to end. That divergence is recorded, not hidden: a handoff issue
@@ -77,6 +82,9 @@ Its seven decisions, D1 to D7:
 - **Duplicated functions and the `CSA_DOC_PY_DEPS` array stay byte-identical.** `check-duplication.py` covers
   functions; `tests/test_python_pins.py` covers the array.
 - **Bump the version of every changed script:** `date -u +%Y-%m-%dT%H:%MZ`.
+- **uv 0.13.7 creates a `~/.local/bin/python3.14` shim** (measured 2026-11-10), and `uv python list --output-format json`
+  may report that shim as `path`. ENGINEERING.md's "uv creates no PATH shims (uv 0.12.10)" is out of date; Task 2
+  corrects it. Resolve and verify whatever path uv reports, and don't depend on whether a shim exists.
 - **Plan lines name what runs, truthfully,** and keep their labels (`Python`, `uv`, `Preflight deps`,
   `Internal MCP servers`, `pip packages`) for `check-plan-covers-steps.py`.
 - **New test files go into `tools/check-all.sh` and CI.** Read the tail and the exit code. The only allowed failures
@@ -184,7 +192,7 @@ Its seven decisions, D1 to D7:
 - [ ] **Step 5: Commit:**
   `feat: macOS provisions and names one CSA Python, a verified 3.14 standard build, never 3.14t or Homebrew's 3.15`.
 
-### Task 3 (macOS): `~/.default_venv` is rebuilt on the CSA Python when its interpreter is dead, free-threaded, the wrong version or Cellar-pinned; markitdown joins it
+### Task 3 (macOS): `~/.default_venv` is a symlink to `~/.default_venv-3.14`, built on the CSA Python; a dead, free-threaded, wrong-version or Cellar-pinned target is replaced; markitdown joins it
 
 **Files:**
 - Modify: `scripts/macos-ai-tools.sh`.
@@ -215,25 +223,43 @@ Its seven decisions, D1 to D7:
     `realpath bin/python3` being under `*/Cellar/*`, and only when `find_csa_python` returns a non-Cellar path.
     Otherwise warn, and don't rebuild.
 - **`ensure_default_venv [--no-create]`:** returns 0 always.
-  - It builds onto `ensure_csa_python`'s path (`find_csa_python` under `--no-create`) with
-    `uv venv --seed --python <path> <build>`, or `<path> -m venv` when uv is absent.
-  - Build first, swap last. The old venv moves to `${CSA_VENV}.pre-3.14-<YYYYmmddHHMMSS>`.
+  - **Layout:** `$CSA_VENV` (`~/.default_venv`) is a **relative** symlink to `${CSA_VENV}-${CSA_PYTHON_PREFERRED}`,
+    the versioned directory. Old versioned directories are kept for rollback and never deleted.
+  - **Build:** `uv venv --seed --python <csa-python> ${CSA_VENV}-3.14` (or `<csa-python> -m venv` when uv is
+    absent), onto `ensure_csa_python`'s path (`find_csa_python` under `--no-create`). Then install
+    `CSA_DOC_PY_DEPS`.
+  - **States it handles:**
+    - **A real directory at `$CSA_VENV` (pre-symlink machines):** build the versioned venv first. Then rename the
+      directory to `${CSA_VENV}-<its version_info X.Y from pyvenv.cfg>`, or `-unknown`, adding `-<YYYYmmddHHMMSS>`
+      on a name collision. Then link.
+    - **A link to a sound `-3.14`:** no-op.
+    - **A link to an older version, or dangling:** build `-3.14` if needed, then flip.
+    - **A `-3.14` target that fails `venv_rebuild_reason`:** build `${CSA_VENV}-3.14.new-$$`, rename the broken
+      one to `${CSA_VENV}-3.14.broken-<ts>`, and rename the new one into place.
+  - **Flip atomically:** `ln -s <target> ${CSA_VENV}.link-new && mv` it over the old link. A real directory has
+    already been renamed away at that point, so the gap is one rename.
+  - **`~/.zshrc` is never edited.** The CINO's stanza auto-creates a Homebrew-3.12 venv only when `-d` fails, and
+    the link satisfies it.
   - On a rebuild, it warns with the moved path and the names of packages the old venv had beyond
     `CSA_DOC_PY_DEPS` that it did not reinstall. Without a ledger it prints that list; with one, it adds it as a
     to-do.
-  - **When `$VIRTUAL_ENV` is the venv (D1, the CINO's decision):** rebuild it anyway. The path stays valid after
-    the swap. Add the to-do `open a new terminal, because ~/.default_venv was rebuilt` (order 10), or print it
-    when there is no ledger.
+  - **When `$VIRTUAL_ENV` is the venv (D1):** proceed. The active shell's real directory never moves, so nothing
+    dangles. Add the to-do `open a new terminal to use the rebuilt ~/.default_venv` (order 10), or print it when
+    there is no ledger.
   - With no CSA Python, it warns and leaves the venv untouched.
 - **`csa_tool_repairs`:** for each `$(uv tool dir)/csa-*`, applies the Task 5 rules to `<tool>/bin/python3`. Prints
   `<tool>: <reason>` lines. Read-only.
 
 - [ ] **Step 1: Failing tests,** in `tests/test_venv_replacement.py`.
   - **Real-shaped fixtures:** a `bin/python3` symlink chain imitating `opt/python@3.14 → Cellar/python@3.14/3.14.10`.
+  - **Layout cases:** `real_dir_migrated_to_versioned_and_linked`, `link_is_relative`, `link_current_noop`,
+    `dangling_link_reflipped`, `broken_314_target_replaced`, `old_versions_kept`, `migration_name_collision`,
+    `zshrc_d_test_passes_on_link`, `cinos_mac_state_noop`. The last is a link to a sound `-3.14` plus a real
+    `-3.13` directory: nothing changes.
   - **Cases:** `dangling_interpreter`, `venv_on_315_rebuilt`, `venv_on_313_rebuilt`, `freethreaded_venv_rebuilt`,
     `cellar_with_uv_python_rebuilt`, `cellar_without_uv_python_warns_only`, `brew_fallback_stable`,
     `healthy_314_untouched`, `second_run_noop`, `no_csa_python_leaves_venv`,
-    `uses_csa_python_not_path_python3`, `moved_packages_reported`, `active_venv_rebuilt_with_todo`,
+    `uses_csa_python_not_path_python3`, `moved_packages_reported`, `active_venv_flipped_with_todo`,
     `builder_fails_keeps_old`.
   - **Through the real entry points:** `update_default_venv_runs_without_outdated_pip`, which drives macos-update's
     `main` step list with no outdated pip packages and asserts the venv was repaired;
@@ -346,8 +372,8 @@ Windows measurements. It merges only after a Windows session has run it end to e
 - [ ] **Step 2: Record:** each environment's `home` before and after, `version_info`, `Py_GIL_DISABLED`, the
   warnings, and the uv command log.
 - [ ] **Step 3: The real run on this Mac** is queued for the CINO's go-ahead. It rebuilds four tools off 3.14t under
-  running clients (a restart follows), and moves `~/.default_venv` (3.13.1) aside and rebuilds it on 3.14, even though `~/.zshrc` activates
-  it (D1).
+  running clients (a restart follows), and leaves `~/.default_venv` alone. It was hand-migrated to the `-3.14` link on 2026-11-10 (the old venv is
+  `~/.default_venv-3.13`), so the venv part must be a no-op there.
 - [ ] **Step 4: Commit:**
   `docs: acceptance evidence — one rerun repairs a dangling venv and a free-threaded tool, a second changes nothing`.
 
