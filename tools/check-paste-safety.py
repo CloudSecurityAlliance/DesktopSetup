@@ -11,9 +11,9 @@ command.
 `;` joins two statements on one line and pastes safely. The README already used that form for
 `CSA_REPO` long before this check existed, so the house style was already right — in one place.
 
-Only README.md is checked. CLAUDE.md's PowerShell block is a *reference list* of the different
-entry points, one per scenario, read by agents rather than pasted wholesale by a person at a
-prompt; requiring it to be one line per block would split a table for no benefit.
+Only README.md is checked. ENGINEERING.md's PowerShell block is a *reference list* of the
+different entry points, one per scenario, read by agents rather than pasted wholesale by a person
+at a prompt; requiring it to be one line per block would split a table for no benefit.
 
     python3 tools/check-paste-safety.py
 """

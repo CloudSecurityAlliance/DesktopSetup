@@ -10,7 +10,7 @@ Status: Proposed | Active | Implemented | Superseded by ADR-NNN | Deprecated
 ADR-001: main IS the release; there is no staging branch — Active — 2026-10-02
 ADR-002: Target Windows PowerShell 5.1, not 7 — Active — 2026-10-02
 ADR-003: The *-plugins filenames stay, despite being misleading — Active — 2026-10-02
-ADR-004: One source of repo facts; CLAUDE.md and AGENTS.md are pointers — Active — 2026-10-02
+ADR-004: One source of repo facts; CLAUDE.md and AGENTS.md are pointers — Active, amended 2026-11-10 — 2026-10-02
 ADR-005: A guard encodes the mistake it was written for, and self-tests — Active — 2026-10-02
 ADR-006: Exit 77 means "could not run here", counted apart from passes — Active — 2026-10-02
 ```
@@ -113,7 +113,7 @@ the strings might make unnecessary.
 
 ## ADR-004: One source of repo facts; `CLAUDE.md` and `AGENTS.md` are pointers
 
-**Status:** Active · **Date:** 2026-10-02 ·
+**Status:** Active, amended 2026-11-10 · **Date:** 2026-10-02 ·
 **Context:** [#115](https://github.com/CloudSecurityAlliance/DesktopSetup/issues/115)
 
 **Context.** An `AGENTS.md` was briefly published that was a mechanical `Claude` → `Codex`
@@ -125,6 +125,14 @@ which **36** named Claude at all.
 **Decision.** `ENGINEERING.md` holds the repo's facts, agent-neutral, naming each tool by its
 real name. `CLAUDE.md` and `AGENTS.md` are short pointers carrying only what is specific to
 their reader. `README.md` addresses humans arriving at the repository.
+
+**Amended 2026-11-10 by CINO-Engineering
+[DEC-033](https://github.com/CloudSecurityAlliance-Internal/CINO-Engineering/blob/main/DECISIONS.md#dec-033-agentsmd-is-the-instruction-file-claudemd-and-geminimd-are-one-line-pointers-never-full-files).**
+`AGENTS.md` is now the one instruction file every agent loads, and `CLAUDE.md` and `GEMINI.md`
+are one-line pointers to it (`@AGENTS.md`, `@./AGENTS.md`). The rest stands: `ENGINEERING.md`
+holds the facts, and `AGENTS.md` carries only the rules and traps. The second rejected
+alternative below is now the layout. Its objection no longer applies, because Claude Code loads
+`AGENTS.md` through the one-line `CLAUDE.md` at launch rather than instead of it.
 
 **Rationale.** Roughly 90% of the content belongs to whoever is editing, not to one assistant.
 This repository has `tools/check-duplication.py` precisely because duplicated content drifts

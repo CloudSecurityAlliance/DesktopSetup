@@ -1,13 +1,18 @@
 # AGENTS.md
 
+Instructions for every AI agent working in this repository — Claude Code, Codex, Gemini or
+anything else. **`CLAUDE.md` and `GEMINI.md` are one-line pointers to this file: do not edit
+them.** Put every instruction here, and label one that applies to a single tool with that tool's
+name ([DEC-033](https://github.com/CloudSecurityAlliance-Internal/CINO-Engineering/blob/main/DECISIONS.md#dec-033-agentsmd-is-the-instruction-file-claudemd-and-geminimd-are-one-line-pointers-never-full-files)).
+
 **Read [`ENGINEERING.md`](ENGINEERING.md) first.** It holds this repository's facts — what the
 ten scripts are, why `main` is the release, the `Invoke-Native*` wrappers and the measured
 Windows PowerShell 5.1 behaviour behind them, the parity contract, the duplicated six-script
 lists, the guard layer, and what `tools/check-all.sh` proves and does not.
 
-That file is agent-neutral on purpose; [`CLAUDE.md`](CLAUDE.md) points at the same one. There is
-one copy because this repo has `tools/check-duplication.py` precisely because duplicated content
-drifts silently, and that argument applies to its own documentation
+That file is agent-neutral on purpose, and this file points at it rather than repeating it. There
+is one copy because this repo has `tools/check-duplication.py` precisely because duplicated
+content drifts silently, and that argument applies to its own documentation
 ([ADR-004](DECISIONS-ADR.md)).
 
 Then [`BUSINESS-CASE.md`](BUSINESS-CASE.md) for why any of it exists, and
@@ -68,3 +73,28 @@ client still needs its macOS/Windows counterpart.
 - **Editing these files through a shell heredoc mangles backslashes.** They are full of `printf
   '\n\033[1m'`, PowerShell backticks and regex in string literals; it went wrong four times in
   one session. Write the patch to a file and run it. See [FRICTION-002](FRICTION.md).
+
+## Claude Code
+
+Merged unchanged from the former `CLAUDE.md` ("Specific to Claude Code"). Some of it repeats or
+applies beyond Claude Code; the tightening pass sorts that out.
+
+- **`/check-all` is not a thing; run `./tools/check-all.sh`.** It mirrors CI exactly. Read its
+  **tail** and its exit code — do not grep for `all checks passed`, which individual checkers
+  also print, and do not pipe through `head`. That is how `main` stayed red for six commits
+  ([#132](https://github.com/CloudSecurityAlliance/DesktopSetup/issues/132)).
+- **This repo installs the thing you are running in.** `scripts/*-ai-tools.*` install Claude
+  Code via its native installer (it auto-updates; do not route it through Homebrew or npm), and
+  register CSA plugin marketplaces and the `csa-mcp` server against the user's own GitHub
+  identity.
+- **Claude Desktop holds the MCP server entry points open on Windows.** That is why
+  `Check-RunningTools` exists and why a `uv tool install --force` is refused while a client is
+  running — the rebuild is not atomic and leaves a husk. Identify clients by **path**: a live
+  Claude Code process once reported its name as `claude.exe.old.1790878548618.45752`, because
+  its own updater had renamed its running image.
+- **`scripts/csa-claude-connectors.py`** disables chosen claude.ai connectors so the CSA Google
+  MCP servers are used instead. Report-only unless `--apply`.
+- **Editing these scripts from a Claude Code session on Windows:** patching them through a Bash
+  heredoc mangles backslashes, four times in one session — these files are full of `printf
+  '\n\033[1m'`, PowerShell backticks and regex in string literals. Write the patch to a file and
+  run it, or avoid backslashes entirely (`chr(10)`). See [FRICTION-002](FRICTION.md).

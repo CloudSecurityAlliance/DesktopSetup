@@ -20,7 +20,7 @@ them, across three scripts. That is what makes it worth a check rather than twel
 shape recurs because it looks finished.
 
 `2>/dev/null` is what makes this class so bad. It suppresses the diagnosis but not the
-termination — the same trap as `2>$null` on the PowerShell side, documented in CLAUDE.md.
+termination — the same trap as `2>$null` on the PowerShell side, documented in ENGINEERING.md.
 
 What counts as guarded: any `||` follow-on (`|| true`, `|| var=""`, `|| continue`, `|| return 0`),
 or the assignment being a condition (`if x="$(…)"`, `while`, `&&`/`||` operands) — in those

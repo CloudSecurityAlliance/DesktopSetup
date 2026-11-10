@@ -206,3 +206,8 @@ marimo/_static/
 marimo/_lsp/
 __marimo__/
 
+# Personal agent-instruction overrides: never committed (CINO-Engineering DEC-033).
+# AGENTS.md is the shared instruction file; CLAUDE.md and GEMINI.md are pointers to it.
+CLAUDE.local.md
+AGENTS.local.md
+AGENTS.override.md
