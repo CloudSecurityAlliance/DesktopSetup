@@ -46,13 +46,15 @@ traps.
   `Check-RunningTools` exists and a `uv tool install --force` is refused while a client runs:
   the rebuild is not atomic and leaves a husk. **Identify a client by its path, never its
   process name:** Claude Code's updater renames its running image, e.g.
-  `claude.exe.old.1790878548618.45752` ([TODO.md](TODO.md), H1).
+  `claude.exe.old.1790878548618.45752` ([TODO.md](TODO.md) H1, item 2).
 - **`scripts/csa-claude-connectors.py` is report-only unless `--apply`.**
-- **Client support is narrower than the install list.** This repo's own code registers the CSA
-  plugin marketplaces and the hosted `csa-mcp` server for Claude Code only, against the user's
-  own GitHub identity, and writes no Codex or Gemini MCP config; the local CSA MCP servers are
-  registered by the private gate repo's setup scripts
-  ([ENGINEERING.md → The CSA contracts](ENGINEERING.md#the-csa-contracts)). Wider coverage is
+- **Which clients get CSA tooling depends on who registers it.** The local CSA MCP servers are
+  registered with Claude Code, Claude Desktop, Codex and Gemini by the private gate repo's setup
+  scripts, which these scripts fetch and run
+  ([ENGINEERING.md → The CSA contracts](ENGINEERING.md#the-csa-contracts)). This repo's own code
+  registers only the CSA plugin marketplaces and the hosted `csa-mcp` server, and only with
+  Claude Code, against the user's own GitHub identity. Each client's MCP config format:
+  [`docs/mcp-servers.md`](docs/mcp-servers.md). Wider coverage:
   [#176](https://github.com/CloudSecurityAlliance/DesktopSetup/issues/176).
 - **Claude Code:** there is no `/check-all` command; run `./tools/check-all.sh`.
 

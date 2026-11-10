@@ -10,7 +10,7 @@ Status: Proposed | Active | Implemented | Superseded by ADR-NNN | Deprecated
 ADR-001: main IS the release; there is no staging branch — Active — 2026-10-02
 ADR-002: Target Windows PowerShell 5.1, not 7 — Active — 2026-10-02
 ADR-003: The *-plugins filenames stay, despite being misleading — Active — 2026-10-02
-ADR-004: One source of repo facts; CLAUDE.md and AGENTS.md are pointers — Active, amended 2026-11-10 — 2026-10-02
+ADR-004: One source of repo facts; CLAUDE.md and AGENTS.md are pointers — Active — 2026-10-02
 ADR-005: A guard encodes the mistake it was written for, and self-tests — Active — 2026-10-02
 ADR-006: Exit 77 means "could not run here", counted apart from passes — Active — 2026-10-02
 ```
@@ -113,7 +113,7 @@ the strings might make unnecessary.
 
 ## ADR-004: One source of repo facts; `CLAUDE.md` and `AGENTS.md` are pointers
 
-**Status:** Active, amended 2026-11-10 · **Date:** 2026-10-02 ·
+**Status:** Active · **Date:** 2026-10-02 ·
 **Context:** [#115](https://github.com/CloudSecurityAlliance/DesktopSetup/issues/115)
 
 **Context.** An `AGENTS.md` was briefly published that was a mechanical `Claude` → `Codex`
@@ -131,8 +131,8 @@ their reader. `README.md` addresses humans arriving at the repository.
 `AGENTS.md` is now the one instruction file every agent loads, and `CLAUDE.md` and `GEMINI.md`
 are one-line pointers to it (`@AGENTS.md`, `@./AGENTS.md`). The rest stands: `ENGINEERING.md`
 holds the facts, and `AGENTS.md` carries only the rules and traps. The second rejected
-alternative below is now the layout. Its objection no longer applies, because Claude Code loads
-`AGENTS.md` through the one-line `CLAUDE.md` at launch rather than instead of it.
+alternative below is now the layout. Its objection no longer applies: `CLAUDE.md` is still the
+small file Claude Code loads automatically, and it now imports `AGENTS.md`.
 
 **Rationale.** Roughly 90% of the content belongs to whoever is editing, not to one assistant.
 This repository has `tools/check-duplication.py` precisely because duplicated content drifts
