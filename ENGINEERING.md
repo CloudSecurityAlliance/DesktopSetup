@@ -291,9 +291,28 @@ auto-updates); npm for the Codex and Gemini CLIs and for Wrangler; **uv for Pyth
 - **uv creates no PATH shims** for interpreters it manages (measured, uv 0.12.10), so
   `find_usable_python` / `Find-UsablePython` probe PATH first and then ask `uv python find`
   directly. PATH probing alone would miss a good uv Python and install a second one.
-- **Floors are derived from the consumer that asks for most, never picked.**
-  `CSA_PYTHON_MIN=3.10` from CSA-Document-Pipeline's `requires-python`; the Node floor of **22**
-  from Wrangler's `engines.node`. Both enforced on both platforms.
+- **Python is 3.14, and stays there until 3.15 is fully ready.** `CSA_PYTHON_MIN` and
+  `CSA_PYTHON_PREFERRED` are both `3.14` on both platforms. That is a CSA policy, not a number
+  derived from one consumer
+  ([DEC-025](https://github.com/CloudSecurityAlliance-Internal/CINO-Engineering/blob/main/DECISIONS.md)).
+  A move to 3.15 was reversed on 2026-11-10: `onnxruntime` has no cp315 wheel, and the fleet had
+  split. When the CINO decides 3.15 is ready, every CSA repo moves together
+  ([CINO-Engineering#312](https://github.com/CloudSecurityAlliance-Internal/CINO-Engineering/issues/312)).
+  The floor was 3.10, from CSA-Document-Pipeline's `requires-python`, until the MCP servers
+  declared `>=3.14`.
+- **The standard 3.14 build, never the free-threaded 3.14t.**
+  - **The trap.** When free-threaded is the only uv-managed 3.14, `uv python find 3.14` returns
+    `python3.14t`. One staff Mac had all four CSA servers on it
+    ([#179](https://github.com/CloudSecurityAlliance/DesktopSetup/issues/179)).
+  - **The fix.** Once the standard 3.14 is also installed (`uv python install 3.14`), the same
+    request returns the standard build.
+  - **Not `3.14+gil`.** uv 0.13.7 never downloads for a `+gil` request, so it fails on a clean
+    machine.
+  - **Telling the builds apart.** `uv tool list --show-python` prints the same thing for both
+    builds. Ask the interpreter for `sysconfig.get_config_var("Py_GIL_DISABLED")`.
+  - **Not enforced yet.** Making the scripts enforce this is #179.
+- **Node's floor is derived from the consumer that asks for most, never picked:** **22**, from
+  Wrangler's `engines.node`. Enforced on both platforms.
 - **Node is pinned to the LTS line on both platforms**
   ([#56](https://github.com/CloudSecurityAlliance/DesktopSetup/issues/56)):
   `brew install node@24`, `winget install OpenJS.NodeJS.LTS`.
