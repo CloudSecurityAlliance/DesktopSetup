@@ -213,15 +213,17 @@ Its seven decisions, D1 to D7:
   - Delete the venv block at the end of `update_pip`, which its early returns made unreachable.
   - **Copy byte-identically from macos-ai-tools.sh:** `CSA_VENV`, `CSA_DOC_PY_DEPS`, `python_is_csa_build`,
     `find_csa_python`, `ensure_csa_python`, `venv_rebuild_reason`, `ensure_default_venv`.
-  - **`macos-update.sh` has no ledger, so no `csa_todo_add`.** The to-do text is printed there instead, through the
-    existing "no ledger" path every caller already handles.
+  - **`macos-update.sh` has no ledger and no `csa_todo_add` function.** The shared `ensure_default_venv` must guard
+    the call: `if declare -F csa_todo_add >/dev/null && csa_todo_add …; then :; else <print the to-do>; fi`.
+    In `macos-ai-tools.sh` the function exists but returns non-zero when `CSA_TODO_FILE` is unset; the same
+    guard handles that. Test: `update_prints_todo_without_ledger`.
   - **Add the plan row.**
 - Modify: `tools/check-plan-covers-steps.py`. Add a `PLAN_LABEL` entry mapping `update_default_venv` to its plan
   row's label (`Default venv`).
 - Modify: `tools/check-parity.py`. The new `main()` step needs a `PER_PAIR`/`PLATFORM_ONLY` entry with this reason:
   "Windows has no `~/.default_venv`: document-pipeline's launchers are bash and probe
   `$HOME/.default_venv/bin/python3`, a POSIX layout; Windows document deps are #183."
-- That issue is filed: #183. The Windows halves' handoff is #184.
+- The Windows document-deps issue is #183, and the Windows halves' handoff is #184.
 - Modify: `tests/test_venv_replacement.py` and `ENGINEERING.md`.
 
 **Interfaces:**
@@ -255,7 +257,7 @@ Its seven decisions, D1 to D7:
     - **A dangling link** also breaks the CINO's `~/.zshrc` stanza: its `python -m venv` fails with `File exists`
       at every shell start. One more reason the installer repairs it.
     - **A `-3.14` target that fails `venv_rebuild_reason`:** build `${CSA_VENV}-3.14.new-$$` **with `uv venv
-      --relocatable`**, install the deps, rename the broken one to `${CSA_VENV}-3.14.broken-<ts>`, then rename the
+      --relocatable`**, install the deps **with `uv pip` only, never the venv's `pip`**, rename the broken one to `${CSA_VENV}-3.14.broken-<ts>`, then rename the
       new one into place. Measured: a venv built at one path and renamed breaks `activate` and every console
       script, because both hardcode the creation path, while `--relocatable` survives the rename. When uv is
       absent (`python -m venv` fallback), rename the broken one away first, then build at the final path and
@@ -289,7 +291,9 @@ Its seven decisions, D1 to D7:
     `dangling_link_reflipped`, `broken_314_target_replaced`, `old_versions_kept`, `migration_name_collision`,
     `zshrc_d_test_passes_on_link`, `link_to_older_version_flipped` (the old directory gains no stray entry),
     `absolute_link_to_sound_314_noop`, `users_own_link_sound_left_alone`, `users_own_link_broken_flipped_named`,
-    `replaced_target_console_script_runs` (run `bin/pip --version` after a broken-target replacement),
+    `replaced_target_console_script_runs` (after a broken-target replacement, run a **dependency's** console
+    script, e.g. `bin/markitdown --version`, not only seed `bin/pip`. Measured: a script installed by the venv's own
+    pip keeps the `.new-$$` shebang and fails, exit 127, while `uv pip` and seed scripts survive the rename),
     `version_key_from_python_m_venv`, `home_with_space`, `virtual_env_creation_path_matches`,
     `cinos_mac_state_noop`. The last is a link to a sound `-3.14` plus a real
     `-3.13` directory: nothing changes.
@@ -337,7 +341,9 @@ winget fallback is `Python.Python.$CsaPythonPreferred`, and the accepted path is
 **Files** (in the fresh scratch clone):
 - Modify the four `internal-setup/csa-*-setup.sh`:
   - **Add `csa_python_path`:** run `uv python install "$csa_py"`, then resolve and verify, exactly as Task 2's
-    `find_csa_python` does: uv only, JSON `variant == "default"`, probe by running it. Print the path or nothing.
+    `find_csa_python` does: `uv python find --system --managed-python "$csa_py"` (**`--system` required**, or an
+    active venv's Python comes back), then uv's JSON listing with `variant == "default"`, every candidate probed by
+    running it. No Homebrew fallback here. Print the path or nothing.
   - **Add `uv_tool_interpreter_problem <tool-dir>`:** probe the tool's own `bin/python3`, never `<home>/python3`.
   - **Routing:** if a problem exists **and** `csa_python_path` produced a path, warn
     `"<tool> runs on a Python that <reason>; rebuilding it on <path>"` and run
@@ -374,6 +380,7 @@ winget fallback is `Python.Python.$CsaPythonPreferred`, and the accepted path is
     - `dead_interpreter_routes_force`: the tool dir exists and `uv tool list` omits it;
     - `rebuild_uses_verified_path`: `--python` is the verified path, never `3.14`;
     - `fresh_install_uses_verified_path` and `upgrade_uses_verified_path`;
+    - `csa_python_path_passes_system_flag`: with `VIRTUAL_ENV` set, every logged `uv python find` carries `--system`;
     - `offline_no_force`: `uv python install` fails, so no `--force` call;
     - `postcheck_warns_no_loop`: one install call;
     - `second_run_noop`;
