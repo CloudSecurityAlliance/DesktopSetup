@@ -1,100 +1,66 @@
 # AGENTS.md
 
-Instructions for every AI agent working in this repository — Claude Code, Codex, Gemini or
-anything else. **`CLAUDE.md` and `GEMINI.md` are one-line pointers to this file: do not edit
-them.** Put every instruction here, and label one that applies to a single tool with that tool's
-name ([DEC-033](https://github.com/CloudSecurityAlliance-Internal/CINO-Engineering/blob/main/DECISIONS.md#dec-033-agentsmd-is-the-instruction-file-claudemd-and-geminimd-are-one-line-pointers-never-full-files)).
+Tightened for modern AI: 2026-11-10.
 
-**Read [`ENGINEERING.md`](ENGINEERING.md) first.** It holds this repository's facts — what the
-ten scripts are, why `main` is the release, the `Invoke-Native*` wrappers and the measured
-Windows PowerShell 5.1 behaviour behind them, the parity contract, the duplicated six-script
-lists, the guard layer, and what `tools/check-all.sh` proves and does not.
+Instructions for every AI agent working in this repository. `CLAUDE.md` and `GEMINI.md` are
+one-line pointers to this file: **do not edit them.** Put every instruction here, and label one
+that applies to a single tool with that tool's name
+([DEC-033](https://github.com/CloudSecurityAlliance-Internal/CINO-Engineering/blob/main/DECISIONS.md#dec-033-agentsmd-is-the-instruction-file-claudemd-and-geminimd-are-one-line-pointers-never-full-files)).
 
-That file is agent-neutral on purpose, and this file points at it rather than repeating it. There
-is one copy because this repo has `tools/check-duplication.py` precisely because duplicated
-content drifts silently, and that argument applies to its own documentation
-([ADR-004](DECISIONS-ADR.md)).
+**Read [`ENGINEERING.md`](ENGINEERING.md) before changing anything.** It holds this repository's
+facts, once, for every agent ([ADR-004](DECISIONS-ADR.md)); this file holds the rules and the
+traps.
 
-Then [`BUSINESS-CASE.md`](BUSINESS-CASE.md) for why any of it exists, and
-[`GOALS.md`](GOALS.md) for what counts as done.
+## Rules
 
-## What this repository actually installs
-
-Getting these names right matters, because an earlier version of this file was a mechanical
-`Claude` → `Codex` substitution of `CLAUDE.md` and renamed things that were never Claude —
-*"AI coding CLIs (Codex, Codex, Gemini)"*, *"`Codex update`"*, *"Codex Desktop"*. A reader
-following it would have been misinformed about what these scripts do, in a public repository
-([#115](https://github.com/CloudSecurityAlliance/DesktopSetup/issues/115)).
-
-| What | Installed how |
-|---|---|
-| **Claude Code** | its own native installer — it auto-updates; do not route it through Homebrew or npm |
-| **Codex CLI** (`codex`) | `npm -g @openai/codex` |
-| **Gemini CLI** (`gemini`) | `npm -g @google/gemini-cli` |
-| **Claude Desktop** | Homebrew cask / winget |
-| **ChatGPT Desktop** | Homebrew cask / winget |
-| four CSA MCP servers | `uv tool install --python`, from setup scripts in a private gate repo |
-
-`@anthropic-ai/claude-code` **does** appear in these scripts, and only as something to migrate
-*away from*: `macos-ai-tools.sh` detects a Claude Code installed via npm or Homebrew and replaces
-it with the native installer, preserving settings. So seeing that package name in the source does
-not mean npm is how it is installed — it means npm is how it was installed wrongly.
-
-The `claude update` command in the `*-update` scripts belongs to Claude Code specifically.
-`codex` and `gemini` are updated through npm with the other globals.
-
-## Where support stops, and why
-
-**Plugin marketplaces and MCP registration are Claude Code only today.** Codex and Gemini both
-support OAuth-HTTP MCP transports, but their config formats differ, and nothing here writes
-them. That is future work rather than a decision against it — if you are extending this, that is
-the gap.
-
-So a change that "adds MCP support" has to say *for which client*, and a step added for one
-client still needs its macOS/Windows counterpart.
-
-## Conventions this repo expects of you
-
+- **Land work through a PR; never commit to `main`.** `main` is the release: every install
+  one-liner fetches `HEAD` ([ADR-001](DECISIONS-ADR.md)).
 - **Commit subjects state the claim the change makes**, not the file that changed.
-- **Land work through a PR**, never a direct commit to `main` — and `main` is the release, so
-  this is not ceremony.
-- **Run `./tools/check-all.sh`** and read its **tail** and exit code. Do not grep for
-  `all checks passed`: individual checkers print that string too, and a `head` on the output is
-  how `main` stayed red for six commits
+- **Before pushing, run `./tools/check-all.sh` (it mirrors CI) and read its tail and its exit
+  code.** Don't grep for `all checks passed`, which individual checkers also print, and don't
+  pipe it through `head`: that is how `main` stayed red for six commits
   ([#132](https://github.com/CloudSecurityAlliance/DesktopSetup/issues/132)).
-- **A new guard needs a self-test** that breaks its own rule on purpose, and should be validated
-  against the commit where the real defect lived ([ADR-005](DECISIONS-ADR.md)).
 - **Both platforms, or neither.** A behavioural change goes into the `.sh` and the `.ps1`
-  together; `check-parity.py` will reject a one-sided one, and declaring it `PLATFORM_ONLY` to
-  get past that creates the exact divergence
+  together. `check-parity.py` rejects a one-sided one, and declaring it `PLATFORM_ONLY` to get
+  past that creates the divergence
   [#111](https://github.com/CloudSecurityAlliance/DesktopSetup/issues/111) exists to find.
-- **Bump `SCRIPT_VERSION`** on any script you change — the UTC time, ISO 8601 to the **minute**:
-  `2026-10-26T05:04Z`.
-- **Editing these files through a shell heredoc mangles backslashes.** They are full of `printf
-  '\n\033[1m'`, PowerShell backticks and regex in string literals; it went wrong four times in
-  one session. Write the patch to a file and run it. See [FRICTION-002](FRICTION.md).
+- **Bump `SCRIPT_VERSION` on any script you change:** the UTC time, ISO 8601 to the **minute**,
+  e.g. `2026-10-26T05:04Z`
+  ([ENGINEERING.md → Script versioning](ENGINEERING.md#script-versioning)).
+- **A new guard needs a self-test** that breaks its own rule on purpose, validated against the
+  commit where the real defect lived ([ADR-005](DECISIONS-ADR.md)).
+- **A change that adds MCP support says which client it is for**, and a step added for one
+  client still needs its macOS/Windows counterpart.
 
-## Claude Code
+## Traps
 
-Merged unchanged from the former `CLAUDE.md` ("Specific to Claude Code"). Some of it repeats or
-applies beyond Claude Code; the tightening pass sorts that out.
+- **Don't patch these scripts through a shell heredoc.** The quoting layers silently mangle
+  their backslashes (`printf '\n\033[1m'`, PowerShell backticks, regex in string literals).
+  Write the patch to a file and run it, or avoid backslashes entirely (`chr(10)`)
+  ([FRICTION-002](FRICTION.md)).
+- **This repo installs Claude Code itself, with its native installer, which auto-updates.**
+  Never route it through Homebrew or npm. `@anthropic-ai/claude-code` appears in the scripts only
+  as an old install to migrate *away from*. `claude update` in the `*-update` scripts is Claude
+  Code's; `codex` and `gemini` update as npm globals.
+- **On Windows, Claude Desktop holds the MCP servers' entry points open.** That is why
+  `Check-RunningTools` exists and a `uv tool install --force` is refused while a client runs:
+  the rebuild is not atomic and leaves a husk. **Identify a client by its path, never its
+  process name:** Claude Code's updater renames its running image, e.g.
+  `claude.exe.old.1790878548618.45752` ([TODO.md](TODO.md), H1).
+- **`scripts/csa-claude-connectors.py` is report-only unless `--apply`.**
+- **Client support is narrower than the install list.** This repo's own code registers the CSA
+  plugin marketplaces and the hosted `csa-mcp` server for Claude Code only, against the user's
+  own GitHub identity, and writes no Codex or Gemini MCP config; the local CSA MCP servers are
+  registered by the private gate repo's setup scripts
+  ([ENGINEERING.md → The CSA contracts](ENGINEERING.md#the-csa-contracts)). Wider coverage is
+  [#176](https://github.com/CloudSecurityAlliance/DesktopSetup/issues/176).
+- **Claude Code:** there is no `/check-all` command; run `./tools/check-all.sh`.
 
-- **`/check-all` is not a thing; run `./tools/check-all.sh`.** It mirrors CI exactly. Read its
-  **tail** and its exit code — do not grep for `all checks passed`, which individual checkers
-  also print, and do not pipe through `head`. That is how `main` stayed red for six commits
-  ([#132](https://github.com/CloudSecurityAlliance/DesktopSetup/issues/132)).
-- **This repo installs the thing you are running in.** `scripts/*-ai-tools.*` install Claude
-  Code via its native installer (it auto-updates; do not route it through Homebrew or npm), and
-  register CSA plugin marketplaces and the `csa-mcp` server against the user's own GitHub
-  identity.
-- **Claude Desktop holds the MCP server entry points open on Windows.** That is why
-  `Check-RunningTools` exists and why a `uv tool install --force` is refused while a client is
-  running — the rebuild is not atomic and leaves a husk. Identify clients by **path**: a live
-  Claude Code process once reported its name as `claude.exe.old.1790878548618.45752`, because
-  its own updater had renamed its running image.
-- **`scripts/csa-claude-connectors.py`** disables chosen claude.ai connectors so the CSA Google
-  MCP servers are used instead. Report-only unless `--apply`.
-- **Editing these scripts from a Claude Code session on Windows:** patching them through a Bash
-  heredoc mangles backslashes, four times in one session — these files are full of `printf
-  '\n\033[1m'`, PowerShell backticks and regex in string literals. Write the patch to a file and
-  run it, or avoid backslashes entirely (`chr(10)`). See [FRICTION-002](FRICTION.md).
+## Reference
+
+- [`ENGINEERING.md`](ENGINEERING.md): the scripts, why `main` is the release, Windows
+  PowerShell 5.1 and the `Invoke-Native*` wrappers, the parity contract, the duplicated
+  six-script lists, the guard layer, and what `check-all.sh` proves and does not. Its first
+  table says which section to read when.
+- [`BUSINESS-CASE.md`](BUSINESS-CASE.md): why any of it exists. [`GOALS.md`](GOALS.md): what
+  counts as done.
