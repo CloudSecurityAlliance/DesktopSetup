@@ -28,7 +28,9 @@ functions, Pester 5.7.1.
 
 **Independent spec review (B11), 2026-11-10, on `fable`:** 3 blockers, 8 majors and 8 minors, all folded in below.
 Its seven decisions, D1 to D7:
-- **D1 and D5 are the CINO's.** Safe defaults are in force until he decides (K3).
+- **D1 is decided by the CINO (2026-11-10): rebuild `~/.default_venv` even when it is active.** He chose the option
+  "Rebuild even if active (Recommended)".
+- **D5 is the CINO's.** Its safe default is in force until he decides (K3).
 - **D2, D3, D4, D6 and D7 were decided by the AI** under P1 (safety, then honesty, then correctness), and recorded in
   the PR (P4).
   - **D2:** a 3.15 venv or tool is rebuilt to 3.14, with a warning naming the moved directory.
@@ -216,8 +218,9 @@ Its seven decisions, D1 to D7:
   - On a rebuild, it warns with the moved path and the names of packages the old venv had beyond
     `CSA_DOC_PY_DEPS` that it did not reinstall. Without a ledger it prints that list; with one, it adds it as a
     to-do.
-  - **When `$VIRTUAL_ENV` is the venv: D1's safe default** is to refuse, add the to-do `run deactivate, then re-run
-    <this script>` (order 40), and print it.
+  - **When `$VIRTUAL_ENV` is the venv (D1, the CINO's decision):** rebuild it anyway. The path stays valid after
+    the swap. Add the to-do `open a new terminal, because ~/.default_venv was rebuilt` (order 10), or print it
+    when there is no ledger.
   - With no CSA Python, it warns and leaves the venv untouched.
 - **`csa_tool_repairs`:** for each `$(uv tool dir)/csa-*`, applies the Task 5 rules to `<tool>/bin/python3`. Prints
   `<tool>: <reason>` lines. Read-only.
@@ -227,7 +230,7 @@ Its seven decisions, D1 to D7:
   - **Cases:** `dangling_interpreter`, `venv_on_315_rebuilt`, `venv_on_313_rebuilt`, `freethreaded_venv_rebuilt`,
     `cellar_with_uv_python_rebuilt`, `cellar_without_uv_python_warns_only`, `brew_fallback_stable`,
     `healthy_314_untouched`, `second_run_noop`, `no_csa_python_leaves_venv`,
-    `uses_csa_python_not_path_python3`, `moved_packages_reported`, `active_venv_refused_with_todo`,
+    `uses_csa_python_not_path_python3`, `moved_packages_reported`, `active_venv_rebuilt_with_todo`,
     `builder_fails_keeps_old`.
   - **Through the real entry points:** `update_default_venv_runs_without_outdated_pip`, which drives macos-update's
     `main` step list with no outdated pip packages and asserts the venv was repaired;
@@ -340,8 +343,8 @@ Windows measurements. It merges only after D5.
 - [ ] **Step 2: Record:** each environment's `home` before and after, `version_info`, `Py_GIL_DISABLED`, the
   warnings, and the uv command log.
 - [ ] **Step 3: The real run on this Mac** is queued for the CINO's go-ahead. It rebuilds four tools off 3.14t under
-  running clients (a restart follows), and moves `~/.default_venv` (3.13.1) aside. Under D1's default, that last
-  part needs `deactivate` first, because `~/.zshrc` activates the venv.
+  running clients (a restart follows), and moves `~/.default_venv` (3.13.1) aside and rebuilds it on 3.14, even though `~/.zshrc` activates
+  it (D1).
 - [ ] **Step 4: Commit:**
   `docs: acceptance evidence — one rerun repairs a dangling venv and a free-threaded tool, a second changes nothing`.
 
