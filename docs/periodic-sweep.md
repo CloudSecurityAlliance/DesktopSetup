@@ -155,7 +155,7 @@ distinct from 0.
 
 For category 2 (the common case), the whole change is an edit to
 `scripts/csa-plugins-internal.txt` and a PR. For 1 and 3, edit all five scripts, bump each
-`SCRIPT_VERSION` to the current `YYYY.MMDDHHSS`, and run `./tools/check-all.sh` before
+`SCRIPT_VERSION` to the current UTC time (`YYYY-MM-DDTHH:MMZ`), and run `./tools/check-all.sh` before
 pushing.
 
 Judgement required, and the sweep cannot make it for you: **a plugin existing is not a

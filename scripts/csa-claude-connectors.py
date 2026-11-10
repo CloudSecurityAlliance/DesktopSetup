@@ -40,7 +40,7 @@ import tempfile
 import time
 from pathlib import Path
 
-SCRIPT_VERSION = "2026.10030141"
+SCRIPT_VERSION = "2026-10-26T15:12Z"
 
 DEFAULT_CONNECTORS = [
     "claude.ai Gmail",

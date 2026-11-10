@@ -31,8 +31,14 @@ import pathlib
 import re
 import subprocess
 import sys
+from datetime import datetime
 
-VERSION = re.compile(r'(?:\$ScriptVersion\s*=\s*|SCRIPT_VERSION=)"(\d{4}\.\d+)"')
+# The version is the UTC time of the change, ISO 8601 to the minute: "2026-10-26T05:04Z".
+# Until 2026-10-26 it was "YYYY.MMDDHHMM"; that form is still READ, so the change from one to
+# the other can be checked as moving forwards, but is never accepted as a new value.
+ISO = r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}Z"
+LEGACY = r"\d{4}\.\d{8}"
+VERSION = re.compile(r'(?:\$ScriptVersion\s*=\s*|SCRIPT_VERSION=)"(' + ISO + "|" + LEGACY + ')"')
 
 
 def version_of(text: str) -> str | None:
@@ -40,9 +46,11 @@ def version_of(text: str) -> str | None:
     return m.group(1) if m else None
 
 
-def _key(v: str) -> tuple[int, int]:
-    year, rest = v.split(".", 1)
-    return int(year), int(rest)
+def _key(v: str) -> datetime:
+    """The UTC moment a version names, whichever form it is written in."""
+    if re.fullmatch(ISO, v):
+        return datetime.strptime(v, "%Y-%m-%dT%H:%MZ")
+    return datetime.strptime(v, "%Y.%m%d%H%M")
 
 
 def problem(path: str, old_text: str | None, new_text: str) -> str | None:
@@ -50,10 +58,13 @@ def problem(path: str, old_text: str | None, new_text: str) -> str | None:
     new_v = version_of(new_text)
     if new_v is None:
         return f"{path}: no version variable — a run of this cannot say which code it is"
-    if old_text is None:
-        return None                      # new file; it has a version, nothing to move
     if old_text == new_text:
         return None                      # unchanged
+    if not re.fullmatch(ISO, new_v):
+        return (f"{path}: version {new_v} is the retired YYYY.MMDDHHMM form — write the UTC "
+                f"time as ISO 8601, e.g. 2026-10-26T05:04Z")
+    if old_text is None:
+        return None                      # new file; it has a version, nothing to move
     old_v = version_of(old_text)
     if old_v is None:
         return None                      # it only just acquired one; that is the fix
@@ -67,25 +78,41 @@ def problem(path: str, old_text: str | None, new_text: str) -> str | None:
 
 def self_test() -> None:
     """The check has to be seen to fail, or its passing means nothing."""
-    ps_old = '$ScriptVersion = "2026.09160003"\nWrite-Host "a"\n'
-    ps_new = '$ScriptVersion = "2026.09160003"\nWrite-Host "b"\n'
-    ps_fix = '$ScriptVersion = "2026.10011200"\nWrite-Host "b"\n'
-    sh_old = 'SCRIPT_VERSION="2026.09272200"\necho a\n'
-    sh_new = 'SCRIPT_VERSION="2026.10011200"\necho b\n'
+    ps_old = '$ScriptVersion = "2026-09-16T00:03Z"\nWrite-Host "a"\n'
+    ps_new = '$ScriptVersion = "2026-09-16T00:03Z"\nWrite-Host "b"\n'
+    ps_fix = '$ScriptVersion = "2026-10-01T12:00Z"\nWrite-Host "b"\n'
+    sh_old = 'SCRIPT_VERSION="2026-09-27T22:00Z"\necho a\n'
+    sh_new = 'SCRIPT_VERSION="2026-10-01T12:00Z"\necho b\n'
 
     assert problem("a.ps1", ps_old, ps_new), "missed a change with no bump"
     assert problem("a.ps1", ps_old, ps_fix) is None, "flagged a correct bump"
     assert problem("a.sh", sh_old, sh_new) is None, "flagged a correct bash bump"
     assert problem("a.ps1", ps_old, ps_old) is None, "flagged an unchanged file"
     assert problem("a.ps1", None, ps_old) is None, "flagged a new file"
-    # Backwards, including the cross-month case the YYYY.MMDDHHMM form makes easy to get
-    # wrong: 10011200 must compare GREATER than 09272200, not less.
     assert problem("a.sh", sh_new, sh_old), "missed a backwards version"
-    assert _key("2026.10011200") > _key("2026.09272200"), "month rollover compares wrong"
+    # Compared as times, not text: across a month and a year.
+    assert _key("2026-10-01T12:00Z") > _key("2026-09-27T22:00Z"), "month rollover compares wrong"
+    assert _key("2027-01-01T00:00Z") > _key("2026-12-31T23:59Z"), "year rollover compares wrong"
     # A version-only change is a legitimate commit of its own.
-    assert problem("a.ps1", ps_old, '$ScriptVersion = "2026.10011200"\nWrite-Host "a"\n') is None
+    assert problem("a.ps1", ps_old, '$ScriptVersion = "2026-10-01T12:00Z"\nWrite-Host "a"\n') is None
     # A script with no version at all is a defect regardless of the diff.
     assert problem("a.ps1", ps_old, 'Write-Host "b"\n'), "missed a missing version"
+
+    # The switch from the retired YYYY.MMDDHHMM form: read as the same UTC time, so moving to
+    # a LATER ISO time passes and an earlier one is still caught...
+    legacy = 'SCRIPT_VERSION="2026.10260504"\necho a\n'
+    assert _key("2026.10260504") == _key("2026-10-26T05:04Z"), "the two forms disagree on a time"
+    assert problem("a.sh", legacy, 'SCRIPT_VERSION="2026-10-26T05:30Z"\necho b\n') is None, \
+        "flagged a correct move to ISO"
+    assert problem("a.sh", legacy, 'SCRIPT_VERSION="2026-10-26T05:00Z"\necho b\n'), \
+        "missed a move to an EARLIER ISO time"
+    # ...but the retired form is never accepted as a new value, so it cannot creep back.
+    assert problem("a.sh", legacy, 'SCRIPT_VERSION="2026.10270000"\necho b\n'), \
+        "accepted a new value in the retired form"
+    assert problem("a.sh", None, legacy), "accepted a new file in the retired form"
+    # A near miss of the ISO form is not a version: no seconds, no lower-case z, no offset.
+    for bad in ("2026-10-26T05:04:00Z", "2026-10-26T05:04z", "2026-10-26T05:04+00:00"):
+        assert problem("a.sh", legacy, f'SCRIPT_VERSION="{bad}"\necho b\n'), f"accepted {bad}"
 
     # SCOPE, asserted against this file's own source. `problem()` is a pure function and every
     # case above exercises it correctly - which is precisely why none of them noticed that
@@ -177,7 +204,7 @@ def main(argv: list[str]) -> int:
     if problems:
         print(f"\n{len(problems)} script(s) changed without a truthful version. `main` is the "
               f"release, so the version is the only way to tell what somebody ran.\n"
-              f"Set it to the current UTC YYYY.MMDDHHMM.")
+              f"Set it to the current UTC time, ISO 8601 to the minute: YYYY-MM-DDTHH:MMZ.")
         return 1
     print(f"all {len(scripts)} changed script(s) bumped their version: "
           f"{', '.join(sorted(scripts))}")
