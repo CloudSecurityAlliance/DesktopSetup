@@ -29,7 +29,7 @@
 
 set -euo pipefail
 
-SCRIPT_VERSION="2026-10-26T15:12Z"
+SCRIPT_VERSION="2026-11-10T23:52Z"
 
 # ── CSA plugin marketplaces ─────────────────────────────────────────
 # Plugin marketplaces to register with Claude Code. Each entry is an
@@ -1917,9 +1917,9 @@ setup_csa_internal_tools() {
     # CSA_PYTHON_PREFERRED tells it which interpreter this installer provisioned, so
     # `uv tool install --python` lands the server on it. Measured 2026-09-29: with no
     # --python, uv picks its OWN managed default and ignores both PATH and anything this
-    # script installed - which is how four CSA servers ended up on 3.10.20. Only the
-    # *-ai-tools scripts know a preference; the other orchestrators leave it unset and the
-    # setup scripts fall back to their own default. See CSA-Plugins#133.
+    # script installed - which is how four CSA servers ended up on 3.10.20. All six entry
+    # scripts now declare a preference (tests/test_python_pins.py pins them), so the setup
+    # scripts never fall back to their own default from here. See CSA-Plugins#133.
     # CSA_NESTED tells the fetched script that it is running inside another CSA installer, so it
     # should leave the closing summary to this one. Without it both printed "if anything above
     # went wrong, re-run with logging on", one after the other, which reads like a stutter and

@@ -181,6 +181,11 @@ jobs:
       - name: The internal-setup list agrees across all six copies
         run: python3 tests/test_internal_setup_lists.py
 
+      - name: The CSA Python pin is declared in all six scripts and they agree
+        run: |
+          python3 tests/test_python_pins.py
+          python3 tests/test_python_pins.py --self-test
+
       - name: Replacing the shared venv must not lose it
         run: python3 tests/test_venv_replacement.py
 

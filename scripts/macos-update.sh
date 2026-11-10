@@ -17,7 +17,7 @@
 
 set -euo pipefail
 
-SCRIPT_VERSION="2026-10-26T15:12Z"
+SCRIPT_VERSION="2026-11-10T23:51Z"
 
 # ── CSA plugin marketplaces ─────────────────────────────────────────
 # Each update run will add any entries from this list that aren't yet
@@ -88,6 +88,11 @@ plugin_marketplace_repo() {
 CSA_MCP_NAME="csa-mcp"
 CSA_MCP_URL="https://cloudsecurityalliance.org/mcp"
 CSA_MCP_GATE_REPO="CloudSecurityAlliance-Internal/CSA-Plugins"
+
+# The interpreter the internal setup scripts install their servers on. Declared in all six
+# entry scripts, and pinned equal by tests/test_python_pins.py; before that only the two
+# *-ai-tools scripts declared it and -update / -plugins passed an empty value.
+CSA_PYTHON_PREFERRED="3.14"
 
 # ── Output helpers ──────────────────────────────────────────────────
 
@@ -757,10 +762,11 @@ setup_csa_internal_tools() {
     # earlier single-script form returned, so a rename would have silently disabled every
     # server that followed.
     #
-    # CSA_PYTHON_PREFERRED tells it which interpreter to install the server on. Only the
-    # *-ai-tools orchestrators set it; here it expands empty and the setup script falls
-    # back to its own default. Passed anyway so all three copies of this function stay
-    # byte-identical, which tools/check-duplication.py enforces. See CSA-Plugins#133.
+    # CSA_PYTHON_PREFERRED tells it which interpreter to install the server on. All six entry
+    # scripts declare it (3.14; tests/test_python_pins.py pins them), so it is never empty
+    # here, and the setup script does not have to guess. Passed identically so all three
+    # copies of this function stay byte-identical, which tools/check-duplication.py
+    # enforces. See CSA-Plugins#133.
     # CSA_NESTED tells the fetched script that it is running inside another CSA installer, so it
     # should leave the closing summary to this one. Without it both printed "if anything above
     # went wrong, re-run with logging on", one after the other, which reads like a stutter and

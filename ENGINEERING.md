@@ -363,6 +363,14 @@ says in its own docstring what it cannot do: compare them against the private ga
 installer closes that half at run time, reporting drift in both directions
 ([#95](https://github.com/CloudSecurityAlliance/DesktopSetup/issues/95)).
 
+**`CSA_PYTHON_PREFERRED` / `$CsaPythonPreferred` is declared in all six scripts** (`3.14`), not
+only the two `*-ai-tools` ones: `-update` and `-plugins` hand it to the private gate repo's
+setup scripts, and an undeclared value reached them empty, so the interpreter was guessed.
+`CSA_PYTHON_MIN` / `$CsaPythonMin` (also `3.14`) lives in the `*-ai-tools` scripts.
+`tests/test_python_pins.py` asserts the six preferred values and the two floors agree, and that
+every `CSA_DOC_PY_DEPS=(...)` array copy in `scripts/*.sh` is identical (an array, so
+`check-duplication.py` does not see it); `--self-test` breaks each rule on purpose.
+
 **The plugin lists are single-source** and are the exception: `scripts/csa-plugins.txt` and
 `scripts/csa-plugins-internal.txt` are fetched from `HEAD` at runtime, so a list-only change
 needs one commit and **no** script edit or version bump.
