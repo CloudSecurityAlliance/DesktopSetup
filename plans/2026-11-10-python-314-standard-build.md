@@ -37,8 +37,8 @@ Its seven decisions, D1 to D7:
   behaviour, and this makes D1 hold by construction: the active venv's real directory never moves.
 - **D5 is decided by the CINO (2026-11-10): hold the Windows halves as drafts for a Windows session.** He chose the
   option "Hold as drafts for a Windows session". macOS ships first, and the platforms diverge until a session on
-  a real Windows machine runs Tasks 4W and 5W end to end. That divergence is recorded, not hidden: a handoff issue
-  is filed when the drafts open.
+  a real Windows machine runs Tasks 4W and 5W end to end. That divergence is recorded, not hidden: the Windows handoff
+  is #184, and Windows document deps are #183.
 - **D2, D3, D4, D6 and D7 were decided by the AI** under P1 (safety, then honesty, then correctness), and recorded in
   the PR (P4).
   - **D2:** a 3.15 venv or tool is rebuilt to 3.14, with a warning naming the moved directory.
@@ -141,7 +141,9 @@ Its seven decisions, D1 to D7:
   - Add `python_is_csa_build`, `find_csa_python` and `ensure_csa_python`.
   - Rewrite `install_python`, and `install_uv` (keeping uv current).
   - Point the `Python` and `uv` plan rows and the summary's Python row at the resolver.
-  - Delete `find_usable_python` once orphaned.
+  - Repoint `install_doc_python_deps`'s interpreter lookup (line ~1153) from `find_usable_python` to
+    `ensure_csa_python`, then delete `find_usable_python`. Task 3 rewrites that function anyway; this keeps Task 2
+    self-contained.
 - Create: `tests/test_csa_python.py`. Modify `tests/test_version_floors.py` (move its Python cases; keep Node) and
   `tests/test_summary_interpreter.py` (it asserts `find_usable_python` at lines 134 and 146).
 - Modify: `ENGINEERING.md` § Install strategy and `README.md` where they describe the old resolver. The new claim:
@@ -152,7 +154,8 @@ Its seven decisions, D1 to D7:
   and `Py_GIL_DISABLED` is falsy. Silent.
 - **`find_csa_python`:** prints one path, or exits 1. **It never installs anything,** because the preflight calls it
   before consent. Order:
-  1. `uv python find --managed-python "$CSA_PYTHON_PREFERRED"`, if it verifies;
+  1. `uv python find --system --managed-python "$CSA_PYTHON_PREFERRED"`, if it verifies. **`--system` is
+     required.** Measured: with `VIRTUAL_ENV` set, `uv python find` without it returns the active venv's Python;
   2. otherwise each path from `uv python list --only-installed --managed-python "$CSA_PYTHON_PREFERRED"
      --output-format json` with `variant == "default"`. Parse it with `/usr/bin/python3 -c` or the step-1
      interpreter, not with awk, because paths may contain spaces;
@@ -181,10 +184,13 @@ Its seven decisions, D1 to D7:
     - `brew_fallback_accepted`: uv absent, brew `opt` 3.14 verifies;
     - `uv_install_fails`: exit 1 with a warning, and the caller survives `set -e`;
     - `find_never_installs`: the call log has no `install`;
+    - `find_passes_system_flag`: with `VIRTUAL_ENV` set to a fake venv, every logged `uv python find` carries
+      `--system`;
     - `stdout_is_only_the_path`: chatty stubs;
     - `windows_twin_exists`: `windows-ai-tools.ps1` on the Windows branch defines `Test-CsaPythonBuild`,
-      `Find-CsaPython` and `Install-CsaPython`. Skip with exit 77 when that branch isn't merged yet, so the
-      divergence stays visible.
+      `Find-CsaPython` and `Install-CsaPython`. When that branch isn't merged yet, print a per-case
+      `SKIP (Windows twin pending #184)` line and still exit 0 for the file. Exit 77 would mark the whole file
+      skipped in `check-all.sh`.
 - [ ] **Step 2:** run. Expected: FAIL.
 - [ ] **Step 3:** implement. Bump the version.
 - [ ] **Step 4:** run the new and the modified tests, `check-plan-covers-steps.py` and `./tools/check-all.sh`. All
@@ -205,7 +211,13 @@ Its seven decisions, D1 to D7:
   - A **new `main()` step,** `update_default_venv`, placed **before** `update_pip`: it repairs an existing venv,
     **never creates one, and has no brew fallback** (D4). It then refreshes `CSA_DOC_PY_DEPS`.
   - Delete the venv block at the end of `update_pip`, which its early returns made unreachable.
-  - Copy the resolver functions and `CSA_DOC_PY_DEPS` byte-identically. Add the plan row.
+  - **Copy byte-identically from macos-ai-tools.sh:** `CSA_VENV`, `CSA_DOC_PY_DEPS`, `python_is_csa_build`,
+    `find_csa_python`, `ensure_csa_python`, `venv_rebuild_reason`, `ensure_default_venv`.
+  - **`macos-update.sh` has no ledger, so no `csa_todo_add`.** The to-do text is printed there instead, through the
+    existing "no ledger" path every caller already handles.
+  - **Add the plan row.**
+- Modify: `tools/check-plan-covers-steps.py`. Add a `PLAN_LABEL` entry mapping `update_default_venv` to its plan
+  row's label (`Default venv`).
 - Modify: `tools/check-parity.py`. The new `main()` step needs a `PER_PAIR`/`PLATFORM_ONLY` entry with this reason:
   "Windows has no `~/.default_venv`: document-pipeline's launchers are bash and probe
   `$HOME/.default_venv/bin/python3`, a POSIX layout; Windows document deps are #183."
@@ -219,9 +231,11 @@ Its seven decisions, D1 to D7:
   - `its Python does not run`;
   - `it is Python <X.Y>, not 3.14`;
   - `it is the free-threaded build`;
-  - `it is built on a Homebrew Cellar path, which the next brew upgrade deletes`: decided from
-    `realpath bin/python3` being under `*/Cellar/*`, and only when `find_csa_python` returns a non-Cellar path.
-    Otherwise warn, and don't rebuild.
+  - `it is built on a Homebrew Cellar path, which the next brew upgrade deletes`: decided from the **recorded**
+    path, not `realpath`. That is the first symlink hop out of the venv (`readlink bin/python3`), or `pyvenv.cfg`
+    `home`, literally containing `/Cellar/`. A Homebrew `opt/python@3.14` path is stable across upgrades and is
+    **not** Cellar-pinned, even though its realpath is (this supersedes the earlier "realpath" wording). Rebuild
+    only when `find_csa_python` returns a non-Cellar path; otherwise warn, and don't rebuild.
 - **`ensure_default_venv [--no-create]`:** returns 0 always.
   - **Layout:** `$CSA_VENV` (`~/.default_venv`) is a **relative** symlink to `${CSA_VENV}-${CSA_PYTHON_PREFERRED}`,
     the versioned directory. Old versioned directories are kept for rollback and never deleted.
@@ -230,31 +244,54 @@ Its seven decisions, D1 to D7:
     `CSA_DOC_PY_DEPS`.
   - **States it handles:**
     - **A real directory at `$CSA_VENV` (pre-symlink machines):** build the versioned venv first. Then rename the
-      directory to `${CSA_VENV}-<its version_info X.Y from pyvenv.cfg>`, or `-unknown`, adding `-<YYYYmmddHHMMSS>`
-      on a name collision. Then link.
-    - **A link to a sound `-3.14`:** no-op.
-    - **A link to an older version, or dangling:** build `-3.14` if needed, then flip.
-    - **A `-3.14` target that fails `venv_rebuild_reason`:** build `${CSA_VENV}-3.14.new-$$`, rename the broken
-      one to `${CSA_VENV}-3.14.broken-<ts>`, and rename the new one into place.
-  - **Flip atomically:** `ln -s <target> ${CSA_VENV}.link-new && mv` it over the old link. A real directory has
+      directory to `${CSA_VENV}-<X.Y>`, or `-unknown`, adding `-<YYYYmmddHHMMSS>` on a name collision. Then link.
+      Read X.Y from `pyvenv.cfg`'s `version_info` (written by uv) **or** `version` (written by `python -m venv`,
+      which this installer used until now).
+    - **A link whose resolved target is a sound `${CSA_VENV}-3.14`,** relative or absolute: no-op.
+    - **A link to an older `${CSA_VENV}-<X.Y>`, or dangling:** build `-3.14` if needed, then flip.
+    - **A link the installer didn't make** (its target is not a `${CSA_VENV}-<X.Y>` directory): if the target is
+      sound (passes `venv_rebuild_reason`), leave it, with a one-line note. Otherwise build `-3.14`, flip, and name
+      the old target in the warning. Never delete it.
+    - **A dangling link** also breaks the CINO's `~/.zshrc` stanza: its `python -m venv` fails with `File exists`
+      at every shell start. One more reason the installer repairs it.
+    - **A `-3.14` target that fails `venv_rebuild_reason`:** build `${CSA_VENV}-3.14.new-$$` **with `uv venv
+      --relocatable`**, install the deps, rename the broken one to `${CSA_VENV}-3.14.broken-<ts>`, then rename the
+      new one into place. Measured: a venv built at one path and renamed breaks `activate` and every console
+      script, because both hardcode the creation path, while `--relocatable` survives the rename. When uv is
+      absent (`python -m venv` fallback), rename the broken one away first, then build at the final path and
+      accept the brief gap. Fresh builds (no existing `-3.14`) always build at the final path.
+  - **Flip atomically:** `ln -sfn <target> ${CSA_VENV}.link-new && mv -h ${CSA_VENV}.link-new ${CSA_VENV}`.
+    **`-h` is required.** Measured: plain `mv` onto a link to a directory exits 0, leaves the link unchanged, and
+    drops the new link inside the old target. `ln -sfn` overwrites a leftover `.link-new`. A real directory has
     already been renamed away at that point, so the gap is one rename.
   - **`~/.zshrc` is never edited.** The CINO's stanza auto-creates a Homebrew-3.12 venv only when `-d` fails, and
     the link satisfies it.
   - On a rebuild, it warns with the moved path and the names of packages the old venv had beyond
     `CSA_DOC_PY_DEPS` that it did not reinstall. Without a ledger it prints that list; with one, it adds it as a
     to-do.
-  - **When `$VIRTUAL_ENV` is the venv (D1):** proceed. The active shell's real directory never moves, so nothing
+  - **When `$VIRTUAL_ENV` is the venv (D1):** decide that with `[[ "$VIRTUAL_ENV" -ef "$CSA_VENV" ]]` or
+    `-ef` against any `${CSA_VENV}-<X.Y>`, never by string. `activate` records the creation path
+    (`~/.default_venv-3.14`), while shells opened before migration hold `~/.default_venv`. Then proceed. The active shell's real directory never moves, so nothing
     dangles. Add the to-do `open a new terminal to use the rebuilt ~/.default_venv` (order 10), or print it when
     there is no ledger.
   - With no CSA Python, it warns and leaves the venv untouched.
-- **`csa_tool_repairs`:** for each `$(uv tool dir)/csa-*`, applies the Task 5 rules to `<tool>/bin/python3`. Prints
-  `<tool>: <reason>` lines. Read-only.
+- **`csa_tool_repairs`:** for each `$(uv tool dir)/csa-*`, checks `<tool>/bin/python3`. Read-only. Prints
+  `<tool>: <reason>` lines, with these reasons:
+  - `its Python no longer exists`, when it is dangling;
+  - `its Python does not run`;
+  - `it is Python <X.Y>`, when not 3.14;
+  - `it is the free-threaded build`;
+  - `it is on a Homebrew Cellar path`, by the recorded-path rule above.
 
 - [ ] **Step 1: Failing tests,** in `tests/test_venv_replacement.py`.
   - **Real-shaped fixtures:** a `bin/python3` symlink chain imitating `opt/python@3.14 → Cellar/python@3.14/3.14.10`.
   - **Layout cases:** `real_dir_migrated_to_versioned_and_linked`, `link_is_relative`, `link_current_noop`,
     `dangling_link_reflipped`, `broken_314_target_replaced`, `old_versions_kept`, `migration_name_collision`,
-    `zshrc_d_test_passes_on_link`, `cinos_mac_state_noop`. The last is a link to a sound `-3.14` plus a real
+    `zshrc_d_test_passes_on_link`, `link_to_older_version_flipped` (the old directory gains no stray entry),
+    `absolute_link_to_sound_314_noop`, `users_own_link_sound_left_alone`, `users_own_link_broken_flipped_named`,
+    `replaced_target_console_script_runs` (run `bin/pip --version` after a broken-target replacement),
+    `version_key_from_python_m_venv`, `home_with_space`, `virtual_env_creation_path_matches`,
+    `cinos_mac_state_noop`. The last is a link to a sound `-3.14` plus a real
     `-3.13` directory: nothing changes.
   - **Cases:** `dangling_interpreter`, `venv_on_315_rebuilt`, `venv_on_313_rebuilt`, `freethreaded_venv_rebuilt`,
     `cellar_with_uv_python_rebuilt`, `cellar_without_uv_python_warns_only`, `brew_fallback_stable`,
@@ -306,6 +343,9 @@ winget fallback is `Python.Python.$CsaPythonPreferred`, and the accepted path is
     `"<tool> runs on a Python that <reason>; rebuilding it on <path>"` and run
     `uv tool install --force --python "<path>" "$PKG_SPEC"`. This holds even when `uv tool list` omits the tool,
     because its directory exists. If a problem exists **without** a verified path, warn only (offline).
+  - **Fresh install and plain upgrade also use the verified path** (`--python "<path>"`; today
+    `csa-zendesk-setup.sh` lines 293 and 329 pass `"$csa_py"`). Fall back to `"$csa_py"` only when
+    `csa_python_path` produced nothing (offline), with a warning.
   - **After any install, re-run the problem check once.** If it persists, warn, with no loop.
   - **After any rebuild,** add the to-do `restart Claude Code, Claude Desktop, Codex and Gemini` (order 10), or print
     it when there is no ledger.
@@ -322,7 +362,8 @@ winget fallback is `Python.Python.$CsaPythonPreferred`, and the accepted path is
   - `does not run`;
   - `is <X.Y>, not ${csa_py}`;
   - `is the free-threaded build`;
-  - `is on a Homebrew Cellar path`, from `realpath`;
+  - `is on a Homebrew Cellar path`: the recorded path (first hop out of `bin/python3`, or `pyvenv.cfg` `home`)
+    literally contains `/Cellar/`. An `opt/` path is fine (Task 3's rule);
   - nothing.
 
 - [ ] **Step 1: Failing tests,** in `test-tool-interpreter.py`.
@@ -332,6 +373,7 @@ winget fallback is `Python.Python.$CsaPythonPreferred`, and the accepted path is
     and `gemini`, asserting the logged uv commands:
     - `dead_interpreter_routes_force`: the tool dir exists and `uv tool list` omits it;
     - `rebuild_uses_verified_path`: `--python` is the verified path, never `3.14`;
+    - `fresh_install_uses_verified_path` and `upgrade_uses_verified_path`;
     - `offline_no_force`: `uv python install` fails, so no `--force` call;
     - `postcheck_warns_no_loop`: one install call;
     - `second_run_noop`;
@@ -362,7 +404,8 @@ Windows measurements. It merges only after a Windows session has run it end to e
 - Create: `plans/reviews/2026-11-10-python-314-acceptance.md`, scrubbed of secrets, personal data and names.
 
 - [ ] **Step 1: An isolated run.** Point a scratch `HOME`, `UV_PYTHON_INSTALL_DIR`, `UV_TOOL_DIR`,
-  `UV_TOOL_BIN_DIR` and `UV_CACHE_DIR` at tempdirs under the scratchpad. Point `GH_CONFIG_DIR` at the real gh
+  `UV_CACHE_DIR` at tempdirs under the scratchpad, and set `UV_TOOL_BIN_DIR=$HOME/.local/bin` (scratch `HOME`),
+  because the gate script hardcodes `${HOME}/.local/bin` for the entry point (line 347). Point `GH_CONFIG_DIR` at the real gh
   config **path**, so the gate script gets past its `gh auth status` check (`zd.sh:147`); never read the file.
   Stub `claude`, `codex` and `gemini` away (Plan 2 owns registrations).
   - **Seed:** a free-threaded-only uv 3.14; a dangling 3.13 `~/.default_venv`; a `csa-zendesk` tool on 3.14t.
@@ -382,6 +425,5 @@ Windows measurements. It merges only after a Windows session has run it end to e
 **After Task 6:** a whole-branch review per repo (fable); a review brief (A1),
 `plans/2026-11-10-python-314-review-brief.md`; and PRs.
 - **Order:** the CSA-Plugins `.sh` half first, then DesktopSetup.
-- **Windows halves stay drafts until a Windows session runs them (D5).** File one Windows handoff issue linking both
-  drafts and listing the measurements.
+- **Windows halves stay drafts until a Windows session runs them (D5).** They're tracked in #184.
 - Then Plan 2.
