@@ -216,7 +216,8 @@ Its seven decisions, D1 to D7:
   - **`macos-update.sh` has no ledger and no `csa_todo_add` function.** The shared `ensure_default_venv` must guard
     the call: `if declare -F csa_todo_add >/dev/null && csa_todo_add …; then :; else <print the to-do>; fi`.
     In `macos-ai-tools.sh` the function exists but returns non-zero when `CSA_TODO_FILE` is unset; the same
-    guard handles that. Test: `update_prints_todo_without_ledger`.
+    guard handles that. Tests: `update_prints_todo_without_ledger` (function absent) and `ai_tools_prints_todo_when_ledger_unset`
+    (function present, `CSA_TODO_FILE` unset).
   - **Add the plan row.**
 - Modify: `tools/check-plan-covers-steps.py`. Add a `PLAN_LABEL` entry mapping `update_default_venv` to its plan
   row's label (`Default venv`).
@@ -257,7 +258,9 @@ Its seven decisions, D1 to D7:
     - **A dangling link** also breaks the CINO's `~/.zshrc` stanza: its `python -m venv` fails with `File exists`
       at every shell start. One more reason the installer repairs it.
     - **A `-3.14` target that fails `venv_rebuild_reason`:** build `${CSA_VENV}-3.14.new-$$` **with `uv venv
-      --relocatable`**, install the deps **with `uv pip` only, never the venv's `pip`**, rename the broken one to `${CSA_VENV}-3.14.broken-<ts>`, then rename the
+      --seed --relocatable`**, install the deps **with `uv pip` only, never the venv's `pip`**. Do not call
+      `csa_venv_pip_install` for the `.new-$$` build: if `uv pip` fails, delete `.new-$$`, keep the broken target,
+      and warn. Then rename the broken one to `${CSA_VENV}-3.14.broken-<ts>`, then rename the
       new one into place. Measured: a venv built at one path and renamed breaks `activate` and every console
       script, because both hardcode the creation path, while `--relocatable` survives the rename. When uv is
       absent (`python -m venv` fallback), rename the broken one away first, then build at the final path and
