@@ -455,8 +455,8 @@ where something does not apply it says so and says why — per
   dependencies that exist anyway, two of them CSA's own
 - **[`BACKUP-RESOURCES.md`](BACKUP-RESOURCES.md)** — no state of our own; the backups these
   scripts write onto *user* machines, and the retention gap
-- **[`CLAUDE.md`](CLAUDE.md)** / **[`AGENTS.md`](AGENTS.md)** — thin pointers to
-  `ENGINEERING.md` plus what is specific to each AI coding tool
+- **[`AGENTS.md`](AGENTS.md)** — the rules every AI coding agent follows, pointing at
+  `ENGINEERING.md`; `CLAUDE.md` and `GEMINI.md` are one-line pointers to it
 
 ### `scripts/`
 

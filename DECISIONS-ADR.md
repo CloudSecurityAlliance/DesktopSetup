@@ -126,6 +126,14 @@ which **36** named Claude at all.
 real name. `CLAUDE.md` and `AGENTS.md` are short pointers carrying only what is specific to
 their reader. `README.md` addresses humans arriving at the repository.
 
+**Amended 2026-11-10 by CINO-Engineering
+[DEC-033](https://github.com/CloudSecurityAlliance-Internal/CINO-Engineering/blob/main/DECISIONS.md#dec-033-agentsmd-is-the-instruction-file-claudemd-and-geminimd-are-one-line-pointers-never-full-files).**
+`AGENTS.md` is now the one instruction file every agent loads, and `CLAUDE.md` and `GEMINI.md`
+are one-line pointers to it (`@AGENTS.md`, `@./AGENTS.md`). The rest stands: `ENGINEERING.md`
+holds the facts, and `AGENTS.md` carries only the rules and traps. The second rejected
+alternative below is now the layout. Its objection no longer applies: `CLAUDE.md` is still the
+small file Claude Code loads automatically, and it now imports `AGENTS.md`.
+
 **Rationale.** Roughly 90% of the content belongs to whoever is editing, not to one assistant.
 This repository has `tools/check-duplication.py` precisely because duplicated content drifts
 silently, and that argument applies to its own documentation at least as strongly — a drifting

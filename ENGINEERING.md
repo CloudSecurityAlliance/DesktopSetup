@@ -1,9 +1,9 @@
 # Engineering notes
 
 **The repository's facts, for whoever is editing it** — human, Claude Code, Codex, Gemini or
-anything else. [`CLAUDE.md`](CLAUDE.md) and [`AGENTS.md`](AGENTS.md) are short pointers to this
-file plus whatever is specific to their reader; see
-[ADR-004](DECISIONS-ADR.md) for why there is one copy rather than two.
+anything else. [`AGENTS.md`](AGENTS.md) holds the rules every AI agent follows and points here;
+`CLAUDE.md` and `GEMINI.md` are one-line pointers to it. See [ADR-004](DECISIONS-ADR.md) for why
+the facts live in one copy.
 
 Read [`BUSINESS-CASE.md`](BUSINESS-CASE.md) first if you want to know *why* any of this exists.
 This file is *how*.
