@@ -208,8 +208,8 @@ Its seven decisions, D1 to D7:
   - Copy the resolver functions and `CSA_DOC_PY_DEPS` byte-identically. Add the plan row.
 - Modify: `tools/check-parity.py`. The new `main()` step needs a `PER_PAIR`/`PLATFORM_ONLY` entry with this reason:
   "Windows has no `~/.default_venv`: document-pipeline's launchers are bash and probe
-  `$HOME/.default_venv/bin/python3`, a POSIX layout; Windows document deps are #<new issue>."
-- File that issue: Windows document deps have no working path on a uv-only machine.
+  `$HOME/.default_venv/bin/python3`, a POSIX layout; Windows document deps are #183."
+- That issue is filed: #183. The Windows halves' handoff is #184.
 - Modify: `tests/test_venv_replacement.py` and `ENGINEERING.md`.
 
 **Interfaces:**

@@ -53,7 +53,7 @@ traps.
   scripts, which these scripts fetch and run
   ([ENGINEERING.md → The CSA contracts](ENGINEERING.md#the-csa-contracts)). This repo's own code
   registers only the CSA plugin marketplaces and the hosted `csa-mcp` server, and only with
-  Claude Code, against the user's own GitHub identity. Each client's MCP config format:
+  Claude Code, against the user's own GitHub identity. Each CLI's MCP config format:
   [`docs/mcp-servers.md`](docs/mcp-servers.md). Wider coverage:
   [#176](https://github.com/CloudSecurityAlliance/DesktopSetup/issues/176).
 - **Claude Code:** there is no `/check-all` command; run `./tools/check-all.sh`.
