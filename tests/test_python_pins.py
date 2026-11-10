@@ -45,7 +45,10 @@ MIN_RE = {
     "sh": re.compile(r'^CSA_PYTHON_MIN="([^"]*)"', re.M),
     "ps1": re.compile(r"^\$CsaPythonMin\s*=\s*'([^']*)'", re.M),
 }
-DEPS_RE = re.compile(r"^CSA_DOC_PY_DEPS=\(([^)]*)\)", re.M)
+# Tolerates indentation and a `local` / `readonly` / `declare -a` prefix, so a copy moved
+# inside a function is still found rather than silently ignored.
+DEPS_RE = re.compile(
+    r"^[ \t]*(?:(?:local|readonly|declare(?:\s+-[a-zA-Z]+)*)\s+)?CSA_DOC_PY_DEPS=\(([^)]*)\)", re.M)
 
 
 def kind(name: str) -> str:
@@ -76,8 +79,9 @@ def min_problems(texts: dict[str, str]) -> list[str]:
         if found:
             seen[name] = found[0]
     out = []
-    if not seen:
-        out.append("no script declares the minimum Python")
+    for label, group in (("macOS", SH), ("Windows", PS1)):
+        if not any(n in seen for n in group):
+            out.append(f"{group[0]}: no {label} script declares the minimum Python")
     if len(set(seen.values())) > 1:
         out.append(f"the minimum Python differs between scripts: {seen}")
     for name, value in seen.items():
@@ -133,10 +137,22 @@ def self_test() -> int:
            min_problems(mutated), [PS1[0]])
 
     mutated = dict(texts)
+    mutated[SH[0]] = MIN_RE["sh"].sub("# removed", mutated[SH[0]])
+    expect("a platform with no floor declared is reported",
+           min_problems(mutated), [SH[0]])
+
+    mutated = dict(texts)
     real = DEPS_RE.search(mutated[SH[0]]).group(0)
     mutated[SH[1]] = mutated[SH[1]] + "\n" + real.replace("pymupdf", "pymupdf2") + "\n"
     expect("two CSA_DOC_PY_DEPS copies that differ are reported",
            deps_problems(mutated), [SH[1]])
+
+    mutated = dict(texts)
+    mutated[SH[2]] = mutated[SH[2]] + "\nf() {\n    local CSA_DOC_PY_DEPS=(pyyaml other)\n}\n"
+    ref = DEPS_RE.search(mutated[SH[0]]).group(0)
+    mutated[SH[1]] = mutated[SH[1]] + "\nf() {\n    " + ref + "\n}\n"
+    expect("an indented or local copy with different contents is found and reported",
+           deps_problems(mutated), [SH[2]])
 
     print("self-test " + ("passed" if ok else "FAILED"))
     return 0 if ok else 1
