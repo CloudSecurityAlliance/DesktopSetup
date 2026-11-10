@@ -30,7 +30,10 @@ functions, Pester 5.7.1.
 Its seven decisions, D1 to D7:
 - **D1 is decided by the CINO (2026-11-10): rebuild `~/.default_venv` even when it is active.** He chose the option
   "Rebuild even if active (Recommended)".
-- **D5 is the CINO's.** Its safe default is in force until he decides (K3).
+- **D5 is decided by the CINO (2026-11-10): hold the Windows halves as drafts for a Windows session.** He chose the
+  option "Hold as drafts for a Windows session". macOS ships first, and the platforms diverge until a session on
+  a real Windows machine runs Tasks 4W and 5W end to end. That divergence is recorded, not hidden: a handoff issue
+  is filed when the drafts open.
 - **D2, D3, D4, D6 and D7 were decided by the AI** under P1 (safety, then honesty, then correctness), and recorded in
   the PR (P4).
   - **D2:** a 3.15 venv or tool is rebuilt to 3.14, with a warning naming the moved directory.
@@ -264,7 +267,7 @@ winget fallback is `Python.Python.$CsaPythonPreferred`, and the accepted path is
 - [ ] **Step 5: Commit** on `feat/python-314-standard-build-windows`. Open the PR as a **draft**, with a Windows
   measurement list in its body. Its first item: on Windows, does `sysconfig.get_config_var('Py_GIL_DISABLED')`
   return 0 for the standard build and 1 for free-threaded, and does uv prefer the standard build once both exist?
-  It merges only after D5.
+  It merges only after a Windows session has run it end to end (D5).
 
 ### Task 5 (CSA-Plugins, `.sh` half): servers land on a verified standard 3.14; a tool on a dead, free-threaded, wrong-version or Cellar interpreter is rebuilt onto that verified path
 
@@ -325,7 +328,7 @@ winget fallback is `Python.Python.$CsaPythonPreferred`, and the accepted path is
   Python 3.14".
 
 **Test:** `internal-setup/test-tool-interpreter.ps1`, with the same cases. Open the PR as a draft, listing the
-Windows measurements. It merges only after D5.
+Windows measurements. It merges only after a Windows session has run it end to end (D5).
 
 ### Task 6: Acceptance on macOS: from this Mac's broken state, one rerun repairs, and a second changes nothing
 
@@ -353,5 +356,6 @@ Windows measurements. It merges only after D5.
 **After Task 6:** a whole-branch review per repo (fable); a review brief (A1),
 `plans/2026-11-10-python-314-review-brief.md`; and PRs.
 - **Order:** the CSA-Plugins `.sh` half first, then DesktopSetup.
-- **Windows halves stay drafts until D5.**
+- **Windows halves stay drafts until a Windows session runs them (D5).** File one Windows handoff issue linking both
+  drafts and listing the measurements.
 - Then Plan 2.
