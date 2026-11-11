@@ -51,8 +51,8 @@ than no citation because it looks right. A function name survives edits; a line 
 - [x] **C1 — Claude Code re-installs on every run** (`macos-ai-tools.sh`, `install_claude`)
   Added `has_command claude` guard to skip the installer when already installed and no migration is needed.
 
-- [ ] **C2 — Word-splitting in pip upgrade loop** (`macos-update.sh`, `update_pip`)
-  `for pkg in $pkg_names` — unquoted variable is split on whitespace. Blank lines in the Python JSON output silently pass empty/malformed strings to `pip install --upgrade`. Replace with `mapfile -t pkg_names < <(...)` and iterate with `"${pkg_names[@]}"`.
+- [x] **C2 — Word-splitting in pip upgrade loop** (`macos-update.sh`, `update_pip`)
+  Fixed incidentally by [#187](https://github.com/CloudSecurityAlliance/DesktopSetup/pull/187): `update_pip` now reads tab-separated `name version latest` lines with `while IFS=$'\t' read -r name ver latest; do … done <<< "$upgrades"`, skips blank names, and passes each name quoted, so there is no word-splitting.
 
 ---
 

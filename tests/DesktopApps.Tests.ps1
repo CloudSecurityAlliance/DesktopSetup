@@ -494,9 +494,14 @@ Describe 'windows-ai-tools.ps1: installing Claude Desktop' {
         Mock Write-CsaLog { }
         $script:savedNonInteractive = $env:NONINTERACTIVE
         $env:NONINTERACTIVE = $null
+        # Install-ClaudeDesktop does Join-Path $env:TEMP ...; TEMP is set on Windows only (#169).
+        # New-Item and Remove-Item are mocked, so nothing is written under it.
+        $script:savedTemp = $env:TEMP
+        $env:TEMP = $TestDrive
     }
     AfterEach {
         $env:NONINTERACTIVE = $script:savedNonInteractive
+        $env:TEMP = $script:savedTemp
     }
 
     It 'runs the current ClaudeSetup.exe from api.anthropic.com, never winget' {
