@@ -4,7 +4,8 @@
 #
 # Updates all tools managed by macos-work-tools.sh and macos-ai-tools.sh:
 #   1. Homebrew formulas and casks (Git, Node.js, apps, etc.)
-#   2. Global npm packages (Codex, Gemini, Wrangler)
+#   2. Global npm packages (Codex, Gemini, Wrangler), each installed @latest; npm and
+#      corepack are left to Homebrew's node@24, which step 1 upgrades (#153)
 #   3. ~/.default_venv — repaired onto Python 3.14 (standard build) when it
 #      needs it, never created here; its document deps refreshed
 #   4. pip + all pip packages (in active venv or system Python)
@@ -19,7 +20,7 @@
 
 set -euo pipefail
 
-SCRIPT_VERSION="2026-11-11T05:30Z"
+SCRIPT_VERSION="2026-11-11T17:38Z"
 
 # ── CSA plugin marketplaces ─────────────────────────────────────────
 # Each update run will add any entries from this list that aren't yet
@@ -291,9 +292,9 @@ has_command() { command -v "$1" >/dev/null 2>&1; }
 # reason. Both are kept verbatim under CSA_DEBUG=1, where anyone debugging npm needs them.
 #
 # sed, not `grep -v`: `set -o pipefail` is on and a grep matching nothing exits 1, so on the day
-# npm stops printing this block a clean run would start reporting failure — `npm update -g X ||
-# npm install -g X` taking its fallback for nothing, and macos-update.sh warning about an update
-# that worked. sed exits 0 whatever it matches, so npm's own status propagates.
+# npm stops printing this block a clean run would start reporting failure — an `npm install -g
+# X@latest` that worked reported as "Failed to update X", and macos-update.sh warning about an
+# update that worked. sed exits 0 whatever it matches, so npm's own status propagates.
 # tests/test_npm_output_filter.py holds that case, and the `grep -v` control proving it is real.
 csa_npm() {
   if csa_debug_requested; then
@@ -471,20 +472,9 @@ preflight() {
   fi
   echo ""
 
-  # npm
-  if has_command npm; then
-    local outdated_npm
-    outdated_npm=$(npm outdated -g 2>/dev/null || true)
-
-    if [[ -n "$outdated_npm" ]]; then
-      echo "  npm global packages to update:"
-      echo "$outdated_npm" | while IFS= read -r line; do echo "    $line"; done
-    else
-      echo "  npm global packages: all up to date"
-    fi
-  else
-    echo "  npm: not installed (skipping)"
-  fi
+  # npm: exactly what update_npm will install @latest, and npm/corepack named as left to
+  # Homebrew (npm_update_plan, #153). It printed `npm outdated -g` raw, npm itself included.
+  echo "  npm global packages: $(npm_update_plan)"
   echo ""
 
   # ~/.default_venv (update_default_venv): its repair and why, or that there is none. Never
@@ -568,11 +558,108 @@ update_brew() {
   brew cleanup || true
 }
 
+# Homebrew owns npm (#153). npm and corepack ship inside Homebrew's node@24 keg, and
+# `brew upgrade` (update_brew) moves them with the formula, so npm updates only what npm itself
+# installed. A bare `npm update -g` updated npm too: it installed a registry npm over Homebrew's
+# link farm in lib/node_modules/npm, a copy bin/npm never runs (it resolves into the Cellar), so
+# nobody got a newer npm - and the installers' `npm update -g <pkg>` then failed with EACCES or
+# not depending on which script ran last, because npm's reify-finish rewrites
+# node_modules/npm/npmrc through Homebrew's symlink into the read-only keg. Measured in #153 on
+# npm 11.19.0, against a throwaway prefix laid out as brew lays it out:
+# `npm install -g <pkg>@latest` updates the package and leaves npm and all 1927 of its
+# symlinks alone. tests/test_homebrew_owns_npm.py holds all of this.
+npm_homebrew_owned() {
+  case "$1" in
+    npm|corepack) return 0 ;;
+    *)            return 1 ;;
+  esac
+}
+
+# Every outdated global npm package, one per line: name<TAB>current<TAB>latest<TAB>how, where
+# how is "linked" for a package `npm link` (or `npm install -g <folder>`) put there and
+# "registry" otherwise. Returns 1 when npm could not say. `npm outdated` exits 1 both when
+# something IS outdated and when it failed (measured on npm 11.20: an unreachable registry exits
+# 1 with nothing on stdout), so its status is not a state - a non-zero exit with no records is a
+# failure, never "all current". --parseable's fields are
+# path:name@wanted:name@current:name@latest:dependent; each version is cut at the LAST @, so a
+# scoped name (@openai/codex@0.5.0) keeps its scope.
+#
+# Linked, because `npm outdated -g` lists a linked package and `npm install -g <pkg>@latest`
+# replaces the link with the registry copy, where `npm update -g` left it alone (both measured on
+# npm 11.20). The link is someone's working copy, so it is not this script's to update.
+npm_global_outdated() {
+  local out rc=0 path cur latest how
+  out="$(npm outdated -g --parseable 2>/dev/null)" || rc=$?
+  if [[ $rc -ne 0 && -z "$out" ]]; then
+    return 1
+  fi
+  while IFS=: read -r path _ cur latest _; do
+    [[ -n "$latest" ]] || continue
+    how=registry
+    if [[ -L "$path" ]]; then how=linked; fi
+    printf '%s\t%s\t%s\t%s\n' "${latest%@*}" "${cur##*@}" "${latest##*@}" "$how"
+  done <<<"$out"
+  return 0
+}
+
+# The plan's npm row: what update_npm will install, from the same two functions it acts on, so
+# the plan and the step cannot disagree. Printed after "npm global packages: ".
+npm_update_plan() {
+  if ! has_command npm; then
+    echo "npm not installed (skipping)"
+    return 0
+  fi
+  local outdated name cur latest how up="" held="" linked=""
+  if ! outdated="$(npm_global_outdated)"; then
+    echo "could not be checked (npm outdated failed); the update step will try again"
+    return 0
+  fi
+  while IFS=$'\t' read -r name cur latest how; do
+    [[ -n "$name" ]] || continue
+    if npm_homebrew_owned "$name"; then
+      held="${held:+$held, }$name $cur -> $latest"
+    elif [[ "$how" == linked ]]; then
+      linked="${linked:+$linked, }$name"
+    else
+      up="${up}"$'\n'"    $name $cur -> $latest"
+    fi
+  done <<<"$outdated"
+  if [[ -n "$up" ]]; then
+    printf '%s' "update each with npm install -g <package>@latest:${up}"
+  else
+    printf '%s' "all up to date"
+  fi
+  if [[ -n "$held" ]]; then
+    printf '\n%s' "    not updated here: $held (part of Homebrew's node@24, which the Homebrew step upgrades)"
+  fi
+  if [[ -n "$linked" ]]; then
+    printf '\n%s' "    not updated here: $linked (linked from a local folder with npm link)"
+  fi
+  echo ""
+  return 0
+}
+
 update_npm() {
   if ! has_command npm; then return 0; fi
 
-  info "Updating global npm packages"
-  csa_npm update -g || warn "npm update -g failed; continuing"
+  local outdated name how
+  local pkgs=()
+  if ! outdated="$(npm_global_outdated)"; then
+    warn "Could not list outdated global npm packages (npm outdated failed); skipping"
+    return 0
+  fi
+  while IFS=$'\t' read -r name _ _ how; do
+    [[ -n "$name" ]] || continue
+    if npm_homebrew_owned "$name" || [[ "$how" == linked ]]; then continue; fi
+    pkgs+=("${name}@latest")
+  done <<<"$outdated"
+
+  if [[ ${#pkgs[@]} -eq 0 ]]; then
+    info "Global npm packages already current"
+    return 0
+  fi
+  info "Updating global npm packages: ${pkgs[*]}"
+  csa_npm install -g "${pkgs[@]}" || warn "npm install -g failed; continuing"
 }
 
 # The names in CSA_DOC_PY_DEPS (no versions), one per line, when PATH's python3 is ~/.default_venv

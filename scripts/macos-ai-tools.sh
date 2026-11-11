@@ -32,7 +32,7 @@
 
 set -euo pipefail
 
-SCRIPT_VERSION="2026-11-11T05:30Z"
+SCRIPT_VERSION="2026-11-11T17:38Z"
 
 # ── CSA plugin marketplaces ─────────────────────────────────────────
 # Plugin marketplaces to register with Claude Code. Each entry is an
@@ -343,9 +343,9 @@ has_command() { command -v "$1" >/dev/null 2>&1; }
 # reason. Both are kept verbatim under CSA_DEBUG=1, where anyone debugging npm needs them.
 #
 # sed, not `grep -v`: `set -o pipefail` is on and a grep matching nothing exits 1, so on the day
-# npm stops printing this block a clean run would start reporting failure — `npm update -g X ||
-# npm install -g X` taking its fallback for nothing, and macos-update.sh warning about an update
-# that worked. sed exits 0 whatever it matches, so npm's own status propagates.
+# npm stops printing this block a clean run would start reporting failure — an `npm install -g
+# X@latest` that worked reported as "Failed to update X", and macos-update.sh warning about an
+# update that worked. sed exits 0 whatever it matches, so npm's own status propagates.
 # tests/test_npm_output_filter.py holds that case, and the `grep -v` control proving it is real.
 csa_npm() {
   if csa_debug_requested; then
@@ -761,7 +761,7 @@ preflight() {
   if [[ -n "$codex_needs_migration" ]]; then
     echo "  Codex CLI ......... migrate from Homebrew → npm (settings preserved)"
   elif has_command codex; then
-    echo "  Codex CLI ......... installed ($(get_version codex --version))"
+    echo "  Codex CLI ......... installed ($(get_version codex --version)); update to latest via npm"
   else
     echo "  Codex CLI ......... install via npm"
   fi
@@ -770,7 +770,7 @@ preflight() {
   if [[ -n "$gemini_needs_migration" ]]; then
     echo "  Gemini CLI ........ migrate from Homebrew → npm (settings preserved)"
   elif has_command gemini; then
-    echo "  Gemini CLI ........ installed ($(get_version gemini --version))"
+    echo "  Gemini CLI ........ installed ($(get_version gemini --version)); update to latest via npm"
   else
     echo "  Gemini CLI ........ install via npm"
   fi
@@ -2370,12 +2370,14 @@ install_codex() {
     return 1
   fi
 
+  # `install -g <pkg>@latest`, never `update -g <pkg>`: under Homebrew's node@24 the update
+  # failed with EACCES writing npm's own npmrc into the read-only keg, on every re-run (#153).
   if [[ -z "$codex_needs_migration" ]] && has_command codex; then
     info "Updating Codex CLI"
-    csa_npm update -g @openai/codex || csa_npm install -g @openai/codex || warn "Failed to update Codex CLI"
+    csa_npm install -g @openai/codex@latest || warn "Failed to update Codex CLI"
   else
     info "Installing Codex CLI"
-    csa_npm install -g @openai/codex || warn "Failed to install Codex CLI"
+    csa_npm install -g @openai/codex@latest || warn "Failed to install Codex CLI"
   fi
 }
 
@@ -2389,12 +2391,13 @@ install_gemini() {
     return 1
   fi
 
+  # @latest, never `update -g`, for the reason install_codex gives (#153).
   if [[ -z "$gemini_needs_migration" ]] && has_command gemini; then
     info "Updating Gemini CLI"
-    csa_npm update -g @google/gemini-cli || csa_npm install -g @google/gemini-cli || warn "Failed to update Gemini CLI"
+    csa_npm install -g @google/gemini-cli@latest || warn "Failed to update Gemini CLI"
   else
     info "Installing Gemini CLI"
-    csa_npm install -g @google/gemini-cli || warn "Failed to install Gemini CLI"
+    csa_npm install -g @google/gemini-cli@latest || warn "Failed to install Gemini CLI"
   fi
 }
 
