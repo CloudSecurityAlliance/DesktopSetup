@@ -218,7 +218,7 @@ Snapshots land in `~/Library/Logs/CSA-DesktopSetup/` (macOS) or
 ```bash
 # macOS
 brew update && brew upgrade     # Homebrew formulas and casks, and the npm inside node@24
-npm outdated -g                 # then `npm install -g <package>@latest` for each, except npm and corepack
+npm outdated -g                 # then `npm install -g <package>@latest` for each; npm and corepack only if not Homebrew's
 pip install --upgrade pip
 claude update                   # Claude Code
 ```

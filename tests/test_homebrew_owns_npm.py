@@ -12,9 +12,11 @@ two ways, from one cause:
   over Homebrew's link farm - a copy `bin/npm` never runs. Nobody got a newer npm, and the
   installers stopped failing until the next `brew link` restored the symlinks.
 
-The fix: installers run `npm install -g <pkg>@latest`; the updater lists outdated globals,
-drops npm and corepack (Homebrew's, moved by `brew upgrade`), and installs the rest `@latest`.
-The plan row is built from the same two functions, so it names what the step will run.
+The fix, whoever owns npm updates it: installers run `npm install -g <pkg>@latest`; the
+updater lists outdated globals, leaves npm and corepack to `brew upgrade` when they are
+Homebrew's own copy, and installs everything else `@latest` - npm and corepack included when
+they are nvm's or in another prefix you can write to, as `npm update -g` did. The plan row is
+built from the same decision, so it names what the step will run.
 
 Two more things this pins, both found while writing it and both measured on npm 11.20:
 
@@ -25,9 +27,10 @@ Two more things this pins, both found while writing it and both measured on npm 
   replaces that link with the registry copy, where `npm update -g` left it alone. A link is
   someone's working copy, so it is skipped, and the plan says so.
 
-And one from review: npm and corepack are skipped whoever installed Node, so the plan may call
-them "Homebrew's" only when they are Homebrew's link farm into its Cellar. An nvm Node, or a
-registry npm that an earlier `npm update -g` put over Homebrew's links, is named where it is.
+And from review, four layouts for npm itself, each with its own outcome and plan wording:
+Homebrew's link farm into its Cellar (left to `brew upgrade`); an nvm Node (updated, `install -g
+npm@latest`); the registry copy an earlier `npm update -g` left in Homebrew's prefix (left
+alone: Homebrew's bin/npm does not run it); and a prefix you cannot write to (left to its owner).
 
 Every function under test is extracted from the shipping scripts, never copied, and `npm` is a
 stub on a stub-first PATH (stub-only for the "no npm" case). Each assertion is also run against
@@ -126,29 +129,38 @@ exit 0
 
 # `npm outdated -g --parseable` as npm 11 prints it (measured; fields are
 # path:name@wanted:name@current:name@latest:dependent). npm and corepack outdated alongside two
-# real globals, one of them scoped - the shape of the reporting machine in #153.
+# real globals, one of them scoped - the shape of the reporting machine in #153. The paths are
+# deliberately ones that cannot exist, so who owns npm here never depends on the machine running
+# the test (whose /opt/homebrew may well hold an npm): a prefix that is not there is not
+# writable, so npm and corepack are "other" and never installed.
 MIXED = """\
-/opt/homebrew/lib/node_modules/npm:npm@12.2.0:npm@11.19.0:npm@12.2.0:global
-/opt/homebrew/lib/node_modules/corepack:corepack@0.35.0:corepack@0.34.0:corepack@0.35.0:global
-/opt/homebrew/lib/node_modules/wrangler:wrangler@4.149.0:wrangler@4.62.0:wrangler@4.149.0:global
-/opt/homebrew/lib/node_modules/@openai/codex:@openai/codex@0.60.0:@openai/codex@0.50.0:@openai/codex@0.60.0:global
+/nonexistent-csa-test/lib/node_modules/npm:npm@12.2.0:npm@11.19.0:npm@12.2.0:global
+/nonexistent-csa-test/lib/node_modules/corepack:corepack@0.35.0:corepack@0.34.0:corepack@0.35.0:global
+/nonexistent-csa-test/lib/node_modules/wrangler:wrangler@4.149.0:wrangler@4.62.0:wrangler@4.149.0:global
+/nonexistent-csa-test/lib/node_modules/@openai/codex:@openai/codex@0.60.0:@openai/codex@0.50.0:@openai/codex@0.60.0:global
 """
 ONLY_HOMEBREW = "".join(l + "\n" for l in MIXED.splitlines()[:2])
 # The fixtures below name real paths in the test's temporary directory ({TMP}), laid out by the
-# function passed as `layout`, because what the plan may SAY about npm depends on what is there.
+# function passed as `layout`, because what update_npm does with npm, and what the plan may say
+# about it, depend on what is there.
 #
 # A package `npm link` put there: npm outdated lists it, and `npm install -g is-odd@latest`
 # would replace the link with the registry copy (measured on npm 11.20; `npm update -g` left it).
 LINKED = "{TMP}/node_modules/is-odd:is-odd@3.0.1:is-odd@0.0.1:is-odd@3.0.1:global\n"
-# npm and corepack in Homebrew's link farm, in an nvm Node, and a registry npm that replaced
-# Homebrew's links (#153's symptom 2). Only the first is the Homebrew step's to move.
+# npm and corepack in four layouts: Homebrew's link farm (left to brew upgrade), an nvm Node
+# (updated), the registry npm an earlier `npm update -g` left in Homebrew's prefix (#153's
+# symptom 2; left alone), and a prefix you cannot write to (left to its owner).
 BREW_HELD = """\
 {TMP}/homebrew/lib/node_modules/npm:npm@12.2.0:npm@11.19.0:npm@12.2.0:global
 {TMP}/homebrew/lib/node_modules/corepack:corepack@0.35.0:corepack@0.34.0:corepack@0.35.0:global
 """
-NVM_HELD = ("{TMP}/.nvm/versions/node/v26.13.0/lib/node_modules/npm"
-            ":npm@12.2.0:npm@11.20.0:npm@12.2.0:global\n")
-SHADOW_HELD = "{TMP}/homebrew/lib/node_modules/npm:npm@12.3.0:npm@12.2.0:npm@12.3.0:global\n"
+NVM_HELD = """\
+{TMP}/.nvm/versions/node/v26.13.0/lib/node_modules/npm:npm@12.2.0:npm@11.20.0:npm@12.2.0:global
+{TMP}/.nvm/versions/node/v26.13.0/lib/node_modules/corepack:corepack@0.35.0:corepack@0.34.0:corepack@0.35.0:global
+"""
+LEFTOVER_HELD = "{TMP}/homebrew/lib/node_modules/npm:npm@12.3.0:npm@12.2.0:npm@12.3.0:global\n"
+READONLY_HELD = "{TMP}/sys/lib/node_modules/npm:npm@12.2.0:npm@10.9.0:npm@12.2.0:global\n"
+CELLAR_NPM = "../Cellar/node@24/24.21.0_2/bin/npm"
 
 
 def linked_layout(tmp: pathlib.Path) -> None:
@@ -171,15 +183,34 @@ def homebrew_layout(tmp: pathlib.Path) -> None:
 
 
 def nvm_layout(tmp: pathlib.Path) -> None:
-    d = tmp / ".nvm" / "versions" / "node" / "v26.13.0" / "lib" / "node_modules" / "npm"
-    d.mkdir(parents=True)
-    (d / "package.json").write_text("{}\n", encoding="utf-8")
+    for pkg in ("npm", "corepack"):
+        d = tmp / ".nvm" / "versions" / "node" / "v26.13.0" / "lib" / "node_modules" / pkg
+        d.mkdir(parents=True)
+        (d / "package.json").write_text("{}\n", encoding="utf-8")
 
 
-def shadow_layout(tmp: pathlib.Path) -> None:
+def leftover_layout(tmp: pathlib.Path, *, bin_link: bool = True) -> None:
+    """A registry npm (real files) in a Homebrew prefix, where Homebrew's links were. With
+    bin_link, the prefix's bin/npm still points into the Cellar, as #153 measured."""
+    (tmp / "homebrew" / "Cellar" / "node@24" / "24.21.0_2" / "bin").mkdir(parents=True)
     d = tmp / "homebrew" / "lib" / "node_modules" / "npm"
     d.mkdir(parents=True)
     (d / "package.json").write_text("{}\n", encoding="utf-8")
+    if bin_link:
+        (tmp / "homebrew" / "bin").mkdir()
+        os.symlink(CELLAR_NPM, tmp / "homebrew" / "bin" / "npm")
+
+
+def leftover_without_bin_link(tmp: pathlib.Path) -> None:
+    leftover_layout(tmp, bin_link=False)
+
+
+def readonly_layout(tmp: pathlib.Path) -> None:
+    """npm in a prefix you cannot write to, like a root-owned Node."""
+    d = tmp / "sys" / "lib" / "node_modules" / "npm"
+    d.mkdir(parents=True)
+    (d / "package.json").write_text("{}\n", encoding="utf-8")
+    (tmp / "sys" / "lib" / "node_modules").chmod(0o555)
 
 HELPERS = 'info() { echo "INFO: $*"; }\nwarn() { echo "WARN: $*"; }\nsuccess() { echo "OK: $*"; }\n'
 
@@ -216,6 +247,8 @@ def run(funcs: list[str], body: str, *, outdated: str = "", outdated_exit: int =
                "NPM_OUTDATED_EXIT": str(outdated_exit), "NPM_INSTALL_EXIT": str(install_exit)}
         p = subprocess.run([BASH, str(h)], capture_output=True, text=True, env=env)
         calls = [c for c in log.read_text(encoding="utf-8").splitlines() if c]
+        for d, _, _ in os.walk(tmp):       # readonly_layout: let the cleanup delete it
+            os.chmod(d, 0o755)
         return {"out": p.stdout + p.stderr, "rc": p.returncode, "calls": calls}
 
 
@@ -234,18 +267,29 @@ def never_installs_homebrews(r: dict) -> bool:
 
 # ── The update side (macos-update.sh) ────────────────────────────────────────────────────
 
-def update_funcs(text: str, update_npm: str | None = None,
-                 owner_note: str | None = None) -> list[str]:
-    names = ["has_command", "csa_debug_requested", "csa_npm", "npm_node_owned",
+def update_funcs(text: str, update_npm: str | None = None, owner_note: str | None = None,
+                 decision: str | None = None) -> list[str]:
+    names = ["has_command", "csa_debug_requested", "csa_npm", "npm_node_owned", "npm_owner",
              "npm_global_outdated", "npm_update_plan"]
-    return ([extract(text, n) for n in names] + [owner_note or extract(text, "npm_owner_note")]
+    return ([extract(text, n) for n in names]
+            + [decision or extract(text, "npm_update_decision")]
+            + [owner_note or extract(text, "npm_owner_note")]
             + [update_npm or extract(text, "update_npm")])
 
 
 # The plan's note as #190 first wrote it: every npm and corepack "Homebrew's", whatever was there.
-# Untrue for an nvm Node, and for a registry npm that replaced Homebrew's links.
-ALWAYS_HOMEBREW_NOTE = ('npm_owner_note() { echo "part of Homebrew\'s node@24, which the Homebrew '
-                        'step upgrades"; }')
+# Untrue for the leftover copy in Homebrew's prefix, and for a prefix you cannot write to.
+ALWAYS_HOMEBREW_NOTE = ('npm_owner_note() { echo "Homebrew\'s own copy; the Homebrew step '
+                        'upgrades it"; }')
+
+# The decision as #190 first made it: npm and corepack never updated, whoever owned them. An nvm
+# user's npm then stopped updating at all - the regression the review ruled out.
+NEVER_UPDATE_NPM = (
+    'npm_update_decision() {\n'
+    '  if npm_node_owned "$1"; then echo homebrew\n'
+    '  elif [[ "$2" == linked ]]; then echo linked\n'
+    '  else echo update; fi\n'
+    '}')
 
 
 def update_findings(funcs: list[str]) -> list[str]:
@@ -333,27 +377,60 @@ def update_findings(funcs: list[str]) -> list[str]:
         if "all up to date" not in r["out"] or not re.search(r"not updated here: is-odd .*npm link", r["out"]):
             bad.append(f"plan, linked: must name is-odd as left alone, not as an update: {r['out']!r}")
 
-        # Who npm belongs to is said only when it is true. Homebrew's link farm: Homebrew's.
+        # Whoever owns npm updates it, and the plan says exactly what happens, per layout.
+        # Homebrew's link farm: left to brew upgrade, and called Homebrew's.
+        r = run(funcs, "update_npm", outdated=BREW_HELD, outdated_exit=1, layout=homebrew_layout)
+        if installs(r) or not never_updates(r):
+            bad.append(f"owner (homebrew): npm wrote into Homebrew's copy: {r['calls']}")
         r = run(funcs, "npm_update_plan", outdated=BREW_HELD, outdated_exit=1, layout=homebrew_layout)
         for held in (r"npm 11\.19\.0 -> 12\.2\.0", r"corepack 0\.34\.0 -> 0\.35\.0"):
-            if not re.search(held + r" \(part of Homebrew's node@24, which the Homebrew step upgrades\)",
-                             r["out"]):
-                bad.append(f"plan, owner: Homebrew's own {held!r} is not named as Homebrew's: {r['out']!r}")
-        # nvm's Node, and a registry npm that replaced Homebrew's links: never "Homebrew's".
-        for label, fixture, layout, says in (
-                ("nvm", NVM_HELD, nvm_layout, r"nvm's Node, at \S+/\.nvm/versions/node/v26\.13\.0/lib/node_modules/npm"),
-                ("shadow", SHADOW_HELD, shadow_layout, r"at \S+/homebrew/lib/node_modules/npm, not Homebrew's copy")):
-            r = run(funcs, "npm_update_plan", outdated=fixture, outdated_exit=1, layout=layout)
-            if "Homebrew step upgrades" in r["out"] or not re.search(says, r["out"]):
-                bad.append(f"plan, owner ({label}): must name where npm is, never claim Homebrew "
-                           f"moves it: {r['out']!r}")
-            r = run(funcs, "update_npm", outdated=fixture, outdated_exit=1, layout=layout)
+            if not re.search(r"not updated here: " + held
+                             + r" \(Homebrew's own copy; the Homebrew step upgrades it\)", r["out"]):
+                bad.append(f"plan, owner (homebrew): {held!r} not named as Homebrew's: {r['out']!r}")
+
+        # nvm's Node: npm's own to update, as `npm update -g` did - installed @latest, and listed
+        # in the plan as an update.
+        r = run(funcs, "update_npm", outdated=NVM_HELD, outdated_exit=1, layout=nvm_layout)
+        if installs(r) != [["-g", "npm@latest", "corepack@latest"]] or not never_updates(r):
+            bad.append(f"owner (nvm): expected `install -g npm@latest corepack@latest`, got {r['calls']}")
+        r = run(funcs, "npm_update_plan", outdated=NVM_HELD, outdated_exit=1, layout=nvm_layout)
+        to_update = r["out"].split("not updated here")[0]
+        if ("npm 11.20.0 -> 12.2.0" not in to_update or "corepack 0.34.0 -> 0.35.0" not in to_update
+                or "not updated here" in r["out"]):
+            bad.append(f"plan, owner (nvm): must list npm and corepack as updates: {r['out']!r}")
+
+        # The registry npm an earlier `npm update -g` left in Homebrew's prefix: left alone, and
+        # the plan says why - naming what bin/npm runs only when bin/npm links into the Cellar.
+        for label, layout, says in (
+                ("leftover", leftover_layout,
+                 r"at \S+/homebrew/lib/node_modules/npm, a copy in Homebrew's prefix that \S+/homebrew/bin/npm "
+                 r"does not run - it runs Homebrew's Cellar copy \(#153\); left alone"),
+                ("leftover, no bin link", leftover_without_bin_link,
+                 r"at \S+/homebrew/lib/node_modules/npm, in Homebrew's prefix but not Homebrew's own copy "
+                 r"\(#153\); left alone")):
+            r = run(funcs, "update_npm", outdated=LEFTOVER_HELD, outdated_exit=1, layout=layout)
             if installs(r) or not never_updates(r):
-                bad.append(f"owner ({label}): npm itself was changed: {r['calls']}")
+                bad.append(f"owner ({label}): npm wrote into Homebrew's prefix: {r['calls']}")
+            r = run(funcs, "npm_update_plan", outdated=LEFTOVER_HELD, outdated_exit=1, layout=layout)
+            if "Homebrew step upgrades" in r["out"] or not re.search(says, r["out"]):
+                bad.append(f"plan, owner ({label}): {r['out']!r}")
+
+        # A prefix you cannot write to: left to its owner (as root everything is writable, so
+        # this case cannot be built there).
+        if not ROOT_USER:
+            r = run(funcs, "update_npm", outdated=READONLY_HELD, outdated_exit=1, layout=readonly_layout)
+            if installs(r) or not never_updates(r):
+                bad.append(f"owner (read-only): npm tried to write where it cannot: {r['calls']}")
+            r = run(funcs, "npm_update_plan", outdated=READONLY_HELD, outdated_exit=1, layout=readonly_layout)
+            if ("Homebrew step upgrades" in r["out"]
+                    or not re.search(r"at \S+/sys/lib/node_modules/npm, which you cannot write to; "
+                                     r"left to whoever installed it", r["out"])):
+                bad.append(f"plan, owner (read-only): {r['out']!r}")
     return bad
 
 
 LINKS_OK = os.name != "nt"
+ROOT_USER = hasattr(os, "geteuid") and os.geteuid() == 0
 
 
 # ── The installers (macos-ai-tools.sh, macos-work-tools.sh) ─────────────────────────────────
@@ -479,10 +556,10 @@ def main() -> int:
     print(f"\nmacos-update.sh{where} :: update_npm, npm_update_plan")
     findings = update_findings(update_funcs(update_text))
     check([f for f in findings if not f.startswith("plan")],
-          "updates every outdated global @latest except npm, corepack and npm-linked packages, "
-          "and says so when it cannot")
+          "updates every outdated global @latest - npm and corepack only when npm owns them, "
+          "npm-linked packages never - and says so when it cannot")
     check([f for f in findings if f.startswith("plan")],
-          "the plan names exactly that, and calls npm/corepack Homebrew's only when they are")
+          "the plan names exactly that, and says per layout what happens to npm/corepack")
     if not LINKS_OK:
         print("    skip  the npm-linked cases: no symlink, and a colon in every path, on Windows")
 
@@ -510,8 +587,11 @@ def main() -> int:
             control([f for f in draft if f.startswith("linked")],
                      "the issue's draft, which replaces an npm-linked package, is caught")
             always = update_findings(update_funcs(update_text, owner_note=ALWAYS_HOMEBREW_NOTE))
-            control([f for f in always if f.startswith("plan, owner (")],
-                    "a plan that calls every npm Homebrew's (nvm's, a shadow copy) is caught")
+            control([f for f in always if f.startswith("plan, owner (leftover")],
+                    "a plan that calls every skipped npm Homebrew's (the leftover copy) is caught")
+            never = update_findings(update_funcs(update_text, decision=NEVER_UPDATE_NPM))
+            control([f for f in never if f.startswith("owner (nvm)")],
+                    "never updating npm, whoever owns it (an nvm user's npm frozen), is caught")
         control(installer_findings(installer_funcs(read("macos-ai-tools.sh"), "install_codex",
                                                    OLD_INSTALL_CODEX),
                                    'codex_needs_migration=""\ninstall_codex', "codex",

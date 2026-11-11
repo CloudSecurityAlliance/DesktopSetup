@@ -375,12 +375,20 @@ auto-updates); npm for the Codex and Gemini CLIs and for Wrangler; **uv for Pyth
   updater's bare `npm update -g` installed a registry npm over Homebrew's link farm, a copy
   `bin/npm` never runs. Now:
   - the installers, on both platforms, run `npm install -g <pkg>@latest`, never `update -g`;
-  - `macos-update.sh` lists `npm outdated -g`, drops `npm` and `corepack`, and `install -g`s the
-    rest `@latest` in one call. The plan row lists exactly those (`npm_update_plan`). It calls
-    npm and corepack Homebrew's (moved by `brew upgrade`) **only when they are** Homebrew's link
-    farm into its Cellar (`npm_owner_note`). Otherwise it names where they are, because they are
-    then not updated by anything here: an nvm Node, or a registry npm that an earlier
-    `npm update -g` put over Homebrew's links;
+  - `macos-update.sh` lists `npm outdated -g` and `install -g`s each outdated package `@latest`
+    in one call, **whoever owns npm updates it** (`npm_owner`, `npm_update_decision`):
+    - **Homebrew's own copy** (the link farm into its Cellar) is skipped, because `brew upgrade`
+      moves it and npm must not write into the keg;
+    - **an nvm Node's npm and corepack, or any prefix you can write to**, are installed
+      `@latest` like any other global, as `npm update -g` did. There is no keg there, so the
+      EACCES cannot happen;
+    - **the registry npm an earlier `npm update -g` left in Homebrew's prefix** is left alone.
+      Homebrew's `bin/npm` runs the Cellar copy, not that one (#153), so updating it changes
+      nothing that runs, and leaving it is harmless;
+    - **a prefix you cannot write to** is left to its owner.
+
+    The plan row (`npm_update_plan`) reads the same decision. It lists what will be installed,
+    then one line per skipped package saying why, and calls a copy Homebrew's only when it is;
   - **a package `npm link` put there is skipped**, and named. `npm outdated -g` lists it, and
     `install -g <pkg>@latest` replaces the link with the registry copy where `update -g` left it
     (both measured on npm 11.20). The installers do not check: a linked Codex, Gemini or
