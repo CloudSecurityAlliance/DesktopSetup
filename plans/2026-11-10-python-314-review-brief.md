@@ -78,7 +78,7 @@ A stage table stands in for a review map: the work is two PRs with one dependenc
 | 3 | An active venv or an exported `UV_PYTHON_PREFERENCE` can't blind the resolver | `--system`, the subshell `unset` | `find_passes_system_flag`, `uv_python_preference_exported`, `flags_dropped_are_caught`, and `real_uv_resolver` in the `venv-macos` job | pass, with real uv |
 | 4 | `~/.default_venv` becomes a **relative** link to `~/.default_venv-3.14`; an existing directory is kept under a versioned name and never deleted | `ensure_default_venv` | `tests/test_venv_replacement.py` layout cases; acceptance A-rows | pass; old directory present |
 | 5 | The flip works on BSD `mv` (`mv -h`), so the new link is never dropped inside the old target | same | `control_plain_mv_caught`, run on `macos-latest` | pass on macOS |
-| 6 | A second run rebuilds nothing | everything | `second_run_noop` (venv: content and call log; gate: call log); acceptance run 2 (inode/mtime) | no `uv venv` or `--force`. The gate still calls `uv tool upgrade --python <path>`, a no-op by measurement ("Nothing to upgrade"), which may touch `uv-receipt.toml`'s mtime |
+| 6 | A second run rebuilds nothing | everything | `second_run_noop` (venv: content and call log) and `e2e_second_run_noop` (gate: call log); acceptance run 2 (inode/mtime) | no `uv venv` or `--force`. The gate still calls `uv tool upgrade --python <path>`, a no-op by measurement ("Nothing to upgrade"), which may touch `uv-receipt.toml`'s mtime |
 | 7 | Plan rows match what the run does, in the 15 tested state/mode pairs | `default_venv_plan` | `plan_agrees_with_run` in `tests/test_venv_replacement.py` | pass. **Untested:** ai-tools mode, no Python found, a Cellar-pinned venv, with Homebrew's fallback returning a Cellar path (the ledger defers it as unreachable) |
 | 8 | No install path names markitdown, magika or onnxruntime, and pymupdf is pinned `<2` as one argument | `CSA_DOC_PY_DEPS`, both copies, plus the Windows string | `tests/test_python_pins.py` (+ `--self-test`), `doc_deps_cases` in `tests/test_venv_replacement.py` | pass; the plain `test_python_pins.py` fails on 495ad6b (exit 1, 4 problems) |
 | 9 | What the dependency set **resolves to** has no onnxruntime | the pin | `tools/check-doc-deps-resolve.py` (`uv pip compile`) | no `onnxruntime`; the self-test proves unpinned pymupdf still drags it in |
@@ -122,7 +122,7 @@ A stage table stands in for a review map: the work is two PRs with one dependenc
 
   All of this is recorded on #184 as the first Windows task.
 - **Registrations are Plan 2** (#179 Part 2 items 1, 2, 6–8). This PR repairs interpreters, not client registrations.
-- **markitdown is out of the default venv** (#157), until there is a route without telemetry (the magika stub used by vate, the `valid-ai-ted-evidence-based` plugin, CINO-Plugins #144) or
+- **markitdown is out of the default venv** (#157), until there is a route without telemetry (the magika stub used by vate, the `valid-ai-ted-evidence-based` plugin, closed CINO-Plugins #144, where the stub shipped) or
   the CINO says yes.
 - **The Intel-Mac path is proven by stubs only** (`macos-latest` is arm64). After the pin, pymupdf 1.28.2 has a real
   Intel wheel.
