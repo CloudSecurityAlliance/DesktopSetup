@@ -116,7 +116,8 @@ check python3 tests/test_csa_python.py
 step "venv replacement safety"
 check python3 tests/test_venv_replacement.py
 
-# Needs uv and PyPI; exits 77 (skipped, and named) without them. CI's venv-macos job requires it.
+# Needs uv and PyPI; exits 77 (skipped, and named) without them. CI runs it in its own workflow,
+# .github/workflows/doc-deps.yml (pull requests on the two scripts, and weekly), where it must run.
 step "the document deps never bring in onnxruntime, resolved for real"
 check python3 tools/check-doc-deps-resolve.py
 check python3 tools/check-doc-deps-resolve.py --self-test

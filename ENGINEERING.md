@@ -402,7 +402,11 @@ offered: Homebrew's 3.15, a 3.13, uv's 3.14t, or a Cellar path the next `brew up
     `tools/check-doc-deps-resolve.py` resolves the array with real uv (universal, Apple silicon
     on macOS 15, Intel) and fails on onnxruntime; its `--self-test` resolves the list as it
     stood at 495ad6b and must report it. It needs PyPI, so `check-all.sh` skips it (named)
-    without uv or network, and CI's `venv-macos` job requires it. Measured: without
+    without uv or network. In CI it has its own workflow, `.github/workflows/doc-deps.yml`, run
+    on pull requests touching the two scripts, the tool or the workflow, and weekly (the answer
+    can change upstream), and kept out of `lint.yml` so a PyPI outage cannot hide the other
+    jobs. The self-test expires the day unpinned pymupdf stops requiring onnxruntime; that is
+    the signal to revisit the pin, not a CI bug. Measured: without
     `MACOSX_DEPLOYMENT_TARGET=15.0`, uv's default Apple-silicon target predates onnxruntime's
     macOS 14 wheels, so uv quietly backtracks to pymupdf 1.x and the unpinned list looks clean.
 
@@ -590,8 +594,8 @@ Worth knowing individually:
 - **`check-script-versions.py`** — above.
 - **`check-doc-deps-resolve.py`** — `CSA_DOC_PY_DEPS`, resolved with real uv against PyPI, must
   not bring in onnxruntime ([`~/.default_venv`](#default_venv-a-link-to-a-versioned-venv-macos),
-  above). The one check that needs the network: exit 77 without it, a failure in CI's
-  `venv-macos` job, where `CSA_TEST_REQUIRE_REAL_UV` is set.
+  above). The one check that needs the network: exit 77 without it, a failure in its own CI
+  workflow, `doc-deps.yml` (pull requests and weekly), where `CSA_TEST_REQUIRE_REAL_UV` is set.
 - **`check-paste-safety.py`**, **`check-shell-tail-conditionals.py`**,
   **`check-pipeline-assignments.py`** — a README must not ask for a multi-line paste; no
   tail-position conditional under `set -e`; no unguarded pipeline assignment.

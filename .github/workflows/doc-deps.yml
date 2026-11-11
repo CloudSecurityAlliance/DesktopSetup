@@ -1,0 +1,65 @@
+name: doc-deps
+
+# What CSA_DOC_PY_DEPS - the document deps macos-ai-tools.sh and macos-update.sh put in
+# ~/.default_venv - pulls in today, resolved with real uv against PyPI. It must never include
+# onnxruntime: its official macOS and Linux builds (1.29 on) send Microsoft telemetry by default,
+# and pymupdf 2.x requires it, which is why pymupdf is pinned below 2 (#179's final review).
+#
+# Its own workflow, not a step of lint.yml's venv-macos job, for two reasons: it depends on PyPI,
+# and an outage there must not hide the BSD-mv and real-uv results that job exists for; and the
+# answer can change upstream with no change here, so it also runs weekly, between PRs.
+#
+# --self-test resolves the list as it stood at 495ad6b (pymupdf unpinned) and must find
+# onnxruntime. The day unpinned pymupdf stops requiring onnxruntime, the self-test fails. That is
+# the signal to revisit the pymupdf<2 pin and this guard, not a CI bug.
+#
+# tools/check-all.sh runs the same two commands locally (exit 77, named, without uv or network).
+
+on:
+  pull_request:
+    paths:
+      - scripts/macos-ai-tools.sh
+      - scripts/macos-update.sh
+      - tools/check-doc-deps-resolve.py
+      - .github/workflows/doc-deps.yml
+  schedule:
+    - cron: "23 6 * * 1"   # Mondays, 06:23 UTC
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  resolve:
+    name: document deps resolve without onnxruntime
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+
+      # Unpinned uv version on purpose, as in lint.yml: the installers keep uv current.
+      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2  # v10.3.3
+        with:
+          enable-cache: "false"
+
+      # The tool resolves for Python 3.14 with downloads off, so the interpreter is installed
+      # here. The resolution itself is cross-platform (--python-platform), so ubuntu will do.
+      - name: uv's Python 3.14
+        run: uv python install 3.14
+
+      - name: The document deps never bring in onnxruntime, resolved for real (#179)
+        env:
+          CSA_TEST_REQUIRE_REAL_UV: "1"
+        run: |
+          python3 tools/check-doc-deps-resolve.py
+          python3 tools/check-doc-deps-resolve.py --self-test
+
+      - name: The check must not change the working tree (#72)
+        if: success() || failure()
+        run: |
+          dirty="$(git status --porcelain --untracked-files=all)"
+          if [ -n "$dirty" ]; then
+            echo "::error::the check changed the working tree"
+            printf '%s\n' "$dirty"
+            exit 1
+          fi
+          echo "working tree unchanged"

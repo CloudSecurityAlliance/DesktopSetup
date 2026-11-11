@@ -25,7 +25,14 @@ script declares it, three ways:
 Each must succeed and must not contain onnxruntime.
 
 Needs `uv` and PyPI. Without uv, or when PyPI cannot be reached, it exits 77 (skipped) - unless
-CSA_TEST_REQUIRE_REAL_UV is set, as the `venv-macos` CI job sets it, where a skip is a failure.
+CSA_TEST_REQUIRE_REAL_UV is set, as `.github/workflows/doc-deps.yml` sets it, where a skip is a
+failure. That workflow runs on pull requests touching the two scripts, this tool or itself, and
+weekly, because the answer can change upstream with no change here. It is kept out of lint.yml
+so a PyPI outage cannot hide the other jobs' results.
+
+`--self-test` expires the day unpinned pymupdf stops requiring onnxruntime: then the 495ad6b list
+resolves clean and the self-test fails. That is the signal to revisit the pymupdf<2 pin and this
+guard, not a CI bug.
 
     python3 tools/check-doc-deps-resolve.py
     python3 tools/check-doc-deps-resolve.py --self-test        # the 495ad6b list must fail
