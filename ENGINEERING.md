@@ -338,7 +338,8 @@ auto-updates); npm for the Codex and Gemini CLIs and for Wrangler; **uv for Pyth
   - **Enforced on macOS for the interpreter the installer names** (`find_csa_python`, above),
     and for `~/.default_venv`, which is rebuilt off 3.14t (below). The CSA tools already on
     3.14t are rebuilt by the private gate repo's setup scripts; `csa_tool_repairs` lists them,
-    and why, in the plan's Internal MCP servers row. Windows is #184.
+    and why, in the plan's Internal MCP servers row - only the tools a `CSA_INTERNAL_SETUPS`
+    entry owns, because a setup rebuilds nothing else. Windows is #184.
 - **Node's floor is derived from the consumer that asks for most, never picked:** **22**, from
   Wrangler's `engines.node`. Enforced on both platforms.
 - **Node is pinned to the LTS line on both platforms**
@@ -377,7 +378,10 @@ a Cellar path the next `brew upgrade` deletes.
   Homebrew-fallback venv is not rebuilt on every run. A Cellar venv is rebuilt only onto a
   non-Cellar CSA Python; otherwise it is left working, with a warning.
 - **`ensure_default_venv`** classifies what is there (`default_venv_state`, which the plan row
-  uses too, so the two cannot disagree) and repairs it: a real directory (pre-symlink machines)
+  uses too) and repairs it. The plan row (`default_venv_plan`) also asks `find_csa_python`, as
+  the run does first, because the Python decides the outcome: `-update` with none installed, or a
+  Cellar-pinned venv whose only Python is on a Cellar path too, changes nothing, and the row says
+  so instead of naming a rebuild that will not run. The cases: a real directory (pre-symlink machines)
   is renamed to `~/.default_venv-<X.Y>` (from `pyvenv.cfg`'s `version_info`, which uv writes, or
   `version`, which `python -m venv` writes; `-unknown` without one; a timestamp on a name
   collision); a link to an older version, or a dangling one, is flipped; a link the installer
@@ -415,7 +419,11 @@ a Cellar path the next `brew upgrade` deletes.
 - Windows has no `~/.default_venv`; its document deps are #183.
 - `tests/test_venv_replacement.py` runs all of it on stub uv, brew and interpreters, plus one
   case on real uv with wheels it builds itself (offline), and two controls that prove the cases
-  can fail (a plain `mv`, a build without `--relocatable`).
+  can fail (a plain `mv`, a build without `--relocatable`). `plan_agrees_with_run` runs the plan
+  row and then the step behind it, per state, and requires them to agree. CI runs the file twice:
+  on ubuntu, where GNU `mv -T` stands in for `-h` and the real-uv case skips, and in the
+  `venv-macos` job on `macos-latest` (BSD `mv`, uv from `astral-sh/setup-uv`, `uv python install
+  3.14`), where `CSA_TEST_REQUIRE_REAL_UV=1` makes that skip a failure.
 
 ### uv's exit codes are not states
 

@@ -313,6 +313,7 @@ def harness(script: pathlib.Path) -> str:
              assignment("CSA_DOC_PY_DEPS", script)]
     parts += [extract(n, script) for n in SHARED]
     if script == AI:
+        parts.append(assignment("CSA_INTERNAL_SETUPS"))
         parts += [extract(n) for n in ("install_doc_python_deps", "csa_tool_repairs",
                                        "csa_todo_add")]
     else:
@@ -1141,24 +1142,33 @@ def tool_repair_cases(root: pathlib.Path) -> None:
     tools = w.dir / "uv tools"
     w.uv_std(tooldir=tools)
     make_venv(tools / "csa-zendesk", str(w.ft()), style="uv", xy=PREF)
-    make_venv(tools / "csa-skilljar", str(w.std()), style="uv", xy=PREF)
+    cel, _ = w.cellar()
+    make_venv(tools / "csa-skilljar", str(cel), style="venv", xy=PREF)
     make_venv(tools / "csa-google-workspace", str(w.dead()), style="uv", xy=PREF)
     make_venv(tools / "csa-google-gmail-calendar", str(w.other("3.15")), style="uv", xy="3.15")
-    cel, _ = w.cellar()
-    make_venv(tools / "csa-other", str(cel), style="venv", xy=PREF)
+    make_venv(tools / "csa-other", str(w.ft()), style="uv", xy=PREF)   # no setup owns it
     make_venv(tools / "ruff", str(w.ft()), style="uv", xy=PREF)
     before = {p: p.stat().st_mtime_ns for p in tools.rglob("*") if not p.is_symlink()}
     out, err, rc = w.run("csa_tool_repairs")
     want = {"csa-zendesk: it is the free-threaded build",
             "csa-google-workspace: its Python no longer exists",
             "csa-google-gmail-calendar: it is Python 3.15",
-            "csa-other: it is on a Homebrew Cellar path"}
+            "csa-skilljar: it is on a Homebrew Cellar path"}
     check(rc == 0 and set(out.splitlines()) == want,
-          "each broken csa-* tool is listed with its reason; sound ones and non-CSA tools are not",
+          "each broken tool a CSA_INTERNAL_SETUPS entry owns is listed, with its reason",
           show(out, err, rc))
+    check("csa-other" not in out and "ruff" not in out,
+          "a csa-* tool no listed setup owns is NOT listed (its setup would not rebuild it), "
+          "nor is a non-CSA tool", out)
     check(not venv_calls(w) and not installs(w)
           and before == {p: p.stat().st_mtime_ns for p in tools.rglob("*") if not p.is_symlink()},
           "read-only")
+    w2 = World(root, "tool_repairs_sound")
+    tools2 = w2.dir / "uv tools"
+    w2.uv_std(tooldir=tools2)
+    make_venv(tools2 / "csa-zendesk", str(w2.std()), style="uv", xy=PREF)
+    out, err, rc = w2.run("csa_tool_repairs")
+    check(rc == 0 and out == "", "a sound tool is not listed", show(out, err, rc))
     pre = code_only(extract("preflight"))
     check("csa_tool_repairs" in pre, "the Internal MCP servers row lists them")
 
@@ -1191,6 +1201,124 @@ def plan_cases(root: pathlib.Path) -> None:
     pre = code_only(extract("preflight", UPD))
     check(re.search(r'"\s{2}Default venv.*\$\(default_venv_plan --no-create\)', pre) is not None,
           "macos-update.sh's Default venv row is default_venv_plan --no-create")
+
+
+def layout(w: World) -> dict:
+    """What a repair changes: HOME's top-level entries, link targets, and each venv's pyvenv.cfg.
+    A deps refresh (site-packages) is not a layout change."""
+    out = {}
+    for p in sorted(w.home.iterdir()):
+        if p.is_symlink():
+            out[p.name] = ("L", os.readlink(p))
+        else:
+            cfg = p / "pyvenv.cfg"
+            out[p.name] = ("D", cfg.read_text(encoding="utf-8") if cfg.is_file() else "")
+    return out
+
+
+def dep_installs(w: World) -> list[str]:
+    return [c for c in w.calls() if c.startswith("uv pip install")
+            or (c.startswith("py-pip") and " install" in c)]
+
+
+def plan_agreement_cases(root: pathlib.Path) -> None:
+    """The plan row is what the person agrees to, so it must name what the run then does: a row
+    that says leave/install/refresh/none changes no venv, a row that says build/rebuild/link/move
+    changes one, and "nothing is installed" installs nothing. Each scenario runs the plan, then the
+    step behind the row (install_doc_python_deps / update_default_venv), and compares."""
+    print("\nplan_agrees_with_run")
+
+    def healthy(w):
+        w.uv_std()
+        w.venv(VERSIONED, w.std())
+        w.link(VERSIONED)
+
+    def ft_link(w):
+        w.venv(VERSIONED, w.ft())
+        w.link(VERSIONED)
+
+    def ft_with_std(w):
+        w.uv_std()
+        ft_link(w)
+
+    def ft_only(w):                       # the #179 machine: only 3.14t is installed
+        ft, std = w.ft(), w.std()
+        w.uv(find=ft, listing=[entry(ft, "freethreaded")],
+             after_find=std, after_listing=[entry(std)])
+        ft_link(w)
+
+    def real313_no_python(w):
+        w.uv(listing=[])
+        w.venv(".default_venv", w.other("3.13"), style="venv", xy="3.13")
+
+    def real314_no_python(w):
+        w.uv(listing=[])
+        w.venv(".default_venv", w.std(), style="venv")
+
+    def cellar_only(w):                   # the only Python 3.14 found is on a Cellar path
+        cel, _ = w.cellar()
+        w.uv(find=cel, listing=[])
+        w.venv(VERSIONED, cel, style="venv")
+        w.link(VERSIONED)
+
+    def cellar_with_std(w):
+        w.uv_std()
+        cel, _ = w.cellar()
+        w.venv(VERSIONED, cel, style="venv")
+        w.link(VERSIONED)
+
+    def absent_std(w):
+        w.uv_std()
+
+    def dangling_std(w):
+        w.uv_std()
+        w.link(".default_venv-3.13")
+
+    def dangling_no_python(w):
+        w.uv(listing=[])
+        w.link(".default_venv-3.13")
+
+    scenarios = [
+        ("healthy", healthy, "ai"), ("healthy", healthy, "update"),
+        ("ft_with_std", ft_with_std, "ai"), ("ft_with_std", ft_with_std, "update"),
+        ("ft_only", ft_only, "ai"), ("ft_only", ft_only, "update"),
+        ("real313_no_python", real313_no_python, "update"),
+        ("real314_no_python", real314_no_python, "update"),
+        ("cellar_only", cellar_only, "ai"), ("cellar_only", cellar_only, "update"),
+        ("cellar_with_std", cellar_with_std, "update"),
+        ("absent_std", absent_std, "ai"), ("absent_std", absent_std, "update"),
+        ("dangling_std", dangling_std, "update"), ("dangling_no_python", dangling_no_python, "update"),
+    ]
+    for name, setup, script in scenarios:
+        w = World(root, f"plan_agrees_{name}_{script}")
+        setup(w)
+        plan_call = "default_venv_plan" + (" --no-create" if script == "update" else "")
+        plan, perr, prc = w.run(plan_call, script=script)
+        plan = plan.strip()
+        n_plan_calls = len(w.calls())
+        before = layout(w)
+        step = "install_doc_python_deps" if script == "ai" else "update_default_venv"
+        out, err, rc = w.run(step, script=script)
+        w_calls = w.calls()[n_plan_calls:]
+        changed = layout(w) != before
+        installed = any(c.startswith("uv pip install") or (c.startswith("py-pip") and " install" in c)
+                        for c in w_calls)
+        says_no_change = plan.startswith(("leave", "install/refresh", "none", "skip"))
+        detail = f"plan: {plan}\n" + show(out, err, rc, w_calls)
+        check(rc == 0 and prc == 0 and says_no_change == (not changed),
+              f"{script} {name}: the plan {'changes nothing' if says_no_change else 'repairs'}"
+              f", and so does the run", detail)
+        if "nothing is installed" in plan or plan.startswith("none"):
+            check(not installed, f"{script} {name}: the plan says nothing is installed; nothing is",
+                  detail)
+        elif "install/refresh" in plan:
+            check(installed, f"{script} {name}: the plan says install/refresh; the run installs",
+                  detail)
+        if name == "ft_only" and script == "update":
+            check("macos-ai-tools.sh" in plan and "rebuild" not in plan,
+                  "-update with only 3.14t: the row points at macos-ai-tools.sh, not a rebuild", plan)
+        if name == "cellar_only":
+            check("Cellar path too" in plan, f"{script}: a Cellar-only Python is named as why", plan)
 
 
 def static_cases() -> None:
@@ -1265,6 +1393,12 @@ def real_uv_cases(root: pathlib.Path) -> None:
     print("\nreplaced_target_console_script_runs")
     uv, real = shutil.which("uv"), _real_314()
     if not uv or not real:
+        # The macOS CI job sets this, so a runner that lost uv or 3.14 fails instead of passing
+        # a check that did not run.
+        if os.environ.get("CSA_TEST_REQUIRE_REAL_UV"):
+            check(False, f"CSA_TEST_REQUIRE_REAL_UV is set, but there is no real uv and standard "
+                         f"{PREF} here (uv={uv}, python={real})")
+            return
         print(f"    SKIP  needs a real uv and a real standard {PREF} (uv={uv}, python={real})")
         return
 
@@ -1329,6 +1463,7 @@ def main() -> int:
         entry_point_cases(root)
         tool_repair_cases(root)
         plan_cases(root)
+        plan_agreement_cases(root)
         controls(root)
         real_uv_cases(root)
     static_cases()

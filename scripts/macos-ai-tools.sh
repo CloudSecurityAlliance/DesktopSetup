@@ -32,7 +32,7 @@
 
 set -euo pipefail
 
-SCRIPT_VERSION="2026-11-11T00:59Z"
+SCRIPT_VERSION="2026-11-11T01:17Z"
 
 # ── CSA plugin marketplaces ─────────────────────────────────────────
 # Plugin marketplaces to register with Claude Code. Each entry is an
@@ -1420,10 +1420,15 @@ default_venv_state() {
 }
 
 # The plan row: what ensure_default_venv will do on this machine, and why. Changes nothing.
-# $1 --no-create gives the wording for -update, which never creates a venv.
+# $1 --no-create gives the wording for -update, which never creates a venv and installs no Python.
+#
+# It asks find_csa_python, as the run does first, because the Python decides the outcome: -update
+# with none found changes nothing, and a Cellar-pinned venv is not rebuilt onto a Python that is on
+# a Cellar path too. A plan that said "rebuild" there named a step that never runs. find_csa_python
+# never installs, so the plan can ask it before anyone has agreed to anything.
 default_venv_plan() {
   local versioned="${CSA_VENV}-${CSA_PYTHON_PREFERRED}" deps="${CSA_DOC_PY_DEPS[*]}"
-  local state action old reason build="" vr aside fix kept=""
+  local state action old reason build="" vr aside fix kept="" py="" leave=""
   state="$(default_venv_state)" || state=""
   IFS=$'\t' read -r action old reason <<< "$state"
   if [[ "$reason" == "-" ]]; then
@@ -1471,6 +1476,25 @@ default_venv_plan() {
       return 0
       ;;
   esac
+  py="$(find_csa_python)" || py=""
+  if [[ -z "$py" && "${1:-}" == "--no-create" ]]; then
+    leave="there is no Python ${CSA_PYTHON_PREFERRED} standard build installed, and this script installs none - run macos-ai-tools.sh to repair it"
+  elif [[ -n "$py" && "$reason" == *Cellar* && "$py" == */Cellar/* ]]; then
+    leave="the only Python ${CSA_PYTHON_PREFERRED} is on a Cellar path too"
+  fi
+  if [[ -n "$leave" ]]; then
+    # The same test the callers apply before installing the deps: sound, or Cellar-pinned (which
+    # still runs today).
+    if [[ -z "$reason" || "$reason" == *Cellar* ]]; then
+      printf '%s\n' "leave $CSA_VENV as it is${reason:+ ($reason)}: $leave; install/refresh $deps in it"
+    else
+      printf '%s\n' "leave $CSA_VENV as it is ($reason): $leave; nothing is installed into it"
+    fi
+    return 0
+  fi
+  if [[ -z "$py" ]]; then
+    fix="on the Python ${CSA_PYTHON_PREFERRED} the Python row installs: $fix"
+  fi
   printf '%s\n' "$fix; install/refresh $deps in it"
 }
 
@@ -1698,12 +1722,14 @@ ensure_default_venv() {
   return 0
 }
 
-# The CSA tools uv installed ($(uv tool dir)/csa-*) whose interpreter must be replaced, one
-# "<tool>: <reason>" line each, for the Internal MCP servers plan row (#179 item 6). Read-only:
+# The tools the CSA_INTERNAL_SETUPS own (each setup's name without -setup.sh, under
+# `uv tool dir`) whose interpreter must be replaced, one "<tool>: <reason>" line each, for the
+# Internal MCP servers plan row (#179 item 6). Only those: the row says their setups rebuild them,
+# and a setup rebuilds nothing but its own tool, so another csa-* tool is not listed. Read-only:
 # the private gate repo's setup scripts do the rebuilding. The test is the venv's, by the same
 # recorded-path rule, in the tool's wording.
 csa_tool_repairs() {
-  local dir tool reason
+  local dir setup tool reason
   if ! has_command uv; then
     return 0
   fi
@@ -1711,7 +1737,8 @@ csa_tool_repairs() {
   if [[ -z "$dir" || ! -d "$dir" ]]; then
     return 0
   fi
-  for tool in "$dir"/csa-*; do
+  for setup in "${CSA_INTERNAL_SETUPS[@]}"; do
+    tool="$dir/${setup%-setup.sh}"
     if [[ ! -e "$tool" && ! -L "$tool" ]]; then
       continue
     fi

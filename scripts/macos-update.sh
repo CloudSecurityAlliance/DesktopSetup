@@ -19,7 +19,7 @@
 
 set -euo pipefail
 
-SCRIPT_VERSION="2026-11-11T00:59Z"
+SCRIPT_VERSION="2026-11-11T01:17Z"
 
 # ── CSA plugin marketplaces ─────────────────────────────────────────
 # Each update run will add any entries from this list that aren't yet
@@ -953,10 +953,15 @@ default_venv_state() {
 }
 
 # The plan row: what ensure_default_venv will do on this machine, and why. Changes nothing.
-# $1 --no-create gives the wording for -update, which never creates a venv.
+# $1 --no-create gives the wording for -update, which never creates a venv and installs no Python.
+#
+# It asks find_csa_python, as the run does first, because the Python decides the outcome: -update
+# with none found changes nothing, and a Cellar-pinned venv is not rebuilt onto a Python that is on
+# a Cellar path too. A plan that said "rebuild" there named a step that never runs. find_csa_python
+# never installs, so the plan can ask it before anyone has agreed to anything.
 default_venv_plan() {
   local versioned="${CSA_VENV}-${CSA_PYTHON_PREFERRED}" deps="${CSA_DOC_PY_DEPS[*]}"
-  local state action old reason build="" vr aside fix kept=""
+  local state action old reason build="" vr aside fix kept="" py="" leave=""
   state="$(default_venv_state)" || state=""
   IFS=$'\t' read -r action old reason <<< "$state"
   if [[ "$reason" == "-" ]]; then
@@ -1004,6 +1009,25 @@ default_venv_plan() {
       return 0
       ;;
   esac
+  py="$(find_csa_python)" || py=""
+  if [[ -z "$py" && "${1:-}" == "--no-create" ]]; then
+    leave="there is no Python ${CSA_PYTHON_PREFERRED} standard build installed, and this script installs none - run macos-ai-tools.sh to repair it"
+  elif [[ -n "$py" && "$reason" == *Cellar* && "$py" == */Cellar/* ]]; then
+    leave="the only Python ${CSA_PYTHON_PREFERRED} is on a Cellar path too"
+  fi
+  if [[ -n "$leave" ]]; then
+    # The same test the callers apply before installing the deps: sound, or Cellar-pinned (which
+    # still runs today).
+    if [[ -z "$reason" || "$reason" == *Cellar* ]]; then
+      printf '%s\n' "leave $CSA_VENV as it is${reason:+ ($reason)}: $leave; install/refresh $deps in it"
+    else
+      printf '%s\n' "leave $CSA_VENV as it is ($reason): $leave; nothing is installed into it"
+    fi
+    return 0
+  fi
+  if [[ -z "$py" ]]; then
+    fix="on the Python ${CSA_PYTHON_PREFERRED} the Python row installs: $fix"
+  fi
   printf '%s\n' "$fix; install/refresh $deps in it"
 }
 
