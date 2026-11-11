@@ -217,16 +217,20 @@ Snapshots land in `~/Library/Logs/CSA-DesktopSetup/` (macOS) or
 
 ```bash
 # macOS
-brew update && brew upgrade     # Homebrew formulas and casks
-npm update -g                   # npm globals (Codex, Gemini, Wrangler)
+brew update && brew upgrade     # Homebrew formulas and casks, and the npm inside node@24
+npm outdated -g                 # then `npm install -g <package>@latest` for each, except npm and corepack
 pip install --upgrade pip
 claude update                   # Claude Code
 ```
 
 ```powershell
-# Windows
-winget upgrade --all; npm update -g; python -m pip install --upgrade pip; claude update
+# Windows: afterwards, `npm install -g <package>@latest` for each package `npm outdated -g` lists, except npm and corepack
+winget upgrade --all; npm outdated -g; python -m pip install --upgrade pip; claude update
 ```
+
+Not `npm update -g`: npm and corepack come with Node, and on macOS that command installs a
+second npm over Homebrew's that never runs
+([#153](https://github.com/CloudSecurityAlliance/DesktopSetup/issues/153)).
 
 Note that doing it by hand skips the CSA layer entirely — no plugins, no MCP servers.
 
