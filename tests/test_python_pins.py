@@ -12,8 +12,9 @@ fallback was. Nothing failed; the interpreter was simply guessed.
 This pins:
   * all six scripts declare the preferred Python exactly once, and all six agree;
   * the floor (`CSA_PYTHON_MIN` / `$CsaPythonMin`) agrees across platforms;
-  * every `CSA_DOC_PY_DEPS=(...)` copy in `scripts/*.sh` is identical (it is an array, not a
-    function, so `tools/check-duplication.py` does not cover it).
+  * every `CSA_DOC_PY_DEPS=(...)` and `CSA_DOC_PY_DEPS_OPTIONAL=(...)` copy in `scripts/*.sh` is
+    identical, and a script that declares one declares both (they are arrays, not functions, so
+    `tools/check-duplication.py` does not cover them).
 
 What it cannot check: that 3.14 is the right number. That is a decision (the constants are
 pinned below), not something a script can derive.
@@ -46,9 +47,12 @@ MIN_RE = {
     "ps1": re.compile(r"^\$CsaPythonMin\s*=\s*'([^']*)'", re.M),
 }
 # Tolerates indentation and a `local` / `readonly` / `declare -a` prefix, so a copy moved
-# inside a function is still found rather than silently ignored.
+# inside a function is still found rather than silently ignored. Group 1 is the array's name:
+# the core deps, or the best-effort ones (markitdown, which cannot install on an Intel Mac).
+DEPS_ARRAYS = ("CSA_DOC_PY_DEPS", "CSA_DOC_PY_DEPS_OPTIONAL")
 DEPS_RE = re.compile(
-    r"^[ \t]*(?:(?:local|readonly|declare(?:\s+-[a-zA-Z]+)*)\s+)?CSA_DOC_PY_DEPS=\(([^)]*)\)", re.M)
+    r"^[ \t]*(?:(?:local|readonly|declare(?:\s+-[a-zA-Z]+)*)\s+)?"
+    r"(CSA_DOC_PY_DEPS(?:_OPTIONAL)?)=\(([^)]*)\)", re.M)
 
 
 def kind(name: str) -> str:
@@ -91,18 +95,26 @@ def min_problems(texts: dict[str, str]) -> list[str]:
 
 
 def deps_problems(texts: dict[str, str]) -> list[str]:
-    """Every CSA_DOC_PY_DEPS copy must be identical. Vacuous with one copy, by design."""
-    copies = {}
+    """Every copy of each deps array must be identical, and a script that declares either array
+    declares both: a copy of the core list without the optional one would silently stop
+    installing markitdown there. Vacuous with one copy, by design."""
+    copies: dict[str, list[tuple[str, list[str]]]] = {}
     for name, text in texts.items():
         for m in DEPS_RE.finditer(text):
-            copies.setdefault(name, []).append(m.group(1).split())
+            copies.setdefault(m.group(1), []).append((name, m.group(2).split()))
     out = []
-    flat = [(n, c) for n, cs in copies.items() for c in cs]
-    if flat:
-        ref_name, ref = flat[0]
-        for name, c in flat[1:]:
-            if c != ref:
-                out.append(f"{name}: CSA_DOC_PY_DEPS is {c}, but {ref_name} has {ref}")
+    for var in DEPS_ARRAYS:
+        flat = copies.get(var, [])
+        if flat:
+            ref_name, ref = flat[0]
+            for name, c in flat[1:]:
+                if c != ref:
+                    out.append(f"{name}: {var} is {c}, but {ref_name} has {ref}")
+    declaring = {n for flat in copies.values() for n, _ in flat}
+    for name in sorted(declaring):
+        for var in DEPS_ARRAYS:
+            if not any(n == name for n, _ in copies.get(var, [])):
+                out.append(f"{name}: declares the document deps but not {var}")
     return out
 
 
@@ -148,6 +160,18 @@ def self_test() -> int:
            deps_problems(mutated), [SH[1]])
 
     mutated = dict(texts)
+    real_opt = [m.group(0) for m in DEPS_RE.finditer(mutated[SH[0]])
+                if m.group(1) == "CSA_DOC_PY_DEPS_OPTIONAL"][0]
+    mutated[SH[2]] = mutated[SH[2]].replace(real_opt, real_opt.replace("0.1.9", "0.0.2"))
+    expect("two CSA_DOC_PY_DEPS_OPTIONAL copies that differ are reported",
+           deps_problems(mutated), [SH[2]])
+
+    mutated = dict(texts)
+    mutated[SH[2]] = mutated[SH[2]].replace(real_opt, "# removed")
+    expect("a script with the core deps but no CSA_DOC_PY_DEPS_OPTIONAL is reported",
+           deps_problems(mutated), [SH[2]])
+
+    mutated = dict(texts)
     mutated[SH[2]] = mutated[SH[2]] + "\nf() {\n    local CSA_DOC_PY_DEPS=(pyyaml other)\n}\n"
     ref = DEPS_RE.search(mutated[SH[0]]).group(0)
     mutated[SH[1]] = mutated[SH[1]] + "\nf() {\n    " + ref + "\n}\n"
@@ -167,7 +191,8 @@ def main() -> int:
     for label, fn in [
         (f"all six scripts declare the preferred Python exactly once, as {WANT}", preferred_problems),
         ("the minimum Python agrees across platforms", min_problems),
-        ("every CSA_DOC_PY_DEPS copy is identical", deps_problems),
+        ("every CSA_DOC_PY_DEPS / _OPTIONAL copy is identical, and both are declared together",
+         deps_problems),
     ]:
         problems = fn(texts)
         print(f"  {'ok  ' if not problems else 'FAIL'}  {label}")
@@ -179,7 +204,7 @@ def main() -> int:
         print(f"FAILED: {len(failures)} problem(s)")
         return 1
     n = sum(len(DEPS_RE.findall(t)) for t in texts.values())
-    print(f"all checks passed - six scripts, {n} CSA_DOC_PY_DEPS copy(ies)")
+    print(f"all checks passed - six scripts, {n} document-deps array copy(ies)")
     return 0
 
 

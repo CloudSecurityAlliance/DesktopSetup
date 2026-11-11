@@ -195,6 +195,9 @@ def stub_main(argv: list[str]) -> int:
             vpy = args[args.index("--python") + 1]
             pkgs = [a for i, a in enumerate(args[2:], 2)
                     if not a.startswith("-") and args[i - 1] != "--python"]
+            if (scen / "markitdown.fails").exists() and any("markitdown" in a for a in pkgs):
+                print("error: onnxruntime has no wheel for macosx_x86_64", file=sys.stderr)
+                return 1
             _install_into(pathlib.Path(vpy).parent.parent, pkgs)
             return 0
         if args[:2] == ["tool", "dir"]:
@@ -232,10 +235,19 @@ def stub_main(argv: list[str]) -> int:
         if rest[:1] == ["install"]:
             if (scen / "pip.fails").exists():
                 return 1
+            if (scen / "markitdown.fails").exists() and any("markitdown" in a for a in rest):
+                return 1
             _install_into(pathlib.Path(self_path).parent.parent,
                           [a for a in rest[1:] if not a.startswith("-")])
         return 0
     return 0
+
+
+# Stub mode dispatches HERE, before the module goes on to extract functions from the scripts: an
+# extraction that fails prints a FAIL line, and in a stub that line would land in the stub's own
+# stdout (a fake `uv python find` answer, say) and corrupt it.
+if __name__ == "__main__" and len(sys.argv) > 1 and sys.argv[1] == "--stub":
+    sys.exit(stub_main(sys.argv[2:]))
 
 
 # ── the harness ────────────────────────────────────────────────────────────────────────────────
@@ -298,7 +310,7 @@ TODO_TERMINAL = "Open a new terminal to use the rebuilt ~/.default_venv"
 
 # The functions ensure_default_venv is built from, shared byte-identically by both scripts.
 SHARED = ["has_command", "python_is_csa_build", "find_csa_python", "ensure_csa_python",
-          "csa_venv_pip_install", "venv_cfg_get", "venv_rebuild_reason", "venv_aside_name",
+          "csa_venv_pip_install", "csa_venv_optional_install", "venv_cfg_get", "venv_rebuild_reason", "venv_aside_name",
           "venv_extra_packages", "default_venv_state", "default_venv_plan", "default_venv_build",
           "ensure_default_venv"]
 OUTPUT = ['info()    { echo "INFO: $*"; }',
@@ -310,7 +322,7 @@ OUTPUT = ['info()    { echo "INFO: $*"; }',
 
 def harness(script: pathlib.Path) -> str:
     parts = [assignment("CSA_PYTHON_PREFERRED", script), assignment("CSA_VENV", script),
-             assignment("CSA_DOC_PY_DEPS", script)]
+             assignment("CSA_DOC_PY_DEPS", script), assignment("CSA_DOC_PY_DEPS_OPTIONAL", script)]
     parts += [extract(n, script) for n in SHARED]
     if script == AI:
         parts.append(assignment("CSA_INTERNAL_SETUPS"))
@@ -431,7 +443,8 @@ class World:
         f.chmod(0o755)
 
     def uv(self, *, find=None, listing=None, after_find=None, after_listing=None,
-           install_fails=False, venv_fails=False, pip_fails=False, tooldir=None) -> None:
+           install_fails=False, venv_fails=False, pip_fails=False, markitdown_fails=False,
+           tooldir=None) -> None:
         self._tool("uv")
         for fname, val in (("find", find), ("after.find", after_find)):
             if val is not None:
@@ -440,7 +453,7 @@ class World:
             if val is not None:
                 (self.scen / fname).write_text(json.dumps(val), encoding="utf-8")
         for fname, on in (("install.fails", install_fails), ("venv.fails", venv_fails),
-                          ("pip.fails", pip_fails)):
+                          ("pip.fails", pip_fails), ("markitdown.fails", markitdown_fails)):
             if on:
                 (self.scen / fname).write_text("", encoding="utf-8")
         if tooldir is not None:
@@ -927,8 +940,11 @@ def repair_cases(root: pathlib.Path) -> None:
     check(rc == 0 and marker(w.versioned()) == "HEALTHY" and not venv_calls(w)
           and not siblings(w, VERSIONED + ".*"),
           "install_doc_python_deps on a healthy venv rebuilds nothing", show(out, err, rc, w.calls()))
-    check(any(c.startswith("uv pip install") and "markitdown[all]>=0.1.9" in c for c in w.calls()),
-          "and installs the deps, markitdown[all]>=0.1.9 among them", "\n".join(w.calls()))
+    pips = [c for c in w.calls() if c.startswith("uv pip install")]
+    check(len(pips) == 2 and "pymupdf" in pips[0] and "markitdown" not in pips[0]
+          and "markitdown[all]>=0.1.9" in pips[1] and "pymupdf" not in pips[1],
+          "and installs the core deps, then markitdown[all]>=0.1.9 in a call of its own",
+          "\n".join(w.calls()))
 
     print("\nsecond_run_noop")
     w = World(root, "second_run_noop")
@@ -1038,6 +1054,85 @@ def repair_cases(root: pathlib.Path) -> None:
     out, err, rc = w.run("ensure_default_venv")
     check(rc == 0 and w.snapshot() == before,
           "no uv, and `python -m venv` fails at the final path: the broken one is put back",
+          show(out, err, rc, w.calls()))
+
+
+def core_present(v: pathlib.Path) -> bool:
+    names = {d.name.split("-")[0] for d in v.glob("lib/python*/site-packages/*.dist-info")}
+    return {"pyyaml", "pymupdf", "csa"}.issubset(names)
+
+
+def markitdown_present(v: pathlib.Path) -> bool:
+    return any(v.glob("lib/python*/site-packages/markitdown-*.dist-info"))
+
+
+def intel(w: World) -> None:
+    f = w.bin / "uname"
+    f.write_text('#!/bin/sh\necho x86_64\n', encoding="utf-8")
+    f.chmod(0o755)
+
+
+def markitdown_cases(root: pathlib.Path) -> None:
+    print("\nmarkitdown_failure_still_builds_and_flips")
+    # An Intel Mac: onnxruntime (markitdown -> magika -> onnxruntime) has no macOS x86_64 wheel.
+    w = World(root, "markitdown_fails_ai")
+    w.uv_std(markitdown_fails=True)
+    intel(w)
+    w.venv(".default_venv", w.other("3.13"), style="venv", xy="3.13", marker="ORIGINAL")
+    ledger = w.dir / "todo.tsv"
+    out, err, rc = w.run("install_doc_python_deps",
+                         env={"VIRTUAL_ENV": str(w.default()), "CSA_TODO_FILE": str(ledger)})
+    got = _text(ledger) if ledger.exists() else ""
+    check(rc == 0 and link_target(w.default()) == VERSIONED and sound_on_std(w)
+          and marker(w.home / ".default_venv-3.13") == "ORIGINAL",
+          "markitdown cannot install: -3.14 is still built and ~/.default_venv flipped to it",
+          show(out, err, rc, w.calls()))
+    check(core_present(w.versioned()) and not markitdown_present(w.versioned()),
+          "the core deps are in it; markitdown is not", str(list(w.versioned().glob("lib/*/*/*"))))
+    check(err.count("Skipped markitdown") == 1 and "no Intel-Mac wheels" in err,
+          "ONE warning, naming the cause (onnxruntime has no Intel-Mac wheels)", err)
+    check(f"10\t{TODO_TERMINAL}" in got, "the to-dos still happen", got)
+    w = World(root, "markitdown_fails_replacement")
+    w.uv_std(markitdown_fails=True)
+    w.venv(VERSIONED, w.ft(), marker="FT")
+    w.link(VERSIONED)
+    out, err, rc = w.run("install_doc_python_deps")
+    check(rc == 0 and sound_on_std(w) and core_present(w.versioned())
+          and len(siblings(w, VERSIONED + ".broken-*")) == 1 and not siblings(w, VERSIONED + ".new-*"),
+          "the .new-$$ replacement is still swapped in when markitdown fails",
+          show(out, err, rc, w.calls()))
+    check(not any(c.startswith("py-pip") for c in w.calls())
+          and err.count("Skipped markitdown") == 1 and "did not install" in err,
+          "with uv pip only, and one warning (cause unknown off Intel, so it says what it knows)",
+          show(out, err, rc, w.calls()))
+    w = World(root, "markitdown_fails_no_uv")
+    w.brew()
+    w.cellar()
+    (w.scen / "markitdown.fails").write_text("", encoding="utf-8")
+    out, err, rc = w.run("install_doc_python_deps")
+    check(rc == 0 and link_target(w.default()) == VERSIONED and core_present(w.versioned())
+          and err.count("Skipped markitdown") == 1,
+          "no uv (python -m venv, pip): built, linked, one warning", show(out, err, rc, w.calls()))
+
+    print("\nmarkitdown_failure_under_update_default_venv")
+    w = World(root, "markitdown_fails_update")
+    w.uv_std(markitdown_fails=True)
+    intel(w)
+    w.venv(".default_venv-3.13", w.other("3.13"), xy="3.13", marker="313")
+    w.link(".default_venv-3.13")
+    out, err, rc = w.run("update_default_venv", script="update")
+    check(rc == 0 and link_target(w.default()) == VERSIONED and sound_on_std(w)
+          and core_present(w.versioned()) and not markitdown_present(w.versioned()),
+          "-update: still flipped to a -3.14 with the core deps", show(out, err, rc, w.calls()))
+    check(err.count("Skipped markitdown") == 1 and "no Intel-Mac wheels" in err,
+          "and one warning naming the cause", err)
+    w = World(root, "markitdown_ok_update")
+    w.uv_std()
+    w.venv(VERSIONED, w.std())
+    w.link(VERSIONED)
+    out, err, rc = w.run("update_default_venv", script="update")
+    check(rc == 0 and markitdown_present(w.versioned()) and "Skipped" not in err,
+          "where it can install, -update installs it into an existing healthy venv",
           show(out, err, rc, w.calls()))
 
 
@@ -1327,7 +1422,9 @@ def static_cases() -> None:
         check(re.search(rf"^{name}\(\) \{{", _text(UPD), re.M) is not None,
               f"macos-update.sh carries {name}() (byte-identity: check-duplication.py)")
     deps = assignment("CSA_DOC_PY_DEPS")
-    check('"markitdown[all]>=0.1.9"' in deps, "markitdown[all]>=0.1.9 is a document dep (#157)", deps)
+    opt = assignment("CSA_DOC_PY_DEPS_OPTIONAL")
+    check('"markitdown[all]>=0.1.9"' in opt and "markitdown" not in deps,
+          "markitdown[all]>=0.1.9 is a best-effort document dep (#157), not a core one", deps + opt)
     body = code_only(extract("install_doc_python_deps"))
     check("ensure_default_venv" in body and "already available" not in body,
           "install_doc_python_deps goes through ensure_default_venv; no PATH-python3 early return")
@@ -1461,6 +1558,7 @@ def main() -> int:
         layout_cases(root)
         repair_cases(root)
         entry_point_cases(root)
+        markitdown_cases(root)
         tool_repair_cases(root)
         plan_cases(root)
         plan_agreement_cases(root)
@@ -1476,6 +1574,4 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    if len(sys.argv) > 1 and sys.argv[1] == "--stub":
-        sys.exit(stub_main(sys.argv[2:]))
     sys.exit(main())
