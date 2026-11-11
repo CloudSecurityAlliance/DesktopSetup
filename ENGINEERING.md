@@ -381,10 +381,12 @@ auto-updates); npm for the Codex and Gemini CLIs and for Wrangler; **uv for Pyth
       moves it and npm must not write into the keg;
     - **an nvm Node's npm and corepack, or any prefix you can write to**, are installed
       `@latest` like any other global, as `npm update -g` did. There is no keg there, so the
-      EACCES cannot happen;
-    - **the registry npm an earlier `npm update -g` left in Homebrew's prefix** is left alone.
-      Homebrew's `bin/npm` runs the Cellar copy, not that one (#153), so updating it changes
-      nothing that runs, and leaving it is harmless;
+      EACCES cannot happen. That includes **the unversioned `node` formula's npm**: homebrew-core
+      `node.rb` copies npm into `<prefix>/lib/node_modules/npm` as real files and points
+      `bin/npm` at that copy, so it is the npm that runs;
+    - **a copy in Homebrew's prefix that `<prefix>/bin/npm` does not run** (`npm_runs_copy`
+      follows the links to see) is left alone. This is the registry npm an earlier `npm update -g`
+      left over node@24's links (#153), and updating it would not change the npm that runs;
     - **a prefix you cannot write to** is left to its owner.
 
     The plan row (`npm_update_plan`) reads the same decision. It lists what will be installed,

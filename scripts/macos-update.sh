@@ -20,7 +20,7 @@
 
 set -euo pipefail
 
-SCRIPT_VERSION="2026-11-11T18:04Z"
+SCRIPT_VERSION="2026-11-11T18:15Z"
 
 # ── CSA plugin marketplaces ─────────────────────────────────────────
 # Each update run will add any entries from this list that aren't yet
@@ -570,9 +570,9 @@ update_brew() {
 # symlinks alone. tests/test_homebrew_owns_npm.py holds all of this.
 #
 # So npm and corepack are left to Homebrew only when they ARE Homebrew's (npm_owner). An nvm
-# Node's npm, or one in any other prefix you can write to, is npm's own to update - there is no
-# keg there, so #153 cannot happen - and update_npm installs it @latest like any other global,
-# as `npm update -g` did.
+# Node's npm, the unversioned `node` formula's copied-in npm, or one in any other prefix you can
+# write to, is npm's own to update - there is no keg there, so #153 cannot happen - and
+# update_npm installs it @latest like any other global, as `npm update -g` did.
 npm_node_owned() {
   case "$1" in
     npm|corepack) return 0 ;;
@@ -580,19 +580,44 @@ npm_node_owned() {
   esac
 }
 
-# Who owns npm or corepack installed at <dir>. Prints one word:
-#   homebrew  Homebrew's own copy: its link farm into the Cellar - real directories, every file a
-#             symlink into the keg (measured in #153) - so <dir>/package.json, or <dir>, links
-#             into .../Cellar/. `brew upgrade` moves it, and npm must not write into it.
-#   leftover  a copy in a Homebrew prefix (one with a Cellar) that is not those links: what an
-#             earlier `npm update -g` left there (#153's symptom 2). Left alone: Homebrew's
-#             bin/npm runs the Cellar copy, not this one, so updating it changes nothing that
-#             runs, and leaving it is harmless.
-#   user      anywhere else you can write to: nvm's Node, a user prefix. npm's to update.
-#   other     anywhere else, not writable by you (a root-owned Node): left to its owner, since
+# Whether <link> (a prefix's bin/npm or bin/corepack) runs the copy installed at <dir>: its
+# symlinks, followed to the end, land inside <dir>. Followed by hand, because bash 3.2 has no
+# realpath and `readlink -f` is not on every macOS; compared as physical paths (pwd -P), so a
+# ".." or a linked directory such as /var -> /private/var cannot make one file look like two.
+npm_runs_copy() {
+  local p="$1" dir="$2" t n=0 have want
+  while [[ -L "$p" && $n -lt 40 ]]; do
+    t="$(readlink "$p")" || return 1
+    case "$t" in
+      /*) p="$t" ;;
+      *)  p="${p%/*}/$t" ;;
+    esac
+    n=$((n + 1))
+  done
+  if [[ ! -e "$p" ]]; then return 1; fi
+  have="$(cd "${p%/*}" 2>/dev/null && pwd -P)" || return 1
+  want="$(cd "$dir" 2>/dev/null && pwd -P)" || return 1
+  case "$have/" in
+    "$want"/*) return 0 ;;
+    *)         return 1 ;;
+  esac
+}
+
+# Who owns <name> (npm or corepack) installed at <dir>. Prints one word:
+#   homebrew  Homebrew's own copy: node@24's link farm into the Cellar - real directories, every
+#             file a symlink into the keg (measured in #153) - so <dir>/package.json, or <dir>,
+#             links into .../Cellar/. `brew upgrade` moves it, and npm must not write into it.
+#   leftover  real files in a Homebrew prefix (one with a Cellar) that the prefix's bin/<name>
+#             does NOT run: what an earlier `npm update -g` left over node@24's links (#153's
+#             symptom 2). Left alone: updating it would not change the npm that runs.
+#   user      anything else you can write to: nvm's Node, a user prefix - and the unversioned
+#             `node` formula, which copies npm into <prefix>/lib/node_modules/npm as real files
+#             and points bin/npm at that copy (homebrew-core node.rb, post_install), so it is the
+#             npm that runs and `npm install -g npm@latest` updates it, as `npm update -g` did.
+#   other     anything else, not writable by you (a root-owned Node): left to its owner, since
 #             `npm install -g` would fail there.
 npm_owner() {
-  local dir="$1" target prefix
+  local name="$1" dir="$2" target prefix
   target="$(readlink "$dir/package.json" 2>/dev/null)" || target=""
   if [[ -z "$target" ]]; then
     target="$(readlink "$dir" 2>/dev/null)" || target=""
@@ -601,7 +626,8 @@ npm_owner() {
   case "$target" in
     */Cellar/*) echo homebrew ;;
     *)
-      if [[ "$prefix" != "$dir" && -d "$prefix/Cellar" ]]; then
+      if [[ "$prefix" != "$dir" && -d "$prefix/Cellar" ]] \
+        && ! npm_runs_copy "$prefix/bin/$name" "$dir"; then
         echo leftover
       elif [[ -w "${dir%/*}" ]]; then
         echo user
@@ -618,7 +644,7 @@ npm_owner() {
 npm_update_decision() {
   local name="$1" how="$2" path="$3" owner
   if npm_node_owned "$name"; then
-    owner="$(npm_owner "$path")"
+    owner="$(npm_owner "$name" "$path")"
     if [[ "$owner" == user ]]; then echo update; else echo "$owner"; fi
   elif [[ "$how" == linked ]]; then
     echo linked
@@ -639,8 +665,8 @@ npm_owner_note() {
       prefix="${dir%/lib/node_modules/*}"
       target="$(readlink "$prefix/bin/$name" 2>/dev/null)" || target=""
       case "$target" in
-        */Cellar/*) echo "at $dir, a copy in Homebrew's prefix that $prefix/bin/$name does not run - it runs Homebrew's Cellar copy (#153); left alone, as updating it would change nothing" ;;
-        *)          echo "at $dir, in Homebrew's prefix but not Homebrew's own copy (#153); left alone: this script does not write into Homebrew's prefix" ;;
+        */Cellar/*) echo "at $dir, a copy $prefix/bin/$name does not run - it runs Homebrew's Cellar copy (#153); left alone, as updating it would not change the $name that runs" ;;
+        *)          echo "at $dir, a copy in Homebrew's prefix that $prefix/bin/$name does not run (#153); left alone, as updating it would not change the $name that runs" ;;
       esac
       ;;
     *)
@@ -699,6 +725,8 @@ npm_update_plan() {
   done <<<"$outdated"
   if [[ -n "$up" ]]; then
     printf '%s' "update each with npm install -g <package>@latest:${up}"
+  elif [[ -n "$held" || -n "$linked" ]]; then
+    printf '%s' "nothing to update"
   else
     printf '%s' "all up to date"
   fi
@@ -713,7 +741,7 @@ npm_update_plan() {
 update_npm() {
   if ! has_command npm; then return 0; fi
 
-  local outdated name how path
+  local outdated name how path decision skipped=""
   local pkgs=()
   if ! outdated="$(npm_global_outdated)"; then
     warn "Could not list outdated global npm packages (npm outdated failed); skipping"
@@ -721,15 +749,28 @@ update_npm() {
   fi
   while IFS=$'\t' read -r name _ _ how path; do
     [[ -n "$name" ]] || continue
-    if [[ "$(npm_update_decision "$name" "$how" "$path")" != update ]]; then continue; fi
-    pkgs+=("${name}@latest")
+    decision="$(npm_update_decision "$name" "$how" "$path")"
+    case "$decision" in
+      update)   pkgs+=("${name}@latest") ;;
+      homebrew) skipped="${skipped:+$skipped, }$name (Homebrew's; the Homebrew step upgrades it)" ;;
+      leftover) skipped="${skipped:+$skipped, }$name (a copy that does not run)" ;;
+      linked)   skipped="${skipped:+$skipped, }$name (linked with npm link)" ;;
+      *)        skipped="${skipped:+$skipped, }$name (not writable by you)" ;;
+    esac
   done <<<"$outdated"
 
   if [[ ${#pkgs[@]} -eq 0 ]]; then
-    info "Global npm packages already current"
+    if [[ -n "$skipped" ]]; then
+      info "Nothing to update: the outdated global npm packages are all left alone - $skipped"
+    else
+      info "Global npm packages already current"
+    fi
     return 0
   fi
   info "Updating global npm packages: ${pkgs[*]}"
+  if [[ -n "$skipped" ]]; then
+    info "  Left alone: $skipped"
+  fi
   csa_npm install -g "${pkgs[@]}" || warn "npm install -g failed; continuing"
 }
 
