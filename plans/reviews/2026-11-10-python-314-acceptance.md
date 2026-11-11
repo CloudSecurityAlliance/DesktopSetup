@@ -8,6 +8,13 @@ either measured in the run described here or labelled as not measured.
 assertions, all of them wrong expectations in the harness, not defects in the code. They are listed
 with their evidence under [Harness corrections](#harness-corrections).
 
+> **Superseded in part, 2026-11-10:** this record describes the branch at `97108e7`. The final
+> whole-branch review removed markitdown, pinned pymupdf below 2 and changed two plan rows, so the
+> rows below that quote markitdown, an unpinned `pymupdf` or the old `-update` wording no longer
+> describe the branch. The harness was re-run against the fixed head: see
+> [Re-run after the final review](#re-run-after-the-final-review-2026-11-10), which lists exactly
+> which rows are stale.
+
 **Code under test:**
 - DesktopSetup `feat/python-314-standard-build` at `97108e7`: `scripts/macos-ai-tools.sh` and
   `scripts/macos-update.sh`.
@@ -422,3 +429,168 @@ results agreed with it.
   - the CINO's `~/.zshrc` stanza.
 - **Package downloads ran on a warm cache.** The final run reused the scratch uv cache filled by the
   first run. The Python downloads were fresh in both runs.
+
+## Re-run after the final review (2026-11-10)
+
+Recorded by the AI fixing the final whole-branch review's findings. Every statement is measured in
+this re-run unless labelled otherwise.
+
+**Result: 59 of 59 assertions pass,** on the first run of the updated harness. That is the 43
+above, with A-V5 and B-U1 rewritten for the fixed code, plus A-V13, world C's 14 and X2.
+
+**Code under test:**
+- DesktopSetup `feat/python-314-standard-build` at `5150947`. The fix commits since `495ad6b`:
+  - `62a21cc`: markitdown dropped, pymupdf pinned `>=1.24.3,<2` (C1, C2);
+  - `9771139`: `update_pip` leaves the pinned deps alone in `~/.default_venv` (C3);
+  - `676bab5`: the Windows pin (I1);
+  - `ea72364`: "Not reinstalled" built from every old distribution's requirements (I2);
+  - `63d4816`: `UV_PYTHON_PREFERENCE` no longer blinds `find_csa_python` (I3);
+  - `79c9968`: the `-update` and Internal MCP servers plan rows (I4);
+  - `5e6c5d8`: leftovers reported, never uninstalled (I6);
+  - `5150947`: README.
+- CSA-Plugins `feat/python-314-standard-build` at `bd986a5`, which includes that branch's own fixes
+  since `8f92de4` (`87e0a5d`, its `UV_PYTHON_PREFERENCE` fix; `6688f4a`).
+
+**Tools:** uv 0.13.7 (Homebrew build), `/bin/bash` 3.2.57, macOS 27.2 on arm64, as before. This time
+the scratch uv cache was new, so every Python and every package was downloaded fresh. 0.8 minutes.
+
+**Isolation, unchanged from [Method](#method):**
+- a new scratch root, made with `mktemp -d` in the session scratchpad and deleted at the end;
+- scratch `HOME`, uv directories and `TMPDIR` per world;
+- the same gh deviation: `GH_CONFIG_DIR` set as a path only, never read by the harness;
+- the real `~/.default_venv*`, `~/.zshrc`, `~/.local/share/uv` and `~/.local/bin` untouched. Their
+  inode and mtime were recorded before and after the run, and match.
+
+### What changed in the harness
+
+- **Extraction follows the code.** `CSA_DOC_PY_DEPS_OPTIONAL` and `csa_venv_optional_install` are
+  gone. `default_venv_leftovers` joins the shared functions, and the `-update` harness also extracts
+  `csa_venv_held_names`, `pip_upgrades` and `update_pip`.
+- **The uv wrapper also logs argument boundaries,** one per line, so "one argument" is checkable.
+- **A-V5** now asserts that `~/.default_venv-3.14` holds no onnxruntime, markitdown or magika and
+  that its pymupdf is 1.x. It reads the venv's metadata and imports nothing.
+- **A-V13 (new):** every uv install of the document deps passed `pymupdf>=1.24.3,<2` as one
+  argument, and no uv command named onnxruntime, markitdown or magika.
+- **B-U1** expects the new `-update` row wording (I4).
+- **A-N3** also counts a leftovers warning ("still has") as a repair.
+- **World C (new, 14 assertions):** the state the final review found on staff Macs, which the
+  first run did not cover.
+  - The seed: a sound `-3.14` that an earlier installer filled with unpinned pymupdf, i.e.
+    `uv pip install pyyaml pymupdf==2.1 csa-google-workspace`, which brought in onnxruntime 1.31.1,
+    pymupdf-layout and pymupdf4llm.
+  - The runs: `install_doc_python_deps` and `update_default_venv`, then `update_pip` with that venv
+    active, on real pip against real PyPI.
+  - Then the to-do's command, run verbatim.
+- **X2 (new):** no world's `HOME` holds onnxruntime's telemetry directory, so nothing loaded
+  onnxruntime.
+
+### Plan rows, as printed now
+
+- **World A, run 1, `macos-ai-tools.sh`:** "on the Python 3.14 the Python row installs: build
+  ~/.default_venv-3.14 on Python 3.14, move the directory ~/.default_venv to ~/.default_venv-3.13
+  (its Python no longer exists), link ~/.default_venv to .default_venv-3.14; install/refresh pyyaml
+  pymupdf>=1.24.3,<2 csa-google-workspace in it".
+- **World A run 1 and world B, `macos-update.sh`:** "leave ~/.default_venv as it is (its Python no
+  longer exists); nothing is installed into it: there is no Python 3.14 standard build installed,
+  and this step installs none. For CSA-internal members the Internal MCP servers step installs one
+  and the next update repairs this; otherwise run macos-ai-tools.sh".
+- **World A, run 2, both scripts:** "install/refresh pyyaml pymupdf>=1.24.3,<2 csa-google-workspace
+  in ~/.default_venv (Python 3.14, standard build)".
+- **World B, after the gate step installed the standard 3.14:** the next `-update` row said build,
+  move and link, and its run did exactly that. The one after was a refresh only, as before
+  (Observation 2).
+
+### uv commands that installed the document deps, world A
+
+```
+[run1-ai] uv pip install --quiet --python ~/.default_venv-3.14/bin/python3 pyyaml pymupdf>=1.24.3,<2 csa-google-workspace
+[run1-ai] uv pip install --quiet --python ~/.default_venv/bin/python3 pyyaml pymupdf>=1.24.3,<2 csa-google-workspace
+[run1-update] uv pip install --quiet --python ~/.default_venv/bin/python3 pyyaml pymupdf>=1.24.3,<2 csa-google-workspace
+[run2-ai] uv pip install --quiet --python ~/.default_venv/bin/python3 pyyaml pymupdf>=1.24.3,<2 csa-google-workspace
+[run2-update] uv pip install --quiet --python ~/.default_venv/bin/python3 pyyaml pymupdf>=1.24.3,<2 csa-google-workspace
+```
+
+Every other line of world A's uv log is identical to the first run's, apart from the
+`[obs-preference]` calls (diffed). The five markitdown lines are gone. The argument log shows
+`pymupdf>=1.24.3,<2` as a single argument in each (A-V13). `~/.default_venv-3.14` ended with
+pymupdf 1.28.2, csa-google-workspace 0.55.1 and pyyaml 6.0.3, plus their dependencies, and no
+onnxruntime, markitdown or magika (A-V5).
+
+### World C: a venv that already had pymupdf 2.1
+
+```
+[seed] uv pip install --quiet --python ~/.default_venv-3.14/bin/python3 pyyaml pymupdf==2.1 csa-google-workspace
+[c-ai] uv pip install --quiet --python ~/.default_venv/bin/python3 pyyaml pymupdf>=1.24.3,<2 csa-google-workspace
+[c-update] uv pip install --quiet --python ~/.default_venv/bin/python3 pyyaml pymupdf>=1.24.3,<2 csa-google-workspace
+[c-todo] uv pip uninstall --python ~/.default_venv/bin/python3 onnxruntime pymupdf-layout pymupdf4llm
+[c-ai2] uv pip install --quiet --python ~/.default_venv/bin/python3 pyyaml pymupdf>=1.24.3,<2 csa-google-workspace
+```
+
+- **`install_doc_python_deps`** put pymupdf 1.28.2 back. It uninstalled nothing: no uv command was
+  an uninstall, and onnxruntime, pymupdf-layout and pymupdf4llm were still there (C-L1, C-L2). It
+  warned:
+
+  ```
+  Warning: ~/.default_venv still has onnxruntime pymupdf-layout pymupdf4llm, which pymupdf 2 brought in. onnxruntime's official macOS builds send Microsoft telemetry by default; nothing was uninstalled
+  ```
+
+  It also added to-do 44, "Remove what pymupdf 2 left in ~/.default_venv: …", whose command column
+  is the line in `[c-todo]`, with the venv's absolute path quoted (C-L3). Nothing was reported as
+  "not reinstalled" (C-L4).
+- **`update_default_venv`**, which keeps no ledger, printed that line instead (C-L5).
+- **`update_pip`, with the venv active, on real pip and PyPI:**
+  - Real `pip list --outdated` in the venv reported
+    `[{"name": "pymupdf", "version": "1.28.2", "latest_version": "2.1", ...}]` (C-U0).
+  - `update_pip` printed "Not upgrading pyyaml pymupdf csa-google-workspace: the Default venv step
+    installs them, pinned" and then "All pip packages are up to date". pymupdf was still 1.28.2
+    afterwards (C-U1, C-U2).
+  - `pip_upgrades`, the list the plan row prints, was empty, as was the run's (C-U3).
+  - No `csa-pip-constraints.*` file was left in `TMPDIR` (C-U4).
+- **The to-do's command, run verbatim** in `/bin/bash -c`, uninstalled exactly
+  onnxruntime 1.31.1, pymupdf4llm 2.1 and pymupdf-layout 2.1. yaml, pymupdf and
+  csa_google_workspace still imported (C-L6). The next `install_doc_python_deps` said nothing about
+  leftovers (C-L7).
+- **X2:** no world's `HOME` had `~/Library/Application Support/Microsoft/DeveloperTools/.onnxruntime`.
+  This run imported no onnxruntime, unlike the first run's A-V5.
+
+### `UV_PYTHON_PREFERENCE`, re-observed
+
+With `UV_PYTHON_PREFERENCE=only-managed` exported in world A after run 2:
+- `find_csa_python` exited 0 and printed
+  `$UV_PYTHON_INSTALL_DIR/cpython-3.14-macos-aarch64-none/bin/python3.14`, the same path as without
+  the variable. In the first run it exited 1 and printed nothing (Observation 1).
+- Raw `uv python find --system --managed-python 3.14` under the same variable still exited 2 with
+  "the argument `--managed-python` cannot be used with `--python-preference`". The subshell `unset`
+  is what makes the difference.
+
+### Rows of the first record that no longer describe the branch
+
+- **Method:** the extracted assignments list `CSA_DOC_PY_DEPS_OPTIONAL`, which no longer exists.
+- **Run 1 plan rows:** the `macos-ai-tools.sh` row's "pymupdf csa-google-workspace (then
+  markitdown[all]>=0.1.9, best effort)", and the whole `macos-update.sh` row ("this script installs
+  none - run macos-ai-tools.sh to repair it").
+- **Run 2 plan rows:** "(then markitdown[all]>=0.1.9, best effort)".
+- **uv command log, world A:** every `uv pip install` line names an unpinned `pymupdf`, and the
+  five `markitdown[all]>=0.1.9` lines are no longer run.
+- **World B's plan row,** and assertion **B-U1**'s claim: the old `-update` wording.
+- **Assertion A-V5**, "markitdown imports": markitdown is no longer installed.
+- **Observation 1:** fixed in DesktopSetup (`63d4816`) and, per its own branch, in CSA-Plugins
+  (`87e0a5d`).
+- **Observation 2's last bullet:** the row now says what a CSA-internal member's run does (`79c9968`).
+- **Observation 3:** markitdown is no longer installed, so nothing the installer puts there imports
+  onnxruntime. A venv an earlier run filled still holds it, and is now told so.
+- **"What this does not prove":** "an Intel Mac (markitdown's best-effort path)" no longer exists.
+  The Intel resolution of the pinned list is checked by `tools/check-doc-deps-resolve.py`
+  (pymupdf 1.28.2, no onnxruntime), not run on an Intel Mac.
+
+### Still not proven by this re-run
+
+Everything under [What this does not prove](#what-this-does-not-prove), apart from the markitdown
+item, and also:
+- **Windows** has only the one-line pin (I1), untested on Windows.
+  - Not measured, read from the code: `Install-DocPythonDeps` returns early when `import yaml,
+    pymupdf` already succeeds, so it does not downgrade an existing pymupdf 2.
+  - `windows-update.ps1`'s pip step upgrades every outdated package, pymupdf included. Both are
+    left to the Windows session (#184) by the controller's ruling.
+- **Telemetry itself.** That onnxruntime sends anything was taken from the final review's finding
+  and was not measured here: this run took care never to load it.
