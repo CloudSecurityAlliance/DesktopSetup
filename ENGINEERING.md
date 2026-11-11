@@ -93,7 +93,7 @@ tests/
   test_*.py                  # thirteen standalone executables — run one directly with python3
   NativeWrappers.Tests.ps1   # Pester; the only suite that needs real 5.1 to mean anything
   DesktopApps.Tests.ps1      # Pester; windows-update.ps1's wait before replacing a running app
-  NpmGlobals.Tests.ps1       # Pester; the npm installers run install -g <pkg>@latest (#153)
+  NpmGlobals.Tests.ps1       # Pester; npm updates only what npm installed (#153)
 docs/
   desktop-ai-apps.md         # where each desktop AI app comes from, and how it stays current
   periodic-sweep.md          # the weekly sweep runbook
@@ -399,13 +399,16 @@ auto-updates); npm for the Codex and Gemini CLIs and for Wrangler; **uv for Pyth
     outdated and when it failed (measured on npm 11.20: an unreachable registry exits 1 with
     empty stdout under `--parseable`), so the records decide, not the status.
 
-  **`windows-update.ps1` still runs a bare `npm update -g`.** Its rewrite is a separate draft PR
-  waiting for a Windows measurement (#184): there `npm.cmd` prefers
-  `<global prefix>\node_modules\npm` when it exists, so on a PC where someone ran
-  `npm install -g npm`, excluding npm would freeze the npm that runs.
+  **`windows-update.ps1`'s `Update-Npm` does the same, NOT YET MEASURED ON WINDOWS** (#184). It
+  reads `npm outdated -g --json`, because `--parseable`'s first field is a path and a Windows
+  path has a colon in it; a failure is an `{"error": …}` object on stdout with the same exit 1.
+  It skips npm, corepack and reparse points (npm makes a junction for a link). Open before it
+  merges: `npm.cmd` prefers `<global prefix>\node_modules\npm` when it exists, so on a PC where
+  someone ran `npm install -g npm`, excluding npm would freeze the npm that runs; and
+  `npm outdated -g` exits 254 with ENOENT when the global directory does not exist yet.
 
   `tests/test_homebrew_owns_npm.py` (bash, with the pre-#153 code as controls; `--rev 7b6d743`
-  reports the defect) and `tests/NpmGlobals.Tests.ps1` (Pester, the Windows installers) pin it.
+  reports the defect) and `tests/NpmGlobals.Tests.ps1` (Pester) pin it.
 
 ### `~/.default_venv`: a link to a versioned venv (macOS)
 

@@ -638,12 +638,10 @@ def main() -> int:
         check(installer_findings(installer_funcs(read(script), func), call, cli, expected),
               f"`npm install -g {expected[-1]}` whether or not {cli} is installed, never `update -g`")
 
-    print(f"\nscripts/*{where} (not windows-update.ps1, yet): no shipping script runs `npm update`")
-    # Not windows-update.ps1, yet: its Update-Npm still runs a bare `npm update -g` until the
-    # rewrite is measured on Windows (#184), where npm.cmd prefers a global copy of npm when one
-    # exists. The draft PR that rewrites it adds the file to this list.
+    print(f"\nscripts/*{where}: no shipping script runs `npm update`")
     names = ["macos-ai-tools.sh", "macos-update.sh", "macos-work-tools.sh", "macos-plugins.sh",
-             "windows-ai-tools.ps1", "windows-work-tools.ps1", "windows-plugins.ps1"]
+             "windows-ai-tools.ps1", "windows-update.ps1", "windows-work-tools.ps1",
+             "windows-plugins.ps1"]
     check(static_findings({n: read(n) for n in names}), "no `npm update` / `csa_npm update`")
 
     if REV is None:
