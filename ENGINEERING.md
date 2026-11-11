@@ -394,9 +394,11 @@ offered: Homebrew's 3.15, a 3.13, uv's 3.14t, or a Cellar path the next `brew up
     "<~/.default_venv/bin/python3>" onnxruntime pymupdf-layout pymupdf4llm` (order 44), or
     prints it without a ledger. It says nothing while pymupdf is still 2.x (the deps install
     failed), because removing what pymupdf 2 requires would break it.
-  - **Guarded twice.** `tests/test_python_pins.py` rejects onnxruntime, markitdown or magika in
-    the array or on any script line that runs an `install`, and `tests/test_venv_replacement.py`
-    (`doc_deps_pinned`) asserts every install passes the pin as one argument.
+  - **Guarded three ways.** `tests/test_python_pins.py` rejects onnxruntime, markitdown or
+    magika in any array assignment or on any script line that runs an `install`, and a
+    `CSA_DOC_PY_DEPS` without the pymupdf pin; run against 495ad6b's scripts it reports both
+    defects. `tests/test_venv_replacement.py` (`doc_deps_pinned`) asserts every install passes the
+    pin as one argument.
     `tools/check-doc-deps-resolve.py` resolves the array with real uv (universal, Apple silicon
     on macOS 15, Intel) and fails on onnxruntime; its `--self-test` resolves the list as it
     stood at 495ad6b and must report it. It needs PyPI, so `check-all.sh` skips it (named)

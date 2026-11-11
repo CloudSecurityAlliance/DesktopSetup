@@ -14,12 +14,14 @@ This pins:
   * the floor (`CSA_PYTHON_MIN` / `$CsaPythonMin`) agrees across platforms;
   * every `CSA_DOC_PY_DEPS=(...)` copy in `scripts/*.sh` is identical (an array, not a function,
     so `tools/check-duplication.py` does not cover it);
-  * no script installs onnxruntime or markitdown: neither appears in a deps array, nor on a code
-    line that runs an `install`. onnxruntime's official macOS and Linux builds (>= 1.29) send
-    Microsoft telemetry by default; markitdown pulls it in through magika, and pymupdf 2.x
-    requires it outright, which is why pymupdf is pinned below 2. A comment may name them; the
-    real resolution is checked by `tools/check-doc-deps-resolve.py`, which needs uv and the
-    network.
+  * no script installs onnxruntime or markitdown: neither appears in any array assignment, nor
+    on a code line that runs an `install`, and `CSA_DOC_PY_DEPS` pins pymupdf below 2.
+    onnxruntime's official macOS and Linux builds (>= 1.29) send Microsoft telemetry by default;
+    markitdown pulls it in through magika, and pymupdf 2.x requires it outright. A comment may
+    name them, and so may the to-do that tells a person how to UNinstall them. At 495ad6b both
+    defects were present (markitdown in a second array the install line named only by variable,
+    pymupdf unpinned) and this file reports both. The real resolution is checked by
+    `tools/check-doc-deps-resolve.py`, which needs uv and the network.
 
 What it cannot check: that 3.14 is the right number. That is a decision (the constants are
 pinned below), not something a script can derive.
@@ -62,6 +64,9 @@ DEPS_RE = re.compile(
 FORBIDDEN = ("onnxruntime", "markitdown", "magika")
 FORBIDDEN_RE = re.compile(r"\b(" + "|".join(FORBIDDEN) + r")\b", re.I)
 INSTALL_RE = re.compile(r"\binstall\b")
+# Any array assignment, bash `NAME=(` (optionally local/readonly/declare) or PowerShell `$Name = @(`.
+ARRAY_RE = re.compile(r"^\s*(?:(?:local|readonly|declare(?:\s+-[a-zA-Z]+)*)\s+)?[A-Za-z_][A-Za-z0-9_]*=\("
+                      r"|^\s*\$[A-Za-z_][A-Za-z0-9_]*\s*=\s*@\(")
 ALL_SCRIPTS = sorted(str(p.relative_to(ROOT)) for p in (ROOT / "scripts").iterdir()
                      if p.suffix in (".sh", ".ps1"))
 
@@ -130,17 +135,22 @@ def code_lines(text: str) -> list[tuple[int, str]]:
 
 
 def forbidden_problems(texts: dict[str, str]) -> list[str]:
-    """No deps array and no code line that runs an `install` names onnxruntime, markitdown or
-    magika. A comment explaining why they are absent is fine."""
+    """No array assignment and no code line that runs an `install` names onnxruntime, markitdown
+    or magika, and every CSA_DOC_PY_DEPS pins pymupdf below 2. A comment explaining why they are
+    absent is fine."""
     out = []
     for name, text in texts.items():
         for m in DEPS_RE.finditer(text):
-            if FORBIDDEN_RE.search(m.group(2)):
-                out.append(f"{name}: CSA_DOC_PY_DEPS names {FORBIDDEN_RE.search(m.group(2)).group(1)}")
+            pym = [e for e in m.group(2).split() if re.match(r'"?pymupdf\b', e, re.I)]
+            if len(pym) != 1 or "<2" not in pym[0]:
+                out.append(f"{name}: CSA_DOC_PY_DEPS must pin pymupdf below 2 (2.x requires "
+                           f"onnxruntime); it has {pym or 'no pymupdf'}")
         for i, line in code_lines(text):
-            if INSTALL_RE.search(line) and FORBIDDEN_RE.search(line):
-                out.append(f"{name}:{i}: an install names {FORBIDDEN_RE.search(line).group(1)}: "
-                           f"{line.strip()[:120]}")
+            hit = FORBIDDEN_RE.search(line)
+            if hit and ARRAY_RE.search(line):
+                out.append(f"{name}:{i}: an array names {hit.group(1)}: {line.strip()[:120]}")
+            elif hit and INSTALL_RE.search(line):
+                out.append(f"{name}:{i}: an install names {hit.group(1)}: {line.strip()[:120]}")
     return out
 
 
@@ -204,6 +214,18 @@ def self_test() -> int:
            forbidden_problems(mutated), [SH[0], SH[2]])
 
     mutated = dict(texts)
+    for n in (SH[0], SH[2]):
+        mutated[n] = mutated[n].replace(real, real.replace('"pymupdf>=1.24.3,<2"', "pymupdf"))
+    expect("pymupdf unpinned in both copies (they still agree) is reported",
+           forbidden_problems(mutated), [SH[0], SH[2]])
+
+    mutated = dict(texts)
+    mutated[SH[2]] = mutated[SH[2]] + '\nCSA_DOC_PY_DEPS_OPTIONAL=("markitdown[all]>=0.1.9")\n'
+    mutated[PS1[0]] = mutated[PS1[0]] + "\n$DocExtras = @('markitdown[all]')\n"
+    expect("a second array naming markitdown (495ad6b's shape), in bash or PowerShell, is reported",
+           forbidden_problems(mutated), [SH[2], PS1[0]])
+
+    mutated = dict(texts)
     mutated[PS1[0]] = mutated[PS1[0]] + "\n    & $py -m pip install --quiet onnxruntime\n"
     mutated[SH[1]] = mutated[SH[1]] + '\n  uv pip install --python "$vpy" magika\n'
     expect("an install line naming onnxruntime (.ps1) or magika (.sh) is reported",
@@ -237,8 +259,8 @@ def main() -> int:
          six(texts)),
         ("the minimum Python agrees across platforms", min_problems, six(texts)),
         ("every CSA_DOC_PY_DEPS copy is identical", deps_problems, texts),
-        ("no script installs onnxruntime, markitdown or magika (deps arrays and install lines, "
-         f"{len(ALL_SCRIPTS)} scripts)", forbidden_problems, texts),
+        ("no script installs onnxruntime, markitdown or magika, and pymupdf is pinned below 2 "
+         f"(arrays and install lines, {len(ALL_SCRIPTS)} scripts)", forbidden_problems, texts),
     ]:
         problems = fn(scope)
         print(f"  {'ok  ' if not problems else 'FAIL'}  {label}")
