@@ -364,16 +364,29 @@ document-pipeline's launchers are bash and probe `$HOME/.default_venv/bin/python
 venv is where the document deps go. On real Macs it had been built on whatever `python3` PATH
 offered: Homebrew's 3.15, a 3.13, uv's 3.14t, or a Cellar path the next `brew upgrade` deletes.
 
-- **Two dependency lists.** `CSA_DOC_PY_DEPS` (pyyaml, pymupdf, csa-google-workspace) must
-  install: a build without them is not a replacement. `CSA_DOC_PY_DEPS_OPTIONAL`
-  (`markitdown[all]>=0.1.9`, #157) is best effort (`csa_venv_optional_install`): a failure warns,
-  naming the cause where it is known, and blocks nothing. Measured on PyPI 2026-11-10:
-  markitdown 0.1.9 requires magika unconditionally, magika requires onnxruntime, and onnxruntime
-  1.31.1 publishes no macOS x86_64 wheel. Installed in one call with the core, it left an Intel
-  Mac with no `-3.14` at all. The `>=0.1.9` floor is load-bearing: unpinned on 3.15 it silently
-  resolved to 0.0.2. A build tries the optional set quietly after the core (`uv pip` only for a
-  `.new-$$` build); the caller's own attempt at the final path, which also covers a venv that
-  needed no build, is the one that warns, so a failure is reported once.
+- **One dependency list, and nothing in it may bring in onnxruntime.** `CSA_DOC_PY_DEPS` is
+  `pyyaml "pymupdf>=1.24.3,<2" csa-google-workspace`, and it must install: a build without it is
+  not a replacement.
+  - **Why no onnxruntime** (#179's final review, 2026-11-10, decided on safety and privacy):
+    onnxruntime's official macOS and Linux builds from 1.29 on ship Microsoft 1DS telemetry,
+    **on by default**: a device id and an event cache under
+    `~/Library/Application Support/Microsoft/DeveloperTools/.onnxruntime`, uploaded to
+    `mobile.events.data.microsoft.com`, off only with `ORT_DISABLE_TELEMETRY=1` set before it
+    loads.
+  - **pymupdf is pinned below 2.** Unpinned, it resolves to 2.1, which requires onnxruntime,
+    pymupdf-layout and pymupdf4llm unconditionally and has no macOS x86_64 wheel; 1.28.2 has no
+    dependencies and has Intel wheels. The element is quoted, because `<2` is a redirection.
+  - **markitdown (#157) is not installed** (the plan's D6, reversed): markitdown → magika →
+    onnxruntime.
+  - **Guarded twice.** `tests/test_python_pins.py` rejects onnxruntime, markitdown or magika in
+    the array or on any script line that runs an `install`, and `tests/test_venv_replacement.py`
+    (`doc_deps_pinned`) asserts every install passes the pin as one argument.
+    `tools/check-doc-deps-resolve.py` resolves the array with real uv (universal, Apple silicon
+    on macOS 15, Intel) and fails on onnxruntime; its `--self-test` resolves the list as it
+    stood at 495ad6b and must report it. It needs PyPI, so `check-all.sh` skips it (named)
+    without uv or network, and CI's `venv-macos` job requires it. Measured: without
+    `MACOSX_DEPLOYMENT_TARGET=15.0`, uv's default Apple-silicon target predates onnxruntime's
+    macOS 14 wheels, so uv quietly backtracks to pymupdf 1.x and the unpinned list looks clean.
 
 - **The layout, decided by the CINO on 2026-11-10 (#179):** `~/.default_venv` is a **relative**
   symlink to `~/.default_venv-3.14` (`${CSA_VENV}-${CSA_PYTHON_PREFERRED}`), built on the CSA
@@ -422,7 +435,7 @@ offered: Homebrew's 3.15, a 3.13, uv's 3.14t, or a Cellar path the next `brew up
   announces once. With no CSA Python at all, the venv is left as it is, with a warning.
 - **`-update` repairs, never creates** (decision D4): `update_default_venv` is its own `main()`
   step, before `update_pip`, and calls `ensure_default_venv --no-create` (`find_csa_python`
-  only: no Python install, no Homebrew fallback), then refreshes both dependency lists. Until now
+  only: no Python install, no Homebrew fallback), then refreshes `CSA_DOC_PY_DEPS`. Until now
   that refresh sat at the end of `update_pip`, after two early returns, so an up-to-date machine
   never reached it.
 - Windows has no `~/.default_venv`; its document deps are #183.
@@ -472,16 +485,15 @@ installer closes that half at run time, reporting drift in both directions
 only the two `*-ai-tools` ones: `-update` and `-plugins` hand it to the private gate repo's
 setup scripts, and an undeclared value reached them empty, so the interpreter was guessed.
 `CSA_PYTHON_MIN` / `$CsaPythonMin` (also `3.14`) lives in the `*-ai-tools` scripts.
-`tests/test_python_pins.py` asserts the six preferred values and the two floors agree, and that
-every `CSA_DOC_PY_DEPS=(...)` and `CSA_DOC_PY_DEPS_OPTIONAL=(...)` copy in `scripts/*.sh` is
-identical (arrays, so `check-duplication.py` does not see them); `--self-test` breaks each rule on
-purpose.
+`tests/test_python_pins.py` asserts the six preferred values and the two floors agree, that
+every `CSA_DOC_PY_DEPS=(...)` copy in `scripts/*.sh` is identical (an array, so
+`check-duplication.py` does not see it), and that no script installs onnxruntime, markitdown or
+magika; `--self-test` breaks each rule on purpose.
 
 **`macos-update.sh` carries its own copy of the `~/.default_venv` machinery:** `CSA_VENV`,
-`CSA_DOC_PY_DEPS`, `CSA_DOC_PY_DEPS_OPTIONAL`, the three CSA-Python functions,
-`csa_venv_optional_install` and every function from `venv_cfg_get` to `ensure_default_venv`,
-byte-identical to `macos-ai-tools.sh` (`check-duplication.py` holds the functions,
-`test_python_pins.py` the arrays, and that a script declaring one declares both). Change both.
+`CSA_DOC_PY_DEPS`, the three CSA-Python functions and every function from `venv_cfg_get` to
+`ensure_default_venv`, byte-identical to `macos-ai-tools.sh` (`check-duplication.py` holds the
+functions, `test_python_pins.py` the array). Change both.
 
 **The plugin lists are single-source** and are the exception: `scripts/csa-plugins.txt` and
 `scripts/csa-plugins-internal.txt` are fetched from `HEAD` at runtime, so a list-only change
@@ -533,6 +545,10 @@ Worth knowing individually:
 - **`check-log-coverage.py`** — every screen-output helper routes through the logger, so the
   debug log contains what the user saw.
 - **`check-script-versions.py`** — above.
+- **`check-doc-deps-resolve.py`** — `CSA_DOC_PY_DEPS`, resolved with real uv against PyPI, must
+  not bring in onnxruntime ([`~/.default_venv`](#default_venv-a-link-to-a-versioned-venv-macos),
+  above). The one check that needs the network: exit 77 without it, a failure in CI's
+  `venv-macos` job, where `CSA_TEST_REQUIRE_REAL_UV` is set.
 - **`check-paste-safety.py`**, **`check-shell-tail-conditionals.py`**,
   **`check-pipeline-assignments.py`** — a README must not ask for a multi-line paste; no
   tail-position conditional under `set -e`; no unguarded pipeline assignment.

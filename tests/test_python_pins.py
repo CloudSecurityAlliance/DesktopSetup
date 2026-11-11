@@ -12,9 +12,14 @@ fallback was. Nothing failed; the interpreter was simply guessed.
 This pins:
   * all six scripts declare the preferred Python exactly once, and all six agree;
   * the floor (`CSA_PYTHON_MIN` / `$CsaPythonMin`) agrees across platforms;
-  * every `CSA_DOC_PY_DEPS=(...)` and `CSA_DOC_PY_DEPS_OPTIONAL=(...)` copy in `scripts/*.sh` is
-    identical, and a script that declares one declares both (they are arrays, not functions, so
-    `tools/check-duplication.py` does not cover them).
+  * every `CSA_DOC_PY_DEPS=(...)` copy in `scripts/*.sh` is identical (an array, not a function,
+    so `tools/check-duplication.py` does not cover it);
+  * no script installs onnxruntime or markitdown: neither appears in a deps array, nor on a code
+    line that runs an `install`. onnxruntime's official macOS and Linux builds (>= 1.29) send
+    Microsoft telemetry by default; markitdown pulls it in through magika, and pymupdf 2.x
+    requires it outright, which is why pymupdf is pinned below 2. A comment may name them; the
+    real resolution is checked by `tools/check-doc-deps-resolve.py`, which needs uv and the
+    network.
 
 What it cannot check: that 3.14 is the right number. That is a decision (the constants are
 pinned below), not something a script can derive.
@@ -47,12 +52,18 @@ MIN_RE = {
     "ps1": re.compile(r"^\$CsaPythonMin\s*=\s*'([^']*)'", re.M),
 }
 # Tolerates indentation and a `local` / `readonly` / `declare -a` prefix, so a copy moved
-# inside a function is still found rather than silently ignored. Group 1 is the array's name:
-# the core deps, or the best-effort ones (markitdown, which cannot install on an Intel Mac).
-DEPS_ARRAYS = ("CSA_DOC_PY_DEPS", "CSA_DOC_PY_DEPS_OPTIONAL")
+# inside a function is still found rather than silently ignored. Group 1 is the array's name.
 DEPS_RE = re.compile(
     r"^[ \t]*(?:(?:local|readonly|declare(?:\s+-[a-zA-Z]+)*)\s+)?"
-    r"(CSA_DOC_PY_DEPS(?:_OPTIONAL)?)=\(([^)]*)\)", re.M)
+    r"(CSA_DOC_PY_DEPS)=\(([^)]*)\)", re.M)
+
+# Never installed by any script, for the reason in the module docstring. `install` as a whole
+# word, so `uninstall` (the to-do that removes onnxruntime from an old venv) is not an install.
+FORBIDDEN = ("onnxruntime", "markitdown", "magika")
+FORBIDDEN_RE = re.compile(r"\b(" + "|".join(FORBIDDEN) + r")\b", re.I)
+INSTALL_RE = re.compile(r"\binstall\b")
+ALL_SCRIPTS = sorted(str(p.relative_to(ROOT)) for p in (ROOT / "scripts").iterdir()
+                     if p.suffix in (".sh", ".ps1"))
 
 
 def kind(name: str) -> str:
@@ -60,7 +71,11 @@ def kind(name: str) -> str:
 
 
 def load() -> dict[str, str]:
-    return {n: (ROOT / n).read_text(encoding="utf-8") for n in SIX}
+    return {n: (ROOT / n).read_text(encoding="utf-8") for n in dict.fromkeys(SIX + ALL_SCRIPTS)}
+
+
+def six(texts: dict[str, str]) -> dict[str, str]:
+    return {n: texts[n] for n in SIX}
 
 
 def preferred_problems(texts: dict[str, str]) -> list[str]:
@@ -95,31 +110,43 @@ def min_problems(texts: dict[str, str]) -> list[str]:
 
 
 def deps_problems(texts: dict[str, str]) -> list[str]:
-    """Every copy of each deps array must be identical, and a script that declares either array
-    declares both: a copy of the core list without the optional one would silently stop
-    installing markitdown there. Vacuous with one copy, by design."""
-    copies: dict[str, list[tuple[str, list[str]]]] = {}
+    """Every copy of the deps array must be identical. Vacuous with one copy, by design."""
+    flat: list[tuple[str, list[str]]] = []
     for name, text in texts.items():
         for m in DEPS_RE.finditer(text):
-            copies.setdefault(m.group(1), []).append((name, m.group(2).split()))
+            flat.append((name, m.group(2).split()))
     out = []
-    for var in DEPS_ARRAYS:
-        flat = copies.get(var, [])
-        if flat:
-            ref_name, ref = flat[0]
-            for name, c in flat[1:]:
-                if c != ref:
-                    out.append(f"{name}: {var} is {c}, but {ref_name} has {ref}")
-    declaring = {n for flat in copies.values() for n, _ in flat}
-    for name in sorted(declaring):
-        for var in DEPS_ARRAYS:
-            if not any(n == name for n, _ in copies.get(var, [])):
-                out.append(f"{name}: declares the document deps but not {var}")
+    if flat:
+        ref_name, ref = flat[0]
+        for name, c in flat[1:]:
+            if c != ref:
+                out.append(f"{name}: CSA_DOC_PY_DEPS is {c}, but {ref_name} has {ref}")
+    return out
+
+
+def code_lines(text: str) -> list[tuple[int, str]]:
+    """(line number, line) for every line that is not a full-line comment, in bash or PowerShell."""
+    return [(i, l) for i, l in enumerate(text.splitlines(), 1) if not l.lstrip().startswith("#")]
+
+
+def forbidden_problems(texts: dict[str, str]) -> list[str]:
+    """No deps array and no code line that runs an `install` names onnxruntime, markitdown or
+    magika. A comment explaining why they are absent is fine."""
+    out = []
+    for name, text in texts.items():
+        for m in DEPS_RE.finditer(text):
+            if FORBIDDEN_RE.search(m.group(2)):
+                out.append(f"{name}: CSA_DOC_PY_DEPS names {FORBIDDEN_RE.search(m.group(2)).group(1)}")
+        for i, line in code_lines(text):
+            if INSTALL_RE.search(line) and FORBIDDEN_RE.search(line):
+                out.append(f"{name}:{i}: an install names {FORBIDDEN_RE.search(line).group(1)}: "
+                           f"{line.strip()[:120]}")
     return out
 
 
 def run_checks(texts: dict[str, str]) -> list[str]:
-    return preferred_problems(texts) + min_problems(texts) + deps_problems(texts)
+    return (preferred_problems(six(texts)) + min_problems(six(texts)) + deps_problems(texts)
+            + forbidden_problems(texts))
 
 
 def self_test() -> int:
@@ -137,21 +164,27 @@ def self_test() -> int:
         print(f"  {'ok  ' if good else 'FAIL'}  {label}" + ("" if good else f" - unreported: {missing or 'anything'}"))
         ok = ok and good
 
+    def expect_none(label: str, problems: list[str]) -> None:
+        nonlocal ok
+        good = not problems
+        print(f"  {'ok  ' if good else 'FAIL'}  {label}" + ("" if good else f" - reported: {problems}"))
+        ok = ok and good
+
     mutated = dict(texts)
     mutated[SH[0]] = PREFERRED_RE["sh"].sub('CSA_PYTHON_PREFERRED="3.15"', mutated[SH[0]])
     mutated[PS1[1]] = PREFERRED_RE["ps1"].sub("# removed", mutated[PS1[1]])
     expect("a 3.15 copy and a deleted copy are both reported, by file",
-           preferred_problems(mutated), [SH[0], PS1[1]])
+           preferred_problems(six(mutated)), [SH[0], PS1[1]])
 
     mutated = dict(texts)
     mutated[PS1[0]] = MIN_RE["ps1"].sub("$CsaPythonMin = '3.13'", mutated[PS1[0]])
     expect("a floor that differs across platforms is reported",
-           min_problems(mutated), [PS1[0]])
+           min_problems(six(mutated)), [PS1[0]])
 
     mutated = dict(texts)
     mutated[SH[0]] = MIN_RE["sh"].sub("# removed", mutated[SH[0]])
     expect("a platform with no floor declared is reported",
-           min_problems(mutated), [SH[0]])
+           min_problems(six(mutated)), [SH[0]])
 
     mutated = dict(texts)
     real = DEPS_RE.search(mutated[SH[0]]).group(0)
@@ -160,16 +193,27 @@ def self_test() -> int:
            deps_problems(mutated), [SH[1]])
 
     mutated = dict(texts)
-    real_opt = [m.group(0) for m in DEPS_RE.finditer(mutated[SH[0]])
-                if m.group(1) == "CSA_DOC_PY_DEPS_OPTIONAL"][0]
-    mutated[SH[2]] = mutated[SH[2]].replace(real_opt, real_opt.replace("0.1.9", "0.0.2"))
-    expect("two CSA_DOC_PY_DEPS_OPTIONAL copies that differ are reported",
+    mutated[SH[2]] = mutated[SH[2]].replace(real, real.replace(",<2", ""))
+    expect("a copy that drops the pymupdf<2 pin is reported (it differs from the others)",
            deps_problems(mutated), [SH[2]])
 
     mutated = dict(texts)
-    mutated[SH[2]] = mutated[SH[2]].replace(real_opt, "# removed")
-    expect("a script with the core deps but no CSA_DOC_PY_DEPS_OPTIONAL is reported",
-           deps_problems(mutated), [SH[2]])
+    for n in (SH[0], SH[2]):
+        mutated[n] = mutated[n].replace(real, real.replace(")", ' "markitdown[all]>=0.1.9")'))
+    expect("markitdown put back into both deps arrays (they still agree) is reported",
+           forbidden_problems(mutated), [SH[0], SH[2]])
+
+    mutated = dict(texts)
+    mutated[PS1[0]] = mutated[PS1[0]] + "\n    & $py -m pip install --quiet onnxruntime\n"
+    mutated[SH[1]] = mutated[SH[1]] + '\n  uv pip install --python "$vpy" magika\n'
+    expect("an install line naming onnxruntime (.ps1) or magika (.sh) is reported",
+           forbidden_problems(mutated), [PS1[0], SH[1]])
+
+    mutated = dict(texts)
+    mutated[SH[1]] = (mutated[SH[1]] + "\n# markitdown is not installed: it pulls onnxruntime\n"
+                      '  echo "uv pip uninstall --python x onnxruntime"\n')
+    expect_none("a comment naming onnxruntime, and an UNinstall of it, are not reported",
+                forbidden_problems(mutated))
 
     mutated = dict(texts)
     mutated[SH[2]] = mutated[SH[2]] + "\nf() {\n    local CSA_DOC_PY_DEPS=(pyyaml other)\n}\n"
@@ -188,13 +232,15 @@ def main() -> int:
     print("CSA Python pins\n")
     texts = load()
     failures = []
-    for label, fn in [
-        (f"all six scripts declare the preferred Python exactly once, as {WANT}", preferred_problems),
-        ("the minimum Python agrees across platforms", min_problems),
-        ("every CSA_DOC_PY_DEPS / _OPTIONAL copy is identical, and both are declared together",
-         deps_problems),
+    for label, fn, scope in [
+        (f"all six scripts declare the preferred Python exactly once, as {WANT}", preferred_problems,
+         six(texts)),
+        ("the minimum Python agrees across platforms", min_problems, six(texts)),
+        ("every CSA_DOC_PY_DEPS copy is identical", deps_problems, texts),
+        ("no script installs onnxruntime, markitdown or magika (deps arrays and install lines, "
+         f"{len(ALL_SCRIPTS)} scripts)", forbidden_problems, texts),
     ]:
-        problems = fn(texts)
+        problems = fn(scope)
         print(f"  {'ok  ' if not problems else 'FAIL'}  {label}")
         for p in problems:
             print(f"        {p}")

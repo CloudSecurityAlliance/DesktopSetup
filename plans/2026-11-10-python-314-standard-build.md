@@ -46,6 +46,11 @@ Its seven decisions, D1 to D7:
   - **D4:** `-update` repairs an existing venv but never creates one, and has no Homebrew fallback.
   - **D6:** markitdown goes into `~/.default_venv` here (#157).
   - **D7:** rebuild Cellar-pinned environments the installers own; warn about anything else.
+- **D6 reversed, 2026-11-10, after the final whole-branch review (AI's decision, under P1: safety and privacy
+  first):** markitdown is **not** installed into `~/.default_venv`, and `pymupdf` is pinned `>=1.24.3,<2`. Both
+  brought in onnxruntime (markitdown → magika → onnxruntime; pymupdf 2.x requires it outright), whose official macOS
+  and Linux builds from 1.29 on send Microsoft 1DS telemetry by default. The text below is the plan as it was
+  executed; ENGINEERING.md (`~/.default_venv`) holds the current rule.
 
 **Repos and branches:**
 

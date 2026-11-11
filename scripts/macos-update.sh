@@ -19,7 +19,7 @@
 
 set -euo pipefail
 
-SCRIPT_VERSION="2026-11-11T01:36Z"
+SCRIPT_VERSION="2026-11-11T04:34Z"
 
 # ── CSA plugin marketplaces ─────────────────────────────────────────
 # Each update run will add any entries from this list that aren't yet
@@ -745,34 +745,10 @@ ensure_csa_python() {
 # ~/.default_venv is where macos-ai-tools.sh puts the document-pipeline preflight deps, because
 # Homebrew's python3 is PEP 668 externally-managed; document-pipeline's launchers probe it.
 CSA_VENV="$HOME/.default_venv"
-# The same packages macos-ai-tools.sh installs there (see its comments): the core, which must
-# install, and markitdown[all]>=0.1.9 (#157), best effort, because it cannot install on an Intel Mac.
-CSA_DOC_PY_DEPS=(pyyaml pymupdf csa-google-workspace)
-CSA_DOC_PY_DEPS_OPTIONAL=("markitdown[all]>=0.1.9")
-
-# $1 a venv's python. Installs CSA_DOC_PY_DEPS_OPTIONAL, best effort: a failure warns, naming the
-# cause where it is known, and returns 0, so it never blocks a build, the flip or anything after.
-# With uv, `uv pip` only - pip would resolve the same index and fail the same way, slower.
-#
-# Why markitdown is optional (measured on PyPI 2026-11-10): markitdown 0.1.9 requires magika
-# unconditionally, magika requires onnxruntime, and onnxruntime 1.31.1 publishes no macOS x86_64
-# wheel for any Python. Installed in one call with the core deps, it made an Intel Mac unable to
-# build ~/.default_venv-3.14 at all.
-csa_venv_optional_install() {
-  if has_command uv; then
-    if uv pip install --quiet --python "$1" "${CSA_DOC_PY_DEPS_OPTIONAL[@]}"; then
-      return 0
-    fi
-  elif csa_venv_pip_install "$1" "${CSA_DOC_PY_DEPS_OPTIONAL[@]}"; then
-    return 0
-  fi
-  if [[ "$(uname -m 2>/dev/null)" == "x86_64" ]]; then
-    warn "Skipped ${CSA_DOC_PY_DEPS_OPTIONAL[*]}: markitdown needs onnxruntime, which publishes no Intel-Mac wheels. The other document deps are installed"
-  else
-    warn "Skipped ${CSA_DOC_PY_DEPS_OPTIONAL[*]}: it did not install (see above). The other document deps are installed"
-  fi
-  return 0
-}
+# The same packages macos-ai-tools.sh installs there; see its comments for why pymupdf is pinned
+# below 2 and markitdown is not installed (both would bring in onnxruntime, whose official macOS
+# builds send Microsoft telemetry by default).
+CSA_DOC_PY_DEPS=(pyyaml "pymupdf>=1.24.3,<2" csa-google-workspace)
 
 # ── ~/.default_venv: a link to a versioned venv ─────────────────────
 # document-pipeline's bash launchers probe $HOME/.default_venv/bin/python3. It is a RELATIVE link
@@ -782,10 +758,9 @@ csa_venv_optional_install() {
 # directory built on whatever python3 PATH offered - Homebrew's 3.15, a 3.13, uv's free-threaded
 # 3.14t, or a Homebrew Cellar path the next `brew upgrade` deletes.
 #
-# KEEP IN SYNC: CSA_VENV, CSA_DOC_PY_DEPS, CSA_DOC_PY_DEPS_OPTIONAL, the three CSA-Python
-# functions above, csa_venv_optional_install and every function from venv_cfg_get to
-# ensure_default_venv are duplicated byte-identically in macos-update.sh
-# (tools/check-duplication.py; tests/test_python_pins.py for the arrays).
+# KEEP IN SYNC: CSA_VENV, CSA_DOC_PY_DEPS, the three CSA-Python functions above and every
+# function from venv_cfg_get to ensure_default_venv are duplicated byte-identically in
+# macos-update.sh (tools/check-duplication.py; tests/test_python_pins.py for the array).
 # tests/test_venv_replacement.py runs them.
 
 # $1 pyvenv.cfg, $2 key. Prints the value - everything after the first "=", trimmed, inner
@@ -990,7 +965,7 @@ default_venv_state() {
 # shellcheck disable=SC2120
 default_venv_plan() {
   local versioned="${CSA_VENV}-${CSA_PYTHON_PREFERRED}"
-  local deps="${CSA_DOC_PY_DEPS[*]} (then ${CSA_DOC_PY_DEPS_OPTIONAL[*]}, best effort)"
+  local deps="${CSA_DOC_PY_DEPS[*]}"
   local state action old reason build="" vr aside fix kept="" py="" leave=""
   state="$(default_venv_state)" || state=""
   IFS=$'\t' read -r action old reason <<< "$state"
@@ -1062,11 +1037,8 @@ default_venv_plan() {
 }
 
 # Makes ${CSA_VENV}-${CSA_PYTHON_PREFERRED} a sound venv on $1 (the CSA Python), with
-# CSA_DOC_PY_DEPS installed, then CSA_DOC_PY_DEPS_OPTIONAL tried. Prints the path a broken one was
-# moved to, if any - ONLY that goes to stdout. Exits 1, with a warning and nothing changed, when it
-# cannot. The optional set never decides that: it is tried quietly after the core, and a failure
-# is reported once, by the caller's own attempt at the final path (install_doc_python_deps,
-# update_default_venv), which also covers a venv that needed no build.
+# CSA_DOC_PY_DEPS installed. Prints the path a broken one was moved to, if any - ONLY that goes to
+# stdout. Exits 1, with a warning and nothing changed, when it cannot.
 #
 #   absent  `uv venv --seed` straight at the final path (`python -m venv` without uv).
 #   broken  BUILD FIRST, SWAP LAST: `uv venv --seed --relocatable` at .new-$$, the deps with
@@ -1086,12 +1058,10 @@ default_venv_build() {
     if has_command uv; then
       if uv venv --quiet --seed --python "$py" "$versioned" >&2 \
         && csa_venv_pip_install "$versioned/bin/python3" "${CSA_DOC_PY_DEPS[@]}" >&2; then
-        csa_venv_optional_install "$versioned/bin/python3" >/dev/null 2>&1
         return 0
       fi
     elif "$py" -m venv "$versioned" >&2 \
       && csa_venv_pip_install "$versioned/bin/python3" "${CSA_DOC_PY_DEPS[@]}" >&2; then
-      csa_venv_optional_install "$versioned/bin/python3" >/dev/null 2>&1
       return 0
     fi
     rm -rf "$versioned"
@@ -1112,7 +1082,6 @@ default_venv_build() {
       warn "Could not build a replacement for $versioned - leaving it exactly as it was"
       return 1
     fi
-    uv pip install --quiet --python "$new/bin/python3" "${CSA_DOC_PY_DEPS_OPTIONAL[@]}" >/dev/null 2>&1 || true
     if ! mv "$versioned" "$broken"; then
       rm -rf "$new"
       warn "Could not move $versioned aside - leaving it exactly as it was"
@@ -1136,7 +1105,6 @@ default_venv_build() {
       warn "Could not rebuild $versioned - the old one is back, exactly as it was"
       return 1
     fi
-    csa_venv_optional_install "$versioned/bin/python3" >/dev/null 2>&1
   fi
   warn "$versioned rebuilt on $py ($reason); the previous one is kept at $broken"
   printf '%s\n' "$broken"
@@ -1309,10 +1277,10 @@ update_default_venv() {
     warn "Not refreshing the document deps: $CSA_VENV cannot take them ($reason)"
     return 0
   fi
-  info "Refreshing document deps (${CSA_DOC_PY_DEPS[*]}, then ${CSA_DOC_PY_DEPS_OPTIONAL[*]}) in $CSA_VENV"
+  info "Refreshing document deps (${CSA_DOC_PY_DEPS[*]}) in $CSA_VENV"
   csa_venv_pip_install "$CSA_VENV/bin/python3" "${CSA_DOC_PY_DEPS[@]}" \
     || warn "Failed to update $CSA_VENV packages; continuing"
-  csa_venv_optional_install "$CSA_VENV/bin/python3"
+  return 0
 }
 
 update_claude_code() {

@@ -248,6 +248,16 @@ jobs:
           CSA_TEST_REQUIRE_REAL_UV: "1"
         run: python3 tests/test_venv_replacement.py
 
+      # Resolves CSA_DOC_PY_DEPS with real uv against PyPI and fails on onnxruntime, whose
+      # official macOS builds send Microsoft telemetry by default (pymupdf 2.x requires it). The
+      # self-test resolves the list as it stood at 495ad6b and must report it.
+      - name: The document deps never bring in onnxruntime, resolved for real (#179)
+        env:
+          CSA_TEST_REQUIRE_REAL_UV: "1"
+        run: |
+          python3 tools/check-doc-deps-resolve.py
+          python3 tools/check-doc-deps-resolve.py --self-test
+
       - name: The checks must not change the working tree (#72)
         if: success() || failure()
         run: |
