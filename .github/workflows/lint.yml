@@ -175,6 +175,9 @@ jobs:
       - name: npm noise filtered without hiding npm failures
         run: python3 tests/test_npm_output_filter.py
 
+      - name: npm updates only what npm installed; npm itself is Homebrew's (#153)
+        run: python3 tests/test_homebrew_owns_npm.py
+
       - name: The Node floor rejects what the OS ships
         run: python3 tests/test_version_floors.py
 

@@ -24,8 +24,8 @@ does not use npm, and sees five lines of `npm warn` under "Updating Gemini CLI".
 Why this is a test and not just a `sed`: the obvious filter is `npm … | grep -v`, and it is
 wrong in a way that passes every casual check. These scripts run under `set -o pipefail`, and a
 `grep -v` that matches nothing exits 1. So on the day npm stops printing the block, a perfectly
-clean run starts reporting failure — `npm update -g X || npm install -g X` takes its fallback
-for no reason, and `macos-update.sh` warns about an update that worked. `sed` exits 0 whatever
+clean run starts reporting failure — an `npm install -g X@latest` that worked is reported as
+"Failed to update X", and `macos-update.sh` warns about an update that worked. `sed` exits 0 whatever
 it matches, so npm's own status is what propagates. `grep -v` is kept below as a control, so
 this test proves it can still detect the regression rather than merely passing.
 
@@ -160,7 +160,7 @@ npm() {{
 }}
 
 status=0
-csa_npm update -g @google/gemini-cli || status=$?
+csa_npm install -g @google/gemini-cli@latest || status=$?
 echo "CSA_TEST_EXIT=$status"
 """
     with tempfile.NamedTemporaryFile("w", suffix=".sh", delete=False) as fh:
