@@ -27,7 +27,9 @@ What `ensure_default_venv` must never do, each pinned by a case below:
   * **bring in onnxruntime** (#179's final review): its official macOS builds send Microsoft
     telemetry by default. pymupdf is pinned below 2 (2.x requires onnxruntime), every install
     passes `pymupdf>=1.24.3,<2` as ONE argument, and markitdown is not installed at all
-    (`doc_deps_pinned`).
+    (`doc_deps_pinned`). A venv that still holds what pymupdf 2 brought (onnxruntime,
+    pymupdf-layout, pymupdf4llm) gets a warning and the exact `uv pip uninstall` line as a to-do,
+    never a silent uninstall (`leftovers_reported_never_uninstalled`).
 
 **How this is tested.** The real functions are extracted from the shipping scripts and run in
 bash on a stub-only PATH: stub `uv`, `brew` and interpreters, plus the real `mv`, `ln`, `rm`,
@@ -139,12 +141,21 @@ def _probe_xy(interp: str) -> str | None:
     return p.stdout.split()[0]
 
 
+def _norm(name: str) -> str:
+    return re.sub(r"[-_.]+", "-", name).lower()
+
+
 def _install_into(venv: pathlib.Path, pkgs: list[str]) -> None:
+    """As an installer does: a package already there (any version, any spelling) is replaced."""
     sites = sorted(venv.glob("lib/python*/site-packages"))
     site = sites[0] if sites else venv / "lib" / "python3.14" / "site-packages"
     site.mkdir(parents=True, exist_ok=True)
     for p in pkgs:
-        add_dist(site, re.split(r"[\[<>=!~; ]", p, maxsplit=1)[0])
+        name = re.split(r"[\[<>=!~; ]", p, maxsplit=1)[0]
+        for old in site.glob("*.dist-info"):
+            if _norm(old.name.split("-")[0]) == _norm(name):
+                shutil.rmtree(old)
+        add_dist(site, name)
 
 
 def stub_main(argv: list[str]) -> int:
@@ -331,7 +342,7 @@ TODO_TERMINAL = "Open a new terminal to use the rebuilt ~/.default_venv"
 SHARED = ["has_command", "python_is_csa_build", "find_csa_python", "ensure_csa_python",
           "csa_venv_pip_install", "venv_cfg_get", "venv_rebuild_reason", "venv_aside_name",
           "venv_extra_packages", "default_venv_state", "default_venv_plan", "default_venv_build",
-          "ensure_default_venv"]
+          "ensure_default_venv", "default_venv_leftovers"]
 OUTPUT = ['info()    { echo "INFO: $*"; }',
           'success() { echo "SUCCESS: $*"; }',
           'warn()    { echo "WARN: $*" >&2; }',
@@ -1296,6 +1307,78 @@ def constraints_of(w: World) -> dict[str, str]:
     return out
 
 
+LEFTOVERS = ("onnxruntime", "pymupdf-layout", "pymupdf4llm")
+
+
+def dists_in(v: pathlib.Path) -> set[str]:
+    return {_norm(d.name.split("-")[0]) for d in v.glob("lib/python*/site-packages/*.dist-info")}
+
+
+def leftover_cases(root: pathlib.Path) -> None:
+    """A ~/.default_venv that ran an earlier installer holds pymupdf 2.x and what it requires.
+    The pin puts pymupdf 1.x back, but onnxruntime (Microsoft telemetry on by default),
+    pymupdf-layout and pymupdf4llm stay. They are never uninstalled silently: a warning, and the
+    exact `uv pip uninstall` line as a to-do, or printed without a ledger."""
+    print("\nleftovers_reported_never_uninstalled")
+    had = (("PyMuPDF", ["onnxruntime", "pymupdf-layout==2.1", "pymupdf4llm==2.1"], "2.1"),
+           ("onnxruntime", [], "1.31.1"), ("pymupdf_layout", [], "2.1"), ("pymupdf4llm", [], "2.1"),
+           "pyyaml")
+    for label, script, call, env_of in (
+            ("macos-ai-tools.sh, with a ledger", "ai", "install_doc_python_deps",
+             lambda w: {"CSA_TODO_FILE": str(w.dir / "todo.tsv")}),
+            ("macos-ai-tools.sh, ledger unset", "ai", "install_doc_python_deps", lambda w: {}),
+            ("macos-update.sh (no csa_todo_add)", "update", "update_default_venv", lambda w: {})):
+        w = World(root, "leftovers_" + re.sub(r"\W+", "_", label))
+        w.uv_std()
+        w.venv(VERSIONED, w.std(), dists=had)
+        w.link(VERSIONED)
+        out, err, rc = w.run(call, script=script, env=env_of(w))
+        cmd = (f'uv pip uninstall --python "{w.default()}/bin/python3" '
+               "onnxruntime pymupdf-layout pymupdf4llm")
+        ledger = w.dir / "todo.tsv"
+        got = _text(ledger) if ledger.exists() else ""
+        where = got if got else err
+        check(rc == 0 and cmd in where,
+              f"{label}: the exact uninstall line is " + ("a to-do" if got else "printed"),
+              show(out, err, rc) + "\nledger:\n" + got)
+        if got:
+            check(any(l.startswith("44\t") and l.endswith("\t" + cmd) for l in got.splitlines()),
+                  f"{label}: order 44, the command as its terminal column", got)
+        check("still has onnxruntime pymupdf-layout pymupdf4llm" in err and "telemetry" in err,
+              f"{label}: a warning names them and why", err)
+        check(set(LEFTOVERS) <= dists_in(w.versioned())
+              and not any("uninstall" in c for c in w.calls()),
+              f"{label}: and nothing was uninstalled", "\n".join(w.calls()))
+
+    w = World(root, "leftovers_none")
+    w.uv_std()
+    w.venv(VERSIONED, w.std(), dists=("pyyaml",))
+    w.link(VERSIONED)
+    out, err, rc = w.run("install_doc_python_deps", env={"CSA_TODO_FILE": str(w.dir / "todo.tsv")})
+    check(rc == 0 and "uninstall" not in err and not (w.dir / "todo.tsv").exists(),
+          "a venv without them: nothing is said", show(out, err, rc))
+
+    w = World(root, "leftovers_pin_failed")
+    w.uv_std(pip_fails=True)
+    w.venv(VERSIONED, w.std(), dists=had)
+    w.link(VERSIONED)
+    (w.scen / "pyvenv.fails").write_text("", encoding="utf-8")
+    out, err, rc = w.run("install_doc_python_deps")
+    check(rc == 0 and "uninstall" not in err,
+          "the deps install failed (offline), so pymupdf is still 2.1: no uninstall advice, which "
+          "would break it", show(out, err, rc))
+
+    print("\ncontrol_leftovers_after_a_rebuild")
+    w = World(root, "leftovers_rebuilt")
+    w.uv_std()
+    w.venv(".default_venv", w.other("3.13"), style="venv", xy="3.13", dists=had)
+    out, err, rc = w.run("install_doc_python_deps")
+    check(rc == 0 and link_target(w.default()) == VERSIONED and "uninstall" not in err
+          and not set(LEFTOVERS) & dists_in(w.versioned()),
+          "a venv rebuilt from scratch never had them: no to-do (the old one keeps them, kept aside)",
+          show(out, err, rc))
+
+
 def update_pip_cases(root: pathlib.Path) -> None:
     """`python3 -m pip list --outdated` in ~/.default_venv reports pymupdf 1.28.2 against 2.1 on every
     run, and `pip install --upgrade pymupdf` brings 2.1 back, with onnxruntime. On the CINO's Mac
@@ -1710,6 +1793,7 @@ def main() -> int:
         repair_cases(root)
         entry_point_cases(root)
         doc_deps_cases(root)
+        leftover_cases(root)
         update_pip_cases(root)
         tool_repair_cases(root)
         plan_cases(root)

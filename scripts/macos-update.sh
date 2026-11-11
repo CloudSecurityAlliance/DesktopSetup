@@ -19,7 +19,7 @@
 
 set -euo pipefail
 
-SCRIPT_VERSION="2026-11-11T04:51Z"
+SCRIPT_VERSION="2026-11-11T04:54Z"
 
 # ── CSA plugin marketplaces ─────────────────────────────────────────
 # Each update run will add any entries from this list that aren't yet
@@ -845,7 +845,7 @@ CSA_DOC_PY_DEPS=(pyyaml "pymupdf>=1.24.3,<2" csa-google-workspace)
 # 3.14t, or a Homebrew Cellar path the next `brew upgrade` deletes.
 #
 # KEEP IN SYNC: CSA_VENV, CSA_DOC_PY_DEPS, the three CSA-Python functions above and every
-# function from venv_cfg_get to ensure_default_venv are duplicated byte-identically in
+# function from venv_cfg_get to default_venv_leftovers are duplicated byte-identically in
 # macos-update.sh (tools/check-duplication.py; tests/test_python_pins.py for the array).
 # tests/test_venv_replacement.py runs them.
 
@@ -1356,6 +1356,45 @@ ensure_default_venv() {
   return 0
 }
 
+# What pymupdf 2.x brought into $CSA_VENV and pinning it below 2 leaves behind: onnxruntime
+# (whose official macOS builds send Microsoft telemetry by default), pymupdf-layout and
+# pymupdf4llm. Installing pymupdf 1.x does not remove them, and this never uninstalls anything
+# itself - they may be the person's own - so it warns, names them, and adds the exact command as a
+# to-do, or prints it when there is no ledger. Only once the pin holds (pymupdf below 2): while
+# pymupdf 2 is still there, removing what it requires would break it. Read from the venv's
+# metadata. Returns 0 always.
+default_venv_leftovers() {
+  local vpy="$CSA_VENV/bin/python3" found="" cmd
+  local code='import glob, os, re, sys
+from importlib import metadata
+def norm(s):
+    return re.sub(r"[-_.]+", "-", s).lower()
+have = dict()
+for d in metadata.distributions(path=glob.glob(os.path.join(sys.argv[1], "lib", "python*", "site-packages"))):
+    try:
+        have[norm(d.metadata["Name"])] = d.version or ""
+    except Exception:
+        pass
+major = re.match(r"\d+", have.get("pymupdf", "0")) or re.match(r"\d+", "0")
+if int(major.group(0)) < 2:
+    print(" ".join(n for n in ("onnxruntime", "pymupdf-layout", "pymupdf4llm") if n in have))'
+  if [[ ! -x "$vpy" ]]; then
+    return 0
+  fi
+  found="$("$vpy" -I -c "$code" "$CSA_VENV" 2>/dev/null)" || found=""
+  if [[ -z "$found" ]]; then
+    return 0
+  fi
+  cmd="uv pip uninstall --python \"$vpy\" $found"
+  warn "$CSA_VENV still has $found, which pymupdf 2 brought in. onnxruntime's official macOS builds send Microsoft telemetry by default; nothing was uninstalled"
+  if declare -F csa_todo_add >/dev/null && csa_todo_add 44 "Remove what pymupdf 2 left in ~/.default_venv: $found (onnxruntime sends Microsoft telemetry by default)" - "$cmd"; then
+    :
+  else
+    warn "  to remove them: $cmd"
+  fi
+  return 0
+}
+
 # ~/.default_venv: its own main() step, BEFORE update_pip. It used to be the tail of update_pip,
 # after two early returns - nothing outdated, or no package names parsed - so on an up-to-date
 # machine it never ran. Repairs an existing venv, never creates one and never installs a Python
@@ -1373,6 +1412,7 @@ update_default_venv() {
   info "Refreshing document deps (${CSA_DOC_PY_DEPS[*]}) in $CSA_VENV"
   csa_venv_pip_install "$CSA_VENV/bin/python3" "${CSA_DOC_PY_DEPS[@]}" \
     || warn "Failed to update $CSA_VENV packages; continuing"
+  default_venv_leftovers
   return 0
 }
 

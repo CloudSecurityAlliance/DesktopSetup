@@ -387,6 +387,13 @@ offered: Homebrew's 3.15, a 3.13, uv's 3.14t, or a Cellar path the next `brew up
     dependencies and has Intel wheels. The element is quoted, because `<2` is a redirection.
   - **markitdown (#157) is not installed** (the plan's D6, reversed): markitdown → magika →
     onnxruntime.
+  - **What an earlier run left is reported, never removed silently.** A venv that had pymupdf
+    2.x keeps onnxruntime, pymupdf-layout and pymupdf4llm after the pin puts 1.x back.
+    `default_venv_leftovers`, after every deps install (`install_doc_python_deps`,
+    `update_default_venv`), warns and adds the to-do `uv pip uninstall --python
+    "<~/.default_venv/bin/python3>" onnxruntime pymupdf-layout pymupdf4llm` (order 44), or
+    prints it without a ledger. It says nothing while pymupdf is still 2.x (the deps install
+    failed), because removing what pymupdf 2 requires would break it.
   - **Guarded twice.** `tests/test_python_pins.py` rejects onnxruntime, markitdown or magika in
     the array or on any script line that runs an `install`, and `tests/test_venv_replacement.py`
     (`doc_deps_pinned`) asserts every install passes the pin as one argument.
@@ -517,7 +524,7 @@ magika; `--self-test` breaks each rule on purpose.
 
 **`macos-update.sh` carries its own copy of the `~/.default_venv` machinery:** `CSA_VENV`,
 `CSA_DOC_PY_DEPS`, the three CSA-Python functions and every function from `venv_cfg_get` to
-`ensure_default_venv`, byte-identical to `macos-ai-tools.sh` (`check-duplication.py` holds the
+`default_venv_leftovers`, byte-identical to `macos-ai-tools.sh` (`check-duplication.py` holds the
 functions, `test_python_pins.py` the array). Change both.
 
 **The plugin lists are single-source** and are the exception: `scripts/csa-plugins.txt` and
