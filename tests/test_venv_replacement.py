@@ -223,6 +223,21 @@ def stub_main(argv: list[str]) -> int:
         if args[:1] == ["list"]:
             return 1
         return 0
+    if tool == "active-py":          # PATH's python3 inside an activated venv (update_pip's)
+        cfg = json.loads((scen / "active.json").read_text(encoding="utf-8"))
+        if args[:2] == ["-m", "pip"]:
+            if "list" in args and "--outdated" in args:
+                print(json.dumps(cfg["outdated"]))
+            elif "install" in args:
+                c = os.environ.get("PIP_CONSTRAINT", "")
+                seen = (pathlib.Path(c).read_text(encoding="utf-8").strip().replace("\n", " ")
+                        if c and os.path.isfile(c) else "<none>")
+                _log(scen, f"constraint {seen} file={c}")
+            return 0
+        if "-c" in args and "sys.prefix" in args[args.index("-c") + 1]:
+            print(cfg["prefix"])
+            return 0
+        os.execv(sys.executable, [sys.executable] + args)   # the JSON filter: run it for real
     if tool == "py-venv":            # <interp as invoked> -m venv <dir>
         self_path, target = args[0], args[1]
         if (scen / "pyvenv.fails").exists():
@@ -333,7 +348,8 @@ def harness(script: pathlib.Path) -> str:
         parts += [extract(n) for n in ("install_doc_python_deps", "csa_tool_repairs",
                                        "csa_todo_add")]
     else:
-        parts += [extract(n, UPD) for n in ("update_default_venv", "update_pip")]
+        parts += [extract(n, UPD) for n in ("update_default_venv", "csa_venv_held_names",
+                                            "pip_upgrades", "update_pip")]
     return "\n".join(parts + OUTPUT)
 
 
@@ -382,7 +398,7 @@ class World:
         for d in (self.bin, self.tools, self.scen, self.uvpy, self.home):
             d.mkdir(parents=True, exist_ok=True)
         (self.scen / "calls.log").write_text("", encoding="utf-8")
-        for t in ("ln", "rm", "date", "readlink"):
+        for t in ("ln", "rm", "date", "readlink", "mktemp", "basename"):
             found = shutil.which(t)
             if found:
                 (self.tools / t).symlink_to(found)
@@ -469,6 +485,15 @@ class World:
 
     def brew(self) -> None:
         self._tool("brew")
+
+    def active_python(self, prefix: pathlib.Path | str, outdated: list[dict]) -> None:
+        """PATH's python3 is a venv's: sys.prefix is `prefix`, and pip reports `outdated`."""
+        (self.scen / "active.json").write_text(
+            json.dumps({"prefix": str(prefix), "outdated": outdated}), encoding="utf-8")
+        f = self.bin / "python3"
+        f.write_text(TOOL.format(py=PY, this=THIS, scen=self.scen, tool="active-py"),
+                     encoding="utf-8")
+        f.chmod(0o755)
 
     def path_python(self, name: str, version: str) -> None:
         f = self.bin / name
@@ -1216,6 +1241,94 @@ def entry_point_cases(root: pathlib.Path) -> None:
           show(out, err, rc, w.calls()))
 
 
+def outdated(name: str, ver: str, latest: str) -> dict:
+    return {"name": name, "version": ver, "latest_version": latest, "latest_filetype": "wheel"}
+
+
+OUTDATED = [outdated("PyMuPDF", "1.28.2", "2.1"), outdated("PyYAML", "6.0.2", "6.0.3"),
+            outdated("requests", "2.31.0", "2.32.5")]
+
+
+def upgrades_of(w: World) -> list[str]:
+    return [c.split()[-1] for c in w.calls()
+            if c.startswith("active-py -m pip install --upgrade") and not c.endswith(" pip")]
+
+
+def constraints_of(w: World) -> dict[str, str]:
+    """package -> the PIP_CONSTRAINT contents its `pip install --upgrade` ran with."""
+    calls, out = w.calls(), {}
+    for i, c in enumerate(calls[:-1]):
+        if c.startswith("active-py -m pip install --upgrade") and calls[i + 1].startswith("constraint "):
+            out[c.split()[-1]] = calls[i + 1].split(" file=")[0][len("constraint "):]
+    return out
+
+
+def update_pip_cases(root: pathlib.Path) -> None:
+    """`python3 -m pip list --outdated` in ~/.default_venv reports pymupdf 1.28.2 against 2.1 on every
+    run, and `pip install --upgrade pymupdf` brings 2.1 back, with onnxruntime. On the CINO's Mac
+    ~/.zshrc activates ~/.default_venv, so update_pip would undo the pin on every -update."""
+    print("\nupdate_pip_leaves_the_pinned_deps_alone_in_the_csa_venv")
+    for label, prefix_of in (("sys.prefix is ~/.default_venv-3.14", lambda w: w.versioned()),
+                             ("sys.prefix is ~/.default_venv (the link)", lambda w: w.default())):
+        w = World(root, "update_pip_csa_" + re.sub(r"\W", "_", label))
+        w.uv_std()
+        w.venv(VERSIONED, w.std())
+        w.link(VERSIONED)
+        w.active_python(prefix_of(w), OUTDATED)
+        tmp = w.dir / "tmp"
+        tmp.mkdir()
+        out, err, rc = w.run("update_pip", script="update",
+                             env={"VIRTUAL_ENV": str(w.default()), "TMPDIR": str(tmp)})
+        ups = upgrades_of(w)
+        check(rc == 0 and "pymupdf" not in [u.lower() for u in ups]
+              and "pyyaml" not in [u.lower() for u in ups],
+              f"{label}: no `pip install --upgrade` of pymupdf or PyYAML (names compared as pip does)",
+              show(out, err, rc, w.calls()))
+        check(ups == ["requests"], f"{label}: everything else is still upgraded", str(ups))
+        seen = constraints_of(w)
+        check(seen.get("requests") == PIN,
+              f"{label}: and held to the pin by a PIP_CONSTRAINT file, so no other upgrade "
+              "can pull pymupdf 2 back", "\n".join(w.calls()))
+        check(not list(tmp.iterdir()), f"{label}: the constraints file (mktemp) is removed",
+              str(list(tmp.iterdir())))
+
+    print("\nupdate_pip_preview_agrees")
+    w = World(root, "update_pip_preview")
+    w.uv_std()
+    w.venv(VERSIONED, w.std())
+    w.link(VERSIONED)
+    w.active_python(w.versioned(), OUTDATED)
+    pre = ('ensure_brew_in_path() { :; }\nSNAPSHOT_FILE=/dev/null\n'
+           + extract("preflight", UPD))
+    out, err, rc = w.run("preflight", script="update", override=pre,
+                         env={"VIRTUAL_ENV": str(w.default())})
+    block = out[out.find("pip packages"):]
+    block = block[:block.find("\n\n")]
+    check(rc == 0 and "requests 2.31.0 -> 2.32.5" in block and "PyMuPDF" not in block
+          and "PyYAML" not in block,
+          "the plan lists what update_pip upgrades: requests, not pymupdf or PyYAML",
+          show(out, err, rc))
+    check("not upgraded here: pyyaml pymupdf csa-google-workspace" in block,
+          "and names the pinned ones it leaves to the Default venv step", block)
+    for fn in ("preflight", "update_pip"):
+        check("pip_upgrades" in code_only(extract(fn, UPD)),
+              f"{fn} reads pip_upgrades (one list for the plan and the run)")
+
+    print("\ncontrol_other_venv_upgrades_everything")
+    w = World(root, "update_pip_other_venv")
+    w.uv_std()
+    w.venv(VERSIONED, w.std())
+    w.link(VERSIONED)
+    other = make_venv(w.dir / "work-venv", str(w.std()), style="uv", xy=PREF)
+    w.active_python(other, OUTDATED)
+    out, err, rc = w.run("update_pip", script="update", env={"VIRTUAL_ENV": str(other)})
+    ups = upgrades_of(w)
+    check(rc == 0 and sorted(u.lower() for u in ups) == ["pymupdf", "pyyaml", "requests"]
+          and set(constraints_of(w).values()) == {"<none>"},
+          "in a venv that is not ~/.default_venv, everything outdated is upgraded, unconstrained "
+          "(so the case above can fail)", show(out, err, rc, w.calls()))
+
+
 def tool_repair_cases(root: pathlib.Path) -> None:
     print("\ncsa_tool_repairs_lists_freethreaded_tool")
     w = World(root, "tool_repairs")
@@ -1548,6 +1661,7 @@ def main() -> int:
         repair_cases(root)
         entry_point_cases(root)
         doc_deps_cases(root)
+        update_pip_cases(root)
         tool_repair_cases(root)
         plan_cases(root)
         plan_agreement_cases(root)

@@ -438,6 +438,15 @@ offered: Homebrew's 3.15, a 3.13, uv's 3.14t, or a Cellar path the next `brew up
   only: no Python install, no Homebrew fallback), then refreshes `CSA_DOC_PY_DEPS`. Until now
   that refresh sat at the end of `update_pip`, after two early returns, so an up-to-date machine
   never reached it.
+- **`update_pip` leaves the pinned deps to that step.** It upgrades whatever `python3 -m pip list
+  --outdated` reports in the active environment, and in `~/.default_venv` that is pymupdf 1.28.2
+  against 2.1 on every run; `pip install --upgrade pymupdf` brings 2.1 back, with onnxruntime
+  (measured with real pip: 2.1 plus onnxruntime without a constraint, 1.28.2 with one). On a Mac
+  whose `~/.zshrc` activates the venv, that would undo the pin every run. So when `python3`'s
+  `sys.prefix` is `-ef` `~/.default_venv` or a `~/.default_venv-*`, `csa_venv_held_names` returns
+  `CSA_DOC_PY_DEPS`' names: `pip_upgrades` (which the plan row prints and `update_pip` runs) drops
+  them, and every other upgrade there runs with `PIP_CONSTRAINT` pointing at a `mktemp` file of
+  the array's version pins, removed afterwards, so nothing else can pull pymupdf 2 back.
 - Windows has no `~/.default_venv`; its document deps are #183.
 - `tests/test_venv_replacement.py` runs all of it on stub uv, brew and interpreters, plus one
   case on real uv with wheels it builds itself (offline), and two controls that prove the cases

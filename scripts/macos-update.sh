@@ -19,7 +19,7 @@
 
 set -euo pipefail
 
-SCRIPT_VERSION="2026-11-11T04:34Z"
+SCRIPT_VERSION="2026-11-11T04:41Z"
 
 # ── CSA plugin marketplaces ─────────────────────────────────────────
 # Each update run will add any entries from this list that aren't yet
@@ -492,17 +492,23 @@ preflight() {
   echo "  Default venv: $(default_venv_plan --no-create)"
   echo ""
 
-  # pip
+  # pip: exactly what update_pip will upgrade (pip_upgrades), so the two cannot disagree.
   if has_command python3; then
-    local outdated_pip venv_note=""
-    outdated_pip=$(python3 -m pip list --outdated --format=columns 2>/dev/null || true)
+    local pip_up pip_held venv_note="" up_name up_ver up_latest
+    pip_up="$(pip_upgrades)" || pip_up=""
+    pip_held="$(csa_venv_held_names)" || pip_held=""
     [[ -n "${VIRTUAL_ENV:-}" ]] && venv_note=" (venv: $(basename "$VIRTUAL_ENV"))"
 
-    if [[ -n "$outdated_pip" ]]; then
+    if [[ -n "$pip_up" ]]; then
       echo "  pip packages to update${venv_note}:"
-      echo "$outdated_pip" | while IFS= read -r line; do echo "    $line"; done
+      while IFS=$'\t' read -r up_name up_ver up_latest; do
+        echo "    $up_name $up_ver -> $up_latest"
+      done <<< "$pip_up"
     else
       echo "  pip packages${venv_note}: all up to date"
+    fi
+    if [[ -n "$pip_held" ]]; then
+      echo "    not upgraded here: ${pip_held//$'\n'/ } (the Default venv step installs them, pinned)"
     fi
   else
     echo "  Python: not available (skipping pip)"
@@ -568,34 +574,105 @@ update_npm() {
   csa_npm update -g || warn "npm update -g failed; continuing"
 }
 
+# The names in CSA_DOC_PY_DEPS (no versions), one per line, when PATH's python3 is ~/.default_venv
+# or one of its ${CSA_VENV}-<X.Y> directories; nothing otherwise. update_default_venv installs
+# those, pinned, so update_pip must leave them alone: `pip list --outdated` reports pymupdf 1.x
+# against 2.x on every run, and `pip install --upgrade pymupdf` brings 2.x back, with onnxruntime
+# (whose official macOS builds send Microsoft telemetry by default). On the CINO's Mac ~/.zshrc
+# activates ~/.default_venv, so that would undo the pin every run.
+# Decided with -ef on python3's sys.prefix, never by string: a shell may hold ~/.default_venv while
+# sys.prefix is ~/.default_venv-3.14.
+csa_venv_held_names() {
+  local prefix v held=0 dep
+  prefix="$(python3 -I -c 'import sys; print(sys.prefix)' 2>/dev/null)" || prefix=""
+  if [[ -z "$prefix" || ! -d "$prefix" ]]; then
+    return 0
+  fi
+  for v in "$CSA_VENV" "$CSA_VENV"-*; do
+    if [[ -e "$v" && "$prefix" -ef "$v" ]]; then
+      held=1
+    fi
+  done
+  if [[ $held -eq 0 ]]; then
+    return 0
+  fi
+  for dep in "${CSA_DOC_PY_DEPS[@]}"; do
+    dep="${dep%%[<>=!~;]*}"
+    printf '%s\n' "${dep%%\[*}"
+  done
+  return 0
+}
+
+# What update_pip upgrades: `python3 -m pip list --outdated`, one "name<TAB>version<TAB>latest" line
+# per package, minus csa_venv_held_names (compared the way pip compares names: case-insensitive,
+# runs of -_. alike). The plan row prints this and update_pip runs it, so they cannot disagree.
+pip_upgrades() {
+  local outdated held=""
+  outdated="$(python3 -m pip list --outdated --format=json 2>/dev/null)" || outdated=""
+  if [[ -z "$outdated" || "$outdated" == "[]" ]]; then
+    return 0
+  fi
+  held="$(csa_venv_held_names)" || held=""
+  printf '%s\n' "$outdated" | python3 -I -c 'import json, re, sys
+norm = lambda s: re.sub(r"[-_.]+", "-", s).lower()
+held = set(norm(n) for n in sys.argv[1].split())
+for p in json.load(sys.stdin):
+    if norm(p["name"]) not in held:
+        print("%s\t%s\t%s" % (p["name"], p.get("version", "?"), p.get("latest_version", "?")))' "$held" 2>/dev/null || true
+  return 0
+}
+
 update_pip() {
   if ! has_command python3; then return 0; fi
 
-  local venv_note=""
+  local venv_note="" upgrades held="" constraint="" dep name ver latest
   [[ -n "${VIRTUAL_ENV:-}" ]] && venv_note=" (venv: $(basename "$VIRTUAL_ENV"))"
 
   info "Updating pip itself${venv_note}"
   python3 -m pip install --upgrade pip || warn "pip upgrade failed; continuing"
 
   info "Updating pip packages${venv_note}"
-  local outdated
-  outdated=$(python3 -m pip list --outdated --format=json 2>/dev/null || echo "[]")
-
-  if [[ "$outdated" == "[]" ]] || [[ -z "$outdated" ]]; then
+  upgrades="$(pip_upgrades)" || upgrades=""
+  held="$(csa_venv_held_names)" || held=""
+  if [[ -n "$held" ]]; then
+    info "  Not upgrading ${held//$'\n'/ }: the Default venv step installs them, pinned"
+  fi
+  if [[ -z "$upgrades" ]]; then
     echo "  All pip packages are up to date"
     return 0
   fi
 
-  # Extract package names and upgrade them one at a time
-  local pkg_names
-  pkg_names=$(echo "$outdated" | python3 -c "import sys, json; print(' '.join(p['name'] for p in json.load(sys.stdin)))" 2>/dev/null || true)
+  # In ~/.default_venv every other upgrade is held to CSA_DOC_PY_DEPS's version pins too, so
+  # upgrading something that depends on pymupdf cannot bring pymupdf 2 (and onnxruntime) back.
+  if [[ -n "$held" ]]; then
+    constraint="$(mktemp "${TMPDIR:-/tmp}/csa-pip-constraints.XXXXXX")" || constraint=""
+    if [[ -z "$constraint" ]]; then
+      warn "Could not create a pip constraints file; upgrading without one"
+    else
+      for dep in "${CSA_DOC_PY_DEPS[@]}"; do
+        case "$dep" in
+          *[\<\>=\!~]*) printf '%s\n' "$dep" ;;
+        esac
+      done > "$constraint"
+    fi
+  fi
 
-  if [[ -z "$pkg_names" ]]; then return 0; fi
-
-  for pkg in $pkg_names; do
-    info "  Upgrading $pkg"
-    python3 -m pip install --upgrade "$pkg" 2>/dev/null || warn "Failed to upgrade $pkg; continuing"
-  done
+  while IFS=$'\t' read -r name ver latest; do
+    if [[ -z "$name" ]]; then
+      continue
+    fi
+    info "  Upgrading $name ($ver -> $latest)"
+    if [[ -n "$constraint" ]]; then
+      PIP_CONSTRAINT="$constraint" python3 -m pip install --upgrade "$name" 2>/dev/null \
+        || warn "Failed to upgrade $name; continuing"
+    else
+      python3 -m pip install --upgrade "$name" 2>/dev/null || warn "Failed to upgrade $name; continuing"
+    fi
+  done <<< "$upgrades"
+  if [[ -n "$constraint" ]]; then
+    rm -f "$constraint"
+  fi
+  return 0
 }
 
 # Install packages into a venv that may not contain pip.
