@@ -23,7 +23,7 @@
 
 $ErrorActionPreference = 'Stop'
 
-$ScriptVersion = "2026-11-11T04:42Z"
+$ScriptVersion = "2026-11-11T17:38Z"
 
 # ── CSA plugin marketplaces ─────────────────────────────────────────
 # Plugin marketplaces to register with Claude Code. Each entry is an
@@ -1141,7 +1141,7 @@ function Show-Preflight {
         Write-Host "  Codex CLI ......... migrate from winget -> npm (settings preserved)"
     } elseif (Has-Command codex) {
         $codexVer = Get-ToolVersion codex '--version'
-        Write-Host "  Codex CLI ......... installed ($codexVer)"
+        Write-Host "  Codex CLI ......... installed ($codexVer); update to latest via npm"
     } else {
         Write-Host "  Codex CLI ......... install via npm"
     }
@@ -1149,7 +1149,7 @@ function Show-Preflight {
     # Gemini
     if (Has-Command gemini) {
         $geminiVer = Get-ToolVersion gemini '--version'
-        Write-Host "  Gemini CLI ........ installed ($geminiVer)"
+        Write-Host "  Gemini CLI ........ installed ($geminiVer); update to latest via npm"
     } else {
         Write-Host "  Gemini CLI ........ install via npm"
     }
@@ -2063,16 +2063,16 @@ function Install-Codex {
         return
     }
 
+    # `install -g <pkg>@latest`, never `update -g <pkg>` (#153): npm updates only what npm
+    # installed, and on macOS the update failed with EACCES under Homebrew's node@24 on every
+    # re-run. The install was already this function's fallback; now it is the only command.
     if (-not $script:codexMigration -and (Has-Command codex)) {
         Write-Info "Updating Codex CLI"
-        $null = Invoke-NativeNpm { npm update -g @openai/codex }
-        if ($LASTEXITCODE -ne 0) {
-            $null = Invoke-NativeNpm { npm install -g @openai/codex }
-            if ($LASTEXITCODE -ne 0) { Write-Warn "Failed to update Codex CLI" }
-        }
+        $null = Invoke-NativeNpm { npm install -g @openai/codex@latest }
+        if ($LASTEXITCODE -ne 0) { Write-Warn "Failed to update Codex CLI" }
     } else {
         Write-Info "Installing Codex CLI"
-        $null = Invoke-NativeNpm { npm install -g @openai/codex }
+        $null = Invoke-NativeNpm { npm install -g @openai/codex@latest }
         if ($LASTEXITCODE -ne 0) { Write-Warn "Failed to install Codex CLI" }
     }
 }
@@ -2083,16 +2083,14 @@ function Install-Gemini {
         return
     }
 
+    # @latest, never `update -g`, for the reason Install-Codex gives (#153).
     if (Has-Command gemini) {
         Write-Info "Updating Gemini CLI"
-        $null = Invoke-NativeNpm { npm update -g @google/gemini-cli }
-        if ($LASTEXITCODE -ne 0) {
-            $null = Invoke-NativeNpm { npm install -g @google/gemini-cli }
-            if ($LASTEXITCODE -ne 0) { Write-Warn "Failed to update Gemini CLI" }
-        }
+        $null = Invoke-NativeNpm { npm install -g @google/gemini-cli@latest }
+        if ($LASTEXITCODE -ne 0) { Write-Warn "Failed to update Gemini CLI" }
     } else {
         Write-Info "Installing Gemini CLI"
-        $null = Invoke-NativeNpm { npm install -g @google/gemini-cli }
+        $null = Invoke-NativeNpm { npm install -g @google/gemini-cli@latest }
         if ($LASTEXITCODE -ne 0) { Write-Warn "Failed to install Gemini CLI" }
     }
 }
