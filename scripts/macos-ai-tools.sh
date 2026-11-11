@@ -32,7 +32,7 @@
 
 set -euo pipefail
 
-SCRIPT_VERSION="2026-11-11T01:25Z"
+SCRIPT_VERSION="2026-11-11T01:36Z"
 
 # ── CSA plugin marketplaces ─────────────────────────────────────────
 # Plugin marketplaces to register with Claude Code. Each entry is an
@@ -1454,6 +1454,9 @@ default_venv_state() {
 # with none found changes nothing, and a Cellar-pinned venv is not rebuilt onto a Python that is on
 # a Cellar path too. A plan that said "rebuild" there named a step that never runs. find_csa_python
 # never installs, so the plan can ask it before anyone has agreed to anything.
+# Only macos-update.sh passes --no-create; macos-ai-tools.sh calls it with no argument, which
+# older ShellCheck (CI's 0.9; not 0.11) reports as SC2120. The optional argument is the design.
+# shellcheck disable=SC2120
 default_venv_plan() {
   local versioned="${CSA_VENV}-${CSA_PYTHON_PREFERRED}"
   local deps="${CSA_DOC_PY_DEPS[*]} (then ${CSA_DOC_PY_DEPS_OPTIONAL[*]}, best effort)"
@@ -1626,6 +1629,9 @@ default_venv_build() {
 # the migration hold ~/.default_venv. The active shell's directory never moves - or, for a real
 # directory, its path now resolves through the link - so nothing it holds dangles; it gets a
 # to-do to open a new terminal.
+# Only macos-update.sh passes --no-create; macos-ai-tools.sh calls it with no argument, which
+# older ShellCheck (CI's 0.9; not 0.11) reports as SC2120. The optional argument is the design.
+# shellcheck disable=SC2120
 ensure_default_venv() {
   local create=1 versioned="${CSA_VENV}-${CSA_PYTHON_PREFERRED}" state action old reason
   local what py="" broken="" aside="" why="" active=0 v extras=""
