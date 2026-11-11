@@ -93,7 +93,7 @@ tests/
   test_*.py                  # thirteen standalone executables — run one directly with python3
   NativeWrappers.Tests.ps1   # Pester; the only suite that needs real 5.1 to mean anything
   DesktopApps.Tests.ps1      # Pester; windows-update.ps1's wait before replacing a running app
-  NpmGlobals.Tests.ps1       # Pester; npm updates only what npm installed (#153)
+  NpmGlobals.Tests.ps1       # Pester; the npm installers run install -g <pkg>@latest (#153)
 docs/
   desktop-ai-apps.md         # where each desktop AI app comes from, and how it stays current
   periodic-sweep.md          # the weekly sweep runbook
@@ -374,25 +374,28 @@ auto-updates); npm for the Codex and Gemini CLIs and for Wrangler; **uv for Pyth
   with EACCES on every installer re-run (its `|| npm install -g` fallback did the work), and the
   updater's bare `npm update -g` installed a registry npm over Homebrew's link farm, a copy
   `bin/npm` never runs. Now:
-  - the installers run `npm install -g <pkg>@latest`, never `update -g`;
-  - the updaters list `npm outdated -g`, drop `npm` and `corepack` (Homebrew's node@24 and
-    winget's Node ship them, and upgrade them with Node), and `install -g` the rest `@latest`
-    in one call. The macOS plan row lists exactly those (`npm_update_plan`), and names npm and
-    corepack as left to Homebrew;
+  - the installers, on both platforms, run `npm install -g <pkg>@latest`, never `update -g`;
+  - `macos-update.sh` lists `npm outdated -g`, drops `npm` and `corepack`, and `install -g`s the
+    rest `@latest` in one call. The plan row lists exactly those (`npm_update_plan`). It calls
+    npm and corepack Homebrew's (moved by `brew upgrade`) **only when they are** Homebrew's link
+    farm into its Cellar (`npm_owner_note`). Otherwise it names where they are, because they are
+    then not updated by anything here: an nvm Node, or a registry npm that an earlier
+    `npm update -g` put over Homebrew's links;
   - **a package `npm link` put there is skipped**, and named. `npm outdated -g` lists it, and
     `install -g <pkg>@latest` replaces the link with the registry copy where `update -g` left it
-    (both measured on npm 11.20). The test is the link itself: `-L` on macOS, a reparse point
-    (npm makes a junction) on Windows. The installers do not check: a linked Codex, Gemini or
+    (both measured on npm 11.20). The installers do not check: a linked Codex, Gemini or
     Wrangler is replaced there by the registry copy, judged too rare to guard;
   - **a failed `npm outdated` is never "all current".** It exits 1 both when something is
-    outdated and when it failed (measured on npm 11.20: an unreachable registry exits 1, empty
-    stdout under `--parseable`, an `{"error": …}` object on stdout under `--json`), so the
-    records decide, not the status. Windows reads `--json`, because `--parseable`'s first field
-    is a path and a Windows path has a colon in it.
+    outdated and when it failed (measured on npm 11.20: an unreachable registry exits 1 with
+    empty stdout under `--parseable`), so the records decide, not the status.
+
+  **`windows-update.ps1` still runs a bare `npm update -g`.** Its rewrite is a separate draft PR
+  waiting for a Windows measurement (#184): there `npm.cmd` prefers
+  `<global prefix>\node_modules\npm` when it exists, so on a PC where someone ran
+  `npm install -g npm`, excluding npm would freeze the npm that runs.
 
   `tests/test_homebrew_owns_npm.py` (bash, with the pre-#153 code as controls; `--rev 7b6d743`
-  reports the defect) and `tests/NpmGlobals.Tests.ps1` (Pester) pin it. Whether npm is in the
-  global tree on Windows at all is not measured yet; #153 lists the checks.
+  reports the defect) and `tests/NpmGlobals.Tests.ps1` (Pester, the Windows installers) pin it.
 
 ### `~/.default_venv`: a link to a versioned venv (macOS)
 
