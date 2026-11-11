@@ -8,7 +8,7 @@ his.
 # SDD ledger — plan: plans/2026-11-10-python-314-standard-build.md
 
 Spec: #179 (body + 2026-11-10 comments), CSA-Plugins#197, #157, DEC-025 2026-11-10 amendment (#312). Reachable.
-Scope this run: Tasks 1, 2, 3 (DesktopSetup worktree `scratchpad/ds-py314`, branch feat/python-314-standard-build), Task 5 (CSA-Plugins scratch clone, branch feat/python-314-standard-build), Task 6. Tasks 4W/5W handed to a Windows session (#184, CINO D5).
+Scope this run: Tasks 1, 2, 3 (DesktopSetup worktree `<session-scratch>/ds-py314`, branch feat/python-314-standard-build), Task 5 (CSA-Plugins scratch clone, branch feat/python-314-standard-build), Task 6. Tasks 4W/5W handed to a Windows session (#184, CINO D5).
 Models: implementers opus (Task 1 sonnet); every review fable (CINO rule B12).
 
 ## Pre-flight scan
@@ -78,7 +78,7 @@ Task 3: minor (deferred): macos-latest is arm64; Intel path proven only by stubs
 Task 3: minor (deferred): ai-tools + no Python found + Cellar-pinned venv: plan says rebuild; if brew fallback returned a /Cellar/ path the run would leave it (untraced, untested).
 Task 3: minor (deferred): fresh Intel build attempts markitdown twice (quiet in build, warning in caller).
 Task 3: complete (commits 956b798..97108e7, review clean)
-Task 5: dispatched (CSA-Plugins clone scratchpad/csa-plugins-py314, branch feat/python-314-standard-build, base 235277d, implementer opus)
+Task 5: dispatched (CSA-Plugins clone <session-scratch>/csa-plugins-py314, branch feat/python-314-standard-build, base 235277d, implementer opus)
 Controller: filed CSA-Plugins#202 by mistake (duplicate of #175, search result not read before create); closed #202, added the 2026-11-10 repro to #175. Lesson: search and create in separate steps.
 Task 5: implemented 3aac31a (DONE_WITH_CONCERNS: offline = no rebuild even if a good 3.14 exists; restart to-do macOS-only parity exception under D5; restart to-do now also after husk/sticky rebuilds; bash 3.2 covered locally only — macOS CI in a private repo bills minutes, CINO's call). Controller measured: uv tool upgrade --python <same verified path> → 'Nothing to upgrade', pyvenv.cfg inode/mtime unchanged → no churn. Review dispatched (fable).
 Task 5: review (fable) — spec ✅, quality Approved; 1 Important (plan-mandated): offline fallback `uv tool upgrade --python 3.14` rebuilds a wrong-version tool (measured) right after warning it won't; README repeats it.
@@ -101,7 +101,7 @@ Task 6: dispatched (acceptance; DesktopSetup worktree @97108e7 + CSA-Plugins clo
 Task 6: complete (commit 495ad6b; 43/43 assertions with real uv 0.13.7 + real csa-zendesk in isolated scratch HOME; run 1 rebuilt dangling venv + 3.14t tool onto verified 3.14; run 2 no-op; scratch root deleted)
 Task 6: finding (load-bearing, for final fix wave): exported UV_PYTHON_PREFERENCE makes uv refuse --managed-python → find_csa_python finds nothing (measured); gate csa_python_path breaks the same way (by code).
 Task 6: minor (deferred, honesty): -update plan row "this script installs none" incomplete for CSA members (same run's gate step installs 3.14; next -update repairs).
-Ruling: markitdown is removed from the default ~/.default_venv install (and the optional-deps machinery with it, if it becomes dead) — because onnxruntime >=1.29 official macOS/Linux builds ship 1DS telemetry ON by default (persistent device id + event cache under ~/Library/Application Support/Microsoft/DeveloperTools/.onnxruntime, uploads to mobile.events.data.microsoft.com; off only with ORT_DISABLE_TELEMETRY=1 before load), and markitdown requires magika→onnxruntime unconditionally; privacy ranks first (P1) and reverses the AI's own D6 — cost if wrong: #157's markitdown waits for a no-telemetry route (vate's magika stub) or the CINO's explicit yes.
+Ruling: markitdown is removed from the default ~/.default_venv install (and the optional-deps machinery with it, if it becomes dead) — because onnxruntime >=1.29 official macOS/Linux builds ship 1DS telemetry ON by default (persistent device id + event cache under ~/Library/Application Support/Microsoft/DeveloperTools/.onnxruntime, uploads to mobile.events.data.microsoft.com; off only with ORT_DISABLE_TELEMETRY=1 before load), and markitdown requires magika→onnxruntime unconditionally; privacy ranks first (P1) and reverses the AI's own D6 — cost if wrong: #157's markitdown waits for a no-telemetry route (the magika stub of vate (the valid-ai-ted-evidence-based plugin)) or the CINO's explicit yes.
 Ruling (extends the markitdown ruling): pin `pymupdf<2` in CSA_DOC_PY_DEPS — pymupdf 2.0/2.1 requires onnxruntime unconditionally (telemetry on by default; no macOS x86_64 wheel), pymupdf 1.28.2 has no deps and Intel wheels; document-pipeline uses only core pymupdf — cost if wrong: staff miss pymupdf 2.x features nothing here uses. Filed CSA-Document-Pipeline#198 for its own unbounded pin.
 CINO decision (2026-11-10, "Remove it + its cache (Recommended)"): on his Mac, markitdown/magika/onnxruntime/pymupdf-layout/pymupdf4llm removed from ~/.default_venv-3.14, pymupdf → 1.28.2, ~/Library/Application Support/Microsoft/DeveloperTools/.onnxruntime deleted (it dated from Sep 22: other software loads onnxruntime — his `markitdown` uv tool on 3.13 carries onnxruntime 1.31.1; not touched, to raise with him).
 Final review: dispatched for both repos (fable).

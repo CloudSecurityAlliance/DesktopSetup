@@ -49,9 +49,9 @@ A stage table stands in for a review map: the work is two PRs with one dependenc
     `python3 tests/test_python_pins.py --self-test`, `python3 tools/check-doc-deps-resolve.py --self-test`.
   - The last one needs PyPI. The real-uv and BSD-`mv` cases run only on macOS, or in CI's `venv-macos` job.
 - **CSA-Plugins.**
-  - `python3 internal-setup/test-tool-interpreter.py` (153 cases; run it under `/bin/bash` 3.2 on a Mac, since CI is
-    bash 5);
-  - `python internal-setup/check-setup-scripts.py --self-test` (28 invariants).
+  - `python3 internal-setup/test-tool-interpreter.py` (153 cases; on a Mac it uses `/bin/bash` 3.2 by itself, and CI
+    runs it on bash 5);
+  - `python3 internal-setup/check-setup-scripts.py --self-test` (28 invariants, called "defects" in the checker).
 - **CI:** DesktopSetup's `lint.yml` (bash, duplication, powershell, venv-macos) and the new `doc-deps.yml`.
   CSA-Plugins' `checks.yml`.
 - **Nothing here needs credentials or money.** The acceptance harness reads only the gh config **path** (its contents
@@ -66,7 +66,8 @@ A stage table stands in for a review map: the work is two PRs with one dependenc
   - a plan row the user consents to names what runs, truthfully;
   - nothing the user owns is deleted, and old venvs are kept beside the new one;
   - **no install path brings in software with telemetry switched on** (the CINO's order puts safety and privacy first).
-- **Platform:** bash 3.2 and `set -euo pipefail` (macOS); PowerShell 5.1 for the one `.ps1` change.
+- **Platform:** bash 3.2 and `set -euo pipefail` (macOS); PowerShell 5.1 for the one behavioural `.ps1` change.
+  Three `.ps1` files change; the other edits are a no-op constant, comments and version bumps (claim 15).
 
 ## 6. Claims to verify
 
@@ -77,14 +78,14 @@ A stage table stands in for a review map: the work is two PRs with one dependenc
 | 3 | An active venv or an exported `UV_PYTHON_PREFERENCE` can't blind the resolver | `--system`, the subshell `unset` | `find_passes_system_flag`, `uv_python_preference_exported`, `flags_dropped_are_caught`, and `real_uv_resolver` in the `venv-macos` job | pass, with real uv |
 | 4 | `~/.default_venv` becomes a **relative** link to `~/.default_venv-3.14`; an existing directory is kept under a versioned name and never deleted | `ensure_default_venv` | `tests/test_venv_replacement.py` layout cases; acceptance A-rows | pass; old directory present |
 | 5 | The flip works on BSD `mv` (`mv -h`), so the new link is never dropped inside the old target | same | `control_plain_mv_caught`, run on `macos-latest` | pass on macOS |
-| 6 | A second run changes nothing | everything | `second_run_noop` (venv and gate); acceptance run 2 | no `uv venv` or `--force`; inode/mtime unchanged |
-| 7 | Plan rows match what the run does, in every state and mode | `default_venv_plan` | `plan_agrees_with_run` (15 state/mode pairs) | pass |
-| 8 | No install path names markitdown, magika or onnxruntime, and pymupdf is pinned `<2` as one argument | `CSA_DOC_PY_DEPS`, both copies, plus the Windows string | `tests/test_python_pins.py` (+ `--self-test`), `doc_deps_cases` | pass; the self-test fails on 495ad6b |
+| 6 | A second run rebuilds nothing | everything | `second_run_noop` (venv: content and call log; gate: call log); acceptance run 2 (inode/mtime) | no `uv venv` or `--force`. The gate still calls `uv tool upgrade --python <path>`, a no-op by measurement ("Nothing to upgrade"), which may touch `uv-receipt.toml`'s mtime |
+| 7 | Plan rows match what the run does, in the 15 tested state/mode pairs | `default_venv_plan` | `plan_agrees_with_run` in `tests/test_venv_replacement.py` | pass. **Untested:** ai-tools mode, no Python found, a Cellar-pinned venv, with Homebrew's fallback returning a Cellar path (the ledger defers it as unreachable) |
+| 8 | No install path names markitdown, magika or onnxruntime, and pymupdf is pinned `<2` as one argument | `CSA_DOC_PY_DEPS`, both copies, plus the Windows string | `tests/test_python_pins.py` (+ `--self-test`), `doc_deps_cases` in `tests/test_venv_replacement.py` | pass; the plain `test_python_pins.py` fails on 495ad6b (exit 1, 4 problems) |
 | 9 | What the dependency set **resolves to** has no onnxruntime | the pin | `tools/check-doc-deps-resolve.py` (`uv pip compile`) | no `onnxruntime`; the self-test proves unpinned pymupdf still drags it in |
-| 10 | `-update` never re-upgrades pymupdf to 2.x in an active CSA venv, yet still keeps the other CSA deps current | `update_pip`, `csa_venv_held_names`, `update_default_venv` | `update_pip_leaves_the_pinned_deps_alone_in_the_csa_venv`, `update_pip_preview_agrees`, `upgrade_cases` | pass |
-| 11 | A gate tool with an interpreter problem is rebuilt with `--force --python <verified path>`, never `--python 3.14`, even when `uv tool list` omits it | CSA-Plugins `csa_python_path`, routing | `rebuild_uses_verified_path`, `dead_interpreter_routes_force`, `fresh_install_uses_verified_path`, `upgrade_uses_verified_path` | pass, ×4 scripts |
-| 12 | Offline, a working tool with a problem is left untouched and **reported as "left as it is … not checked for updates"**; a broken one gets one honest best-effort reinstall | routing | `e2e_offline_wrong_version_left_alone`, `e2e_offline_no_force`, `e2e_offline_dead_interpreter_best_effort`, `_left_alone` | pass; "already current" absent |
-| 13 | From the CINO's exact broken state, one run repairs both the venv and a 3.14t tool onto the verified 3.14, and a second run changes nothing | all | the acceptance doc's re-run section (real uv 0.13.7, real `csa-zendesk`) | 59/59 |
+| 10 | `-update` never re-upgrades pymupdf to 2.x in an active CSA venv, yet still keeps the other CSA deps current | `update_pip`, `csa_venv_held_names`, `update_default_venv` | `update_pip_leaves_the_pinned_deps_alone_in_the_csa_venv`, `update_pip_preview_agrees`, `upgrade_cases`, all in `tests/test_venv_replacement.py` | pass |
+| 11 | **When a verified path exists,** a gate tool with an interpreter problem is rebuilt with `--force --python <verified path>`, never `--python 3.14`, even when `uv tool list` omits it. Without one, see claim 12: a broken tool gets `--python 3.14`, and a sound tool keeps the fallback upgrade | CSA-Plugins `csa_python_path`, routing | `e2e_rebuild_uses_verified_path`, `e2e_dead_interpreter_routes_force`, `e2e_fresh_install_uses_verified_path`, `e2e_upgrade_uses_verified_path` | pass, ×4 scripts |
+| 12 | Offline, a working tool with a problem is left untouched and **reported as "left as it is … not checked for updates"**; a broken one gets one honest best-effort reinstall | routing | `e2e_offline_wrong_version_left_alone`, `e2e_offline_no_force`, `e2e_offline_dead_interpreter_best_effort`, `e2e_offline_sound_tool_keeps_fallback_upgrade` (the `_left_alone` helper asserts the message) | pass; "already current" absent |
+| 13 | From the CINO's exact broken state, one run repairs both the venv and a 3.14t tool onto the verified 3.14, and a second run rebuilds nothing | all | the acceptance doc's re-run section (real uv 0.13.7, real `csa-zendesk`) | 59/59 |
 | 14 | No credential, token or OAuth file is touched | — | **No automated check.** Read the diffs: no change touches credential paths, and the gate scripts' credential code is unchanged | the reviewer's own reading |
 | 15 | Windows behaviour is unchanged apart from the pymupdf pin string and the Task 1 constant and comments | `scripts/windows-*.ps1` | `git diff 40ee0d4..<head> -- 'scripts/*.ps1'` | only those lines change, plus version bumps |
 
@@ -95,8 +96,8 @@ A stage table stands in for a review map: the work is two PRs with one dependenc
   - the Homebrew `opt/` home would have looped;
   - `update_pip`'s early returns made the venv block unreachable.
 
-  All were folded into the plan. Two plan re-reviews followed: one with 12 fixes (including measured `mv -h`,
-  `--relocatable` and `find --system`), and one with 3 more fixes. Both approved.
+  All were folded into the plan. Two plan re-reviews followed: one that required 12 fixes, including measured `mv -h`,
+  `--relocatable` and `find --system` (plan commits 5dd4b57 and 660feb3), and one with 3 more fixes. Both approved.
 - **The per-task reviews (fable)** are in the ledger, task by task: the reviews, every fix round and the CI catches.
   Notable catches:
   - the plan row promised a rebuild `-update` couldn't do;
@@ -121,7 +122,7 @@ A stage table stands in for a review map: the work is two PRs with one dependenc
 
   All of this is recorded on #184 as the first Windows task.
 - **Registrations are Plan 2** (#179 Part 2 items 1, 2, 6–8). This PR repairs interpreters, not client registrations.
-- **markitdown is out of the default venv** (#157), until there is a route without telemetry (vate's magika stub) or
+- **markitdown is out of the default venv** (#157), until there is a route without telemetry (the magika stub used by vate, the `valid-ai-ted-evidence-based` plugin, CINO-Plugins #144) or
   the CINO says yes.
 - **The Intel-Mac path is proven by stubs only** (`macos-latest` is arm64). After the pin, pymupdf 1.28.2 has a real
   Intel wheel.
@@ -133,6 +134,18 @@ A stage table stands in for a review map: the work is two PRs with one dependenc
   GitHub's default.
 - **The acceptance re-run recorded the code at `5150947`.** Its row C-U2 quotes the info line from before the targeted
   fix.
+- **An existing venv keeps onnxruntime until the person acts (ruling I6).** A venv that already holds onnxruntime,
+  pymupdf-layout or pymupdf4llm keeps them. The run warns and adds a to-do with the exact uninstall line, and never
+  uninstalls silently, so telemetry stays on such a machine until the person acts. A fresh or rebuilt `-3.14` venv
+  never has them.
+- **A torn migrate under `-update`:** a kill between moving the old directory aside and writing the link leaves no
+  `~/.default_venv`. `-update` never creates one, so only the next `macos-ai-tools.sh` run heals it (the window is
+  one rename). This bears on claim 4.
+- **A mid-download failure in the gate's new `--force` branch exits 1.** The tool is left intact, because uv resolves
+  before teardown, but registration is skipped for that run.
+- **GitHub disables a scheduled workflow after 60 days of repository inactivity,** which affects `doc-deps.yml`'s
+  weekly run.
+- **`Find-UsablePython` and the Windows summary assertion are untouched** (ledger Ruling 2): that is Windows work, #184.
 - **The deferred minors,** all in the ledger with can-wait reasons: the to-do title case, the leftovers wording, the
   kept-aside venv label, and others.
 
