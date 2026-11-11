@@ -471,7 +471,16 @@ offered: Homebrew's 3.15, a 3.13, uv's 3.14t, or a Cellar path the next `brew up
   `sys.prefix` is `-ef` `~/.default_venv` or a `~/.default_venv-*`, `csa_venv_held_names` returns
   `CSA_DOC_PY_DEPS`' names: `pip_upgrades` (which the plan row prints and `update_pip` runs) drops
   them, and every other upgrade there runs with `PIP_CONSTRAINT` pointing at a `mktemp` file of
-  the array's version pins, removed afterwards, so nothing else can pull pymupdf 2 back.
+  the array's version pins, removed afterwards, so nothing else can pull pymupdf 2 back. Each
+  of those pip calls gets `</dev/null`: the loop reads its list on stdin, and a pip that
+  prompted would swallow the names still to come.
+- **So `update_default_venv` keeps them current itself.** `csa_venv_pip_install` passes
+  `--upgrade` on its uv path, as its pip fallback always did. Without it, measured on uv 0.13.7,
+  `uv pip install` leaves an installed package that satisfies the request alone ("Would make no
+  changes" for an outdated idna), and in an active `~/.default_venv` nothing upgraded pyyaml or
+  csa-google-workspace any more. The pin travels in the same call: `--upgrade` with
+  `pymupdf>=1.24.3,<2` moved 1.27.1 to 1.28.2, never to 2.x. The `.new-$$` build calls `uv pip`
+  directly, without `--upgrade`, which makes no difference in an empty venv.
 - Windows has no `~/.default_venv`; its document deps are #183.
 - `tests/test_venv_replacement.py` runs all of it on stub uv, brew and interpreters, plus one
   case on real uv with wheels it builds itself (offline), and two controls that prove the cases

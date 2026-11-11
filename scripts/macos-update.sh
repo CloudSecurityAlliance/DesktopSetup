@@ -19,7 +19,7 @@
 
 set -euo pipefail
 
-SCRIPT_VERSION="2026-11-11T04:54Z"
+SCRIPT_VERSION="2026-11-11T05:30Z"
 
 # ── CSA plugin marketplaces ─────────────────────────────────────────
 # Each update run will add any entries from this list that aren't yet
@@ -508,7 +508,7 @@ preflight() {
       echo "  pip packages${venv_note}: all up to date"
     fi
     if [[ -n "$pip_held" ]]; then
-      echo "    not upgraded here: ${pip_held//$'\n'/ } (the Default venv step installs them, pinned)"
+      echo "    not upgraded here: ${pip_held//$'\n'/ } (the Default venv step upgrades them, with pymupdf held below 2)"
     fi
   else
     echo "  Python: not available (skipping pip)"
@@ -636,7 +636,7 @@ update_pip() {
   upgrades="$(pip_upgrades)" || upgrades=""
   held="$(csa_venv_held_names)" || held=""
   if [[ -n "$held" ]]; then
-    info "  Not upgrading ${held//$'\n'/ }: the Default venv step installs them, pinned"
+    info "  Not upgrading ${held//$'\n'/ }: the Default venv step upgraded them, with pymupdf held below 2"
   fi
   if [[ -z "$upgrades" ]]; then
     echo "  All pip packages are up to date"
@@ -658,16 +658,18 @@ update_pip() {
     fi
   fi
 
+  # The loop reads the list on stdin, so pip gets /dev/null: a pip that prompted would otherwise
+  # read, and swallow, the names still to come.
   while IFS=$'\t' read -r name ver latest; do
     if [[ -z "$name" ]]; then
       continue
     fi
     info "  Upgrading $name ($ver -> $latest)"
     if [[ -n "$constraint" ]]; then
-      PIP_CONSTRAINT="$constraint" python3 -m pip install --upgrade "$name" 2>/dev/null \
+      PIP_CONSTRAINT="$constraint" python3 -m pip install --upgrade "$name" </dev/null 2>/dev/null \
         || warn "Failed to upgrade $name; continuing"
     else
-      python3 -m pip install --upgrade "$name" 2>/dev/null || warn "Failed to upgrade $name; continuing"
+      python3 -m pip install --upgrade "$name" </dev/null 2>/dev/null || warn "Failed to upgrade $name; continuing"
     fi
   done <<< "$upgrades"
   if [[ -n "$constraint" ]]; then
@@ -686,14 +688,19 @@ update_pip() {
 # script did not create, which is the case that has no pip.
 #
 # `uv pip install --python <interpreter>` targets an existing venv without needing pip inside it,
-# and is substantially faster. `ensurepip` is the fallback for a machine where the uv install
+# and is substantially faster. `--upgrade`, as the pip fallback has always passed: without it uv
+# leaves an installed package that satisfies the request exactly as it is (measured, uv 0.13.7:
+# "Would make no changes" for an outdated idna), so nothing would keep the document deps current -
+# update_pip leaves them to update_default_venv. The deps' own pins still hold: `--upgrade` with
+# "pymupdf>=1.24.3,<2" moved 1.27.1 to 1.28.2, never to 2.x.
+# `ensurepip` is the fallback for a machine where the uv install
 # failed; a venv built by `python3 -m venv` already has pip and takes neither path.
 #
 # $1 venv python   $2... packages
 csa_venv_pip_install() {
   local vpy="$1"; shift
   if has_command uv; then
-    if uv pip install --quiet --python "$vpy" "$@"; then return 0; fi
+    if uv pip install --quiet --upgrade --python "$vpy" "$@"; then return 0; fi
     warn "uv could not install into $vpy - falling back to pip"
   fi
   if ! "$vpy" -m pip --version >/dev/null 2>&1; then

@@ -145,17 +145,38 @@ def _norm(name: str) -> str:
     return re.sub(r"[-_.]+", "-", name).lower()
 
 
-def _install_into(venv: pathlib.Path, pkgs: list[str]) -> None:
-    """As an installer does: a package already there (any version, any spelling) is replaced."""
+def _meta(d: pathlib.Path, key: str) -> str:
+    f = d / "METADATA"
+    for line in (f.read_text(encoding="utf-8").splitlines() if f.exists() else []):
+        if line.startswith(key + ": "):
+            return line.split(": ", 1)[1].strip()
+    return ""
+
+
+def _satisfies(version: str, spec: str) -> bool:
+    if "==" in spec:
+        return version == spec.split("==", 1)[1].split(",")[0].strip()
+    if "<2" in spec:
+        return int((re.match(r"\d+", version) or re.match(r"\d+", "0")).group(0)) < 2
+    return True
+
+
+def _install_into(venv: pathlib.Path, pkgs: list[str], upgrade: bool = True) -> None:
+    """As uv and pip do. A package already there that satisfies the request is left exactly as it
+    is unless `upgrade` (measured, uv 0.13.7: without --upgrade, "Would make no changes" for an
+    outdated idna). Otherwise it is replaced, any spelling, by the newest version the request
+    allows: 1.99 under a `<2` pin, 9.9 otherwise."""
     sites = sorted(venv.glob("lib/python*/site-packages"))
     site = sites[0] if sites else venv / "lib" / "python3.14" / "site-packages"
     site.mkdir(parents=True, exist_ok=True)
     for p in pkgs:
         name = re.split(r"[\[<>=!~; ]", p, maxsplit=1)[0]
-        for old in site.glob("*.dist-info"):
-            if _norm(old.name.split("-")[0]) == _norm(name):
-                shutil.rmtree(old)
-        add_dist(site, name)
+        olds = [d for d in site.glob("*.dist-info") if _norm(_meta(d, "Name")) == _norm(name)]
+        if olds and not upgrade and all(_satisfies(_meta(d, "Version"), p) for d in olds):
+            continue
+        for old in olds:
+            shutil.rmtree(old)
+        add_dist(site, name, "1.99" if "<2" in p else "9.9")
 
 
 def stub_main(argv: list[str]) -> int:
@@ -215,7 +236,7 @@ def stub_main(argv: list[str]) -> int:
             vpy = args[args.index("--python") + 1]
             pkgs = [a for i, a in enumerate(args[2:], 2)
                     if not a.startswith("-") and args[i - 1] != "--python"]
-            _install_into(pathlib.Path(vpy).parent.parent, pkgs)
+            _install_into(pathlib.Path(vpy).parent.parent, pkgs, upgrade="--upgrade" in args)
             return 0
         if args[:2] == ["tool", "dir"]:
             f = scen / "tooldir"
@@ -240,6 +261,11 @@ def stub_main(argv: list[str]) -> int:
             if "list" in args and "--outdated" in args:
                 print(json.dumps(cfg["outdated"]))
             elif "install" in args:
+                # A pip that prompts reads stdin. update_pip's loop reads its list from stdin, so
+                # this would swallow the names still to come unless pip gets /dev/null.
+                swallowed = sys.stdin.read()
+                if swallowed:
+                    _log(scen, "stdin-swallowed " + swallowed.replace("\n", "|"))
                 c = os.environ.get("PIP_CONSTRAINT", "")
                 seen = (pathlib.Path(c).read_text(encoding="utf-8").strip().replace("\n", " ")
                         if c and os.path.isfile(c) else "<none>")
@@ -268,7 +294,7 @@ def stub_main(argv: list[str]) -> int:
             if (scen / "pip.fails").exists():
                 return 1
             _install_into(pathlib.Path(self_path).parent.parent,
-                          [a for a in rest[1:] if not a.startswith("-")])
+                          [a for a in rest[1:] if not a.startswith("-")], upgrade="--upgrade" in rest)
         return 0
     return 0
 
@@ -528,8 +554,10 @@ class World:
                                 + "\n" + override + "\n" + call + "\n", encoding="utf-8")
         e = {"PATH": f"{self.bin}:{self.tools}", "HOME": str(self.home)}
         e.update(env or {})
+        # stdin is /dev/null, as for an installer run from a pipe: nothing here may wait on the
+        # terminal, and the stub pip that reads stdin must see only what the script feeds it.
         p = subprocess.run([BASH, str(harness_file)], capture_output=True, text=True, env=e,
-                           timeout=300)
+                           stdin=subprocess.DEVNULL, timeout=300)
         return p.stdout, p.stderr, p.returncode
 
     def calls(self) -> list[str]:
@@ -1307,6 +1335,53 @@ def constraints_of(w: World) -> dict[str, str]:
     return out
 
 
+def dist_versions(v: pathlib.Path) -> dict[str, str]:
+    return {_norm(_meta(d, "Name")): _meta(d, "Version")
+            for d in v.glob("lib/python*/site-packages/*.dist-info")}
+
+
+def upgrade_cases(root: pathlib.Path) -> None:
+    """update_pip leaves CSA_DOC_PY_DEPS to update_default_venv in an active ~/.default_venv, so that
+    step must actually upgrade them. `uv pip install` without --upgrade leaves an outdated package
+    that satisfies the request alone (measured), so the uv path of csa_venv_pip_install passes
+    --upgrade, as its pip fallback always did - with the pin still in the same call."""
+    print("\ndoc_deps_upgraded_within_the_pin")
+    old = (("csa-google-workspace", [], "0.1"), ("PyMuPDF", [], "1.24.3"), ("PyYAML", [], "5.0"))
+    for label, script, call, active in (
+            ("update_default_venv, ~/.default_venv active", "update", "update_default_venv", True),
+            ("update_default_venv, not active", "update", "update_default_venv", False),
+            ("install_doc_python_deps", "ai", "install_doc_python_deps", False)):
+        w = World(root, "upgrade_" + re.sub(r"\W+", "_", label))
+        w.uv_std()
+        w.venv(VERSIONED, w.std(), dists=old)
+        w.link(VERSIONED)
+        out, err, rc = w.run(call, script=script,
+                             env={"VIRTUAL_ENV": str(w.default())} if active else {})
+        calls = dep_argvs(w)
+        check(rc == 0 and calls and all("--upgrade" in a and PIN in a for a in calls),
+              f"{label}: the deps install carries --upgrade, and {PIN} in the same call",
+              show(out, err, rc) + "\nargv:\n" + "\n".join(map(json.dumps, w.argvs())))
+        vers = dist_versions(w.versioned())
+        check(vers.get("csa-google-workspace") == "9.9" and vers.get("pyyaml") == "9.9"
+              and vers.get("pymupdf", "").startswith("1."),
+              f"{label}: the outdated csa-google-workspace and PyYAML are upgraded, and pymupdf "
+              "stays below 2", json.dumps(vers, sort_keys=True))
+
+    print("\nactive_venv_deps_upgraded_once_by_the_default_venv_step")
+    w = World(root, "upgrade_then_update_pip")
+    w.uv_std()
+    w.venv(VERSIONED, w.std(), dists=old)
+    w.link(VERSIONED)
+    w.active_python(w.versioned(), [outdated("csa-google-workspace", "0.1", "0.55.1")])
+    out, err, rc = w.run("update_default_venv\nupdate_pip", script="update",
+                         env={"VIRTUAL_ENV": str(w.default()), "TMPDIR": str(w.dir)})
+    check(rc == 0 and dist_versions(w.versioned()).get("csa-google-workspace") == "9.9"
+          and "csa-google-workspace" not in upgrades_of(w)
+          and "the Default venv step upgraded them, with pymupdf held below 2" in out,
+          "main()'s order, venv active: update_default_venv upgrades csa-google-workspace, "
+          "update_pip leaves it and says why", show(out, err, rc, w.calls()))
+
+
 LEFTOVERS = ("onnxruntime", "pymupdf-layout", "pymupdf4llm")
 
 
@@ -1424,8 +1499,9 @@ def update_pip_cases(root: pathlib.Path) -> None:
           and "PyYAML" not in block,
           "the plan lists what update_pip upgrades: requests, not pymupdf or PyYAML",
           show(out, err, rc))
-    check("not upgraded here: pyyaml pymupdf csa-google-workspace" in block,
-          "and names the pinned ones it leaves to the Default venv step", block)
+    check("not upgraded here: pyyaml pymupdf csa-google-workspace (the Default venv step "
+          "upgrades them, with pymupdf held below 2)" in block,
+          "and names the pinned ones it leaves to the Default venv step, which upgrades them", block)
     for fn in ("preflight", "update_pip"):
         check("pip_upgrades" in code_only(extract(fn, UPD)),
               f"{fn} reads pip_upgrades (one list for the plan and the run)")
@@ -1440,9 +1516,11 @@ def update_pip_cases(root: pathlib.Path) -> None:
     out, err, rc = w.run("update_pip", script="update", env={"VIRTUAL_ENV": str(other)})
     ups = upgrades_of(w)
     check(rc == 0 and sorted(u.lower() for u in ups) == ["pymupdf", "pyyaml", "requests"]
-          and set(constraints_of(w).values()) == {"<none>"},
+          and set(constraints_of(w).values()) == {"<none>"}
+          and not any(c.startswith("stdin-swallowed") for c in w.calls()),
           "in a venv that is not ~/.default_venv, everything outdated is upgraded, unconstrained "
-          "(so the case above can fail)", show(out, err, rc, w.calls()))
+          "(so the case above can fail), and a pip that reads stdin swallows none of the list",
+          show(out, err, rc, w.calls()))
 
 
 def tool_repair_cases(root: pathlib.Path) -> None:
@@ -1795,6 +1873,7 @@ def main() -> int:
         doc_deps_cases(root)
         leftover_cases(root)
         update_pip_cases(root)
+        upgrade_cases(root)
         tool_repair_cases(root)
         plan_cases(root)
         plan_agreement_cases(root)
