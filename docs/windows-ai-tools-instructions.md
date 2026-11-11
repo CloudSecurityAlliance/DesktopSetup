@@ -182,22 +182,16 @@ Refresh PATH after install. Config in `~/.claude/` is never touched.
 if ($codexMigration -eq "winget") {
     winget uninstall --id OpenAI.Codex
 }
-if (Has-Command codex) {
-    npm update -g @openai/codex
-} else {
-    npm install -g @openai/codex
-}
+# Installed or not, the same command: npm updates only what npm installed, never via
+# `npm update -g` (#153).
+npm install -g @openai/codex@latest
 ```
 
 ### Install-Gemini
 
 ```powershell
 # No winget migration needed — Gemini is npm-only
-if (Has-Command gemini) {
-    npm update -g @google/gemini-cli
-} else {
-    npm install -g @google/gemini-cli
-}
+npm install -g @google/gemini-cli@latest   # installed or not (#153)
 ```
 
 ## Summary

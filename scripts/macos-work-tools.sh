@@ -24,7 +24,7 @@
 
 set -euo pipefail
 
-SCRIPT_VERSION="2026-10-26T15:12Z"
+SCRIPT_VERSION="2026-11-11T17:38Z"
 
 # ── Output helpers ──────────────────────────────────────────────────
 
@@ -221,9 +221,9 @@ has_command() { command -v "$1" >/dev/null 2>&1; }
 # reason. Both are kept verbatim under CSA_DEBUG=1, where anyone debugging npm needs them.
 #
 # sed, not `grep -v`: `set -o pipefail` is on and a grep matching nothing exits 1, so on the day
-# npm stops printing this block a clean run would start reporting failure — `npm update -g X ||
-# npm install -g X` taking its fallback for nothing, and macos-update.sh warning about an update
-# that worked. sed exits 0 whatever it matches, so npm's own status propagates.
+# npm stops printing this block a clean run would start reporting failure — an `npm install -g
+# X@latest` that worked reported as "Failed to update X", and macos-update.sh warning about an
+# update that worked. sed exits 0 whatever it matches, so npm's own status propagates.
 # tests/test_npm_output_filter.py holds that case, and the `grep -v` control proving it is real.
 csa_npm() {
   if csa_debug_requested; then
@@ -440,7 +440,7 @@ preflight() {
     fi
 
     if has_command wrangler; then
-      plan_line "Wrangler" "installed ($(get_version wrangler --version))"
+      plan_line "Wrangler" "installed ($(get_version wrangler --version)); update to latest via npm"
     else
       plan_line "Wrangler" "install via npm"
     fi
@@ -598,12 +598,14 @@ install_npm_package() {
     return 1
   fi
 
+  # `install -g <pkg>@latest`, never `update -g <pkg>`: under Homebrew's node@24 the update
+  # failed with EACCES writing npm's own npmrc into the read-only keg, on every re-run (#153).
   if has_command "$bin"; then
     info "Updating $label"
-    csa_npm update -g "$package" || csa_npm install -g "$package" || warn "Failed to update $label"
+    csa_npm install -g "${package}@latest" || warn "Failed to update $label"
   else
     info "Installing $label"
-    csa_npm install -g "$package" || warn "Failed to install $label"
+    csa_npm install -g "${package}@latest" || warn "Failed to install $label"
   fi
 }
 

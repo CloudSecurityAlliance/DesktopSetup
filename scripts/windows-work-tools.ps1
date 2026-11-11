@@ -22,7 +22,7 @@
 
 $ErrorActionPreference = 'Stop'
 
-$ScriptVersion = "2026-10-26T15:12Z"
+$ScriptVersion = "2026-11-11T17:38Z"
 
 # ── App sets ────────────────────────────────────────────────────────
 # ONE list per profile, read by Select-Profile, Show-Preflight, Install-Core/Install-Dev,
@@ -703,7 +703,7 @@ function Show-Preflight {
 
         if (Has-Command wrangler) {
             $wranglerVer = Get-ToolVersion wrangler '--version'
-            Write-Host "  Wrangler .......... installed ($wranglerVer)"
+            Write-Host "  Wrangler .......... installed ($wranglerVer); update to latest via npm"
         } else {
             Write-Host "  Wrangler .......... install via npm"
         }
@@ -737,16 +737,17 @@ function Install-NpmPackage {
         return
     }
 
+    # `install -g <pkg>@latest`, never `update -g <pkg>` (#153): npm updates only what npm
+    # installed, and on macOS the update failed with EACCES under Homebrew's node@24 on every
+    # re-run. The install was already this function's fallback; now it is the only command.
+    $npmTarget = "${Package}@latest"
     if (Has-Command $Bin) {
         Write-Info "Updating $Label"
-        $null = Invoke-NativeNpm { npm update -g $Package }
-        if ($LASTEXITCODE -ne 0) {
-            $null = Invoke-NativeNpm { npm install -g $Package }
-            if ($LASTEXITCODE -ne 0) { Write-Warn "Failed to update $Label" }
-        }
+        $null = Invoke-NativeNpm { npm install -g $npmTarget }
+        if ($LASTEXITCODE -ne 0) { Write-Warn "Failed to update $Label" }
     } else {
         Write-Info "Installing $Label"
-        $null = Invoke-NativeNpm { npm install -g $Package }
+        $null = Invoke-NativeNpm { npm install -g $npmTarget }
         if ($LASTEXITCODE -ne 0) { Write-Warn "Failed to install $Label" }
     }
 }

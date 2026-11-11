@@ -90,9 +90,10 @@ tools/
   check-*.py                 # eleven repo-specific checks; all eleven also run in CI
   sweep-csa-sources.sh       # weekly drift sweep (network + gh; NOT in check-all.sh)
 tests/
-  test_*.py                  # ten standalone executables — run one directly with python3
+  test_*.py                  # thirteen standalone executables — run one directly with python3
   NativeWrappers.Tests.ps1   # Pester; the only suite that needs real 5.1 to mean anything
   DesktopApps.Tests.ps1      # Pester; windows-update.ps1's wait before replacing a running app
+  NpmGlobals.Tests.ps1       # Pester; the npm installers run install -g <pkg>@latest (#153)
 docs/
   desktop-ai-apps.md         # where each desktop AI app comes from, and how it stays current
   periodic-sweep.md          # the weekly sweep runbook
@@ -205,7 +206,7 @@ trailing `Main` invocation and dot-source the script, so the real shipping code 
 mutating half.
 
 **Still never run: any installer end to end, and any actual upgrade** — `winget upgrade --all`,
-`npm update -g`, `claude update`. The parts that decide *what* to do are tested on the target
+the npm global updates, `claude update`. The parts that decide *what* to do are tested on the target
 runtime; the parts that *do* it are not.
 
 ### What a Windows authoring machine proves, and what it does not
@@ -366,6 +367,45 @@ auto-updates); npm for the Codex and Gemini CLIs and for Wrangler; **uv for Pyth
   installed with `npm -g` survive the switch. The unversioned formula is **removed**, not
   unlinked, because `brew upgrade` would otherwise relink it and flip the machine back to
   Current between runs.
+- **npm updates only what npm installed; npm itself belongs to Node's installer**
+  ([#153](https://github.com/CloudSecurityAlliance/DesktopSetup/issues/153)). The force-link
+  makes every file under `lib/node_modules/npm/` a symlink into the read-only keg, and npm's
+  reify-finish rewrites `node_modules/npm/npmrc` through it. So `npm update -g <pkg>` failed
+  with EACCES on every installer re-run (its `|| npm install -g` fallback did the work), and the
+  updater's bare `npm update -g` installed a registry npm over Homebrew's link farm, a copy
+  `bin/npm` never runs. Now:
+  - the installers, on both platforms, run `npm install -g <pkg>@latest`, never `update -g`;
+  - `macos-update.sh` lists `npm outdated -g` and `install -g`s each outdated package `@latest`
+    in one call, **whoever owns npm updates it** (`npm_owner`, `npm_update_decision`):
+    - **Homebrew's own copy** (the link farm into its Cellar) is skipped, because `brew upgrade`
+      moves it and npm must not write into the keg;
+    - **an nvm Node's npm and corepack, or any prefix you can write to**, are installed
+      `@latest` like any other global, as `npm update -g` did. There is no keg there, so the
+      EACCES cannot happen. That includes **the unversioned `node` formula's npm**: homebrew-core
+      `node.rb` copies npm into `<prefix>/lib/node_modules/npm` as real files and points
+      `bin/npm` at that copy, so it is the npm that runs;
+    - **a copy in Homebrew's prefix that `<prefix>/bin/npm` does not run** (`npm_runs_copy`
+      follows the links to see) is left alone. This is the registry npm an earlier `npm update -g`
+      left over node@24's links (#153), and updating it would not change the npm that runs;
+    - **a prefix you cannot write to** is left to its owner.
+
+    The plan row (`npm_update_plan`) reads the same decision. It lists what will be installed,
+    then one line per skipped package saying why, and calls a copy Homebrew's only when it is;
+  - **a package `npm link` put there is skipped**, and named. `npm outdated -g` lists it, and
+    `install -g <pkg>@latest` replaces the link with the registry copy where `update -g` left it
+    (both measured on npm 11.20). The installers do not check: a linked Codex, Gemini or
+    Wrangler is replaced there by the registry copy, judged too rare to guard;
+  - **a failed `npm outdated` is never "all current".** It exits 1 both when something is
+    outdated and when it failed (measured on npm 11.20: an unreachable registry exits 1 with
+    empty stdout under `--parseable`), so the records decide, not the status.
+
+  **`windows-update.ps1` still runs a bare `npm update -g`.** Its rewrite is a separate draft PR
+  waiting for a Windows measurement (#184): there `npm.cmd` prefers
+  `<global prefix>\node_modules\npm` when it exists, so on a PC where someone ran
+  `npm install -g npm`, excluding npm would freeze the npm that runs.
+
+  `tests/test_homebrew_owns_npm.py` (bash, with the pre-#153 code as controls; `--rev 7b6d743`
+  reports the defect) and `tests/NpmGlobals.Tests.ps1` (Pester, the Windows installers) pin it.
 
 ### `~/.default_venv`: a link to a versioned venv (macOS)
 
@@ -555,7 +595,7 @@ every file that uses it** — `check-duplication.py` enforces byte-identical beh
 
 ## The guard layer
 
-Eleven checkers in `tools/` and fourteen test files in `tests/`. **`./tools/check-all.sh` mirrors CI
+Eleven checkers in `tools/` and sixteen test files in `tests/`. **`./tools/check-all.sh` mirrors CI
 exactly** — run it before pushing.
 
 A guard here is added only for a mistake that actually shipped, names its issue in the file, and

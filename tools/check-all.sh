@@ -107,6 +107,9 @@ check python3 tests/test_headless.py
 step "npm output filter"
 check python3 tests/test_npm_output_filter.py
 
+step "npm updates only what npm installed; npm itself is Homebrew's"
+check python3 tests/test_homebrew_owns_npm.py
+
 step "version floors"
 check python3 tests/test_version_floors.py
 
