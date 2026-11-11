@@ -122,8 +122,8 @@ def make_venv(venv: pathlib.Path, interp: str, *, style: str, xy: str,
     for d in dists:
         if isinstance(d, str):
             add_dist(site, d)
-        else:
-            add_dist(site, d[0], requires=tuple(d[1]))
+        else:                       # (name, requires) or (name, requires, version)
+            add_dist(site, d[0], d[2] if len(d) > 2 else "1.0", tuple(d[1]))
     if marker:
         (venv / "MARKER").write_text(marker, encoding="utf-8")
     return venv
@@ -1029,6 +1029,39 @@ def repair_cases(root: pathlib.Path) -> None:
               show(out, err, rc) + "\nledger:\n" + got)
         if not ledger_on:
             check(".default_venv-3.13" in err, "and where the old venv is", err)
+
+    print("\npymupdf2_deps_not_reported_as_the_persons_own")
+    # pymupdf 2.x required onnxruntime, pymupdf-layout, pymupdf4llm and more; the rebuilt venv has
+    # pymupdf 1.x, which requires nothing. Judged only by what is GONE, whatever only pymupdf 2.1
+    # required looked top-level, and the to-do said `pip install networkx onnxruntime psutil
+    # tabulate` - onnxruntime back. Requires-Dist below are PyPI's, as published (2026-11-10).
+    pymupdf2 = (("PyMuPDF", ["networkx", "numpy", "onnxruntime", "pyyaml", "pymupdf-layout==2.1",
+                             "pymupdf_layout==2.1", "psutil", "tabulate", "pymupdf4llm==2.1"], "2.1"),
+                ("pymupdf_layout", ["pymupdf==2.1", "pymupdf4llm==2.1"], "2.1"),
+                ("pymupdf4llm", ["pymupdf==2.1", "pymupdf_layout==2.1"], "2.1"),
+                ("onnxruntime", ["flatbuffers", "numpy>=1.21.6", "packaging", "protobuf>=4.25.8",
+                                 'sympy; extra == "symbolic"'], "1.31.1"),
+                "networkx", "numpy", "psutil", "tabulate", "flatbuffers", "packaging", "protobuf",
+                "pyyaml")
+    for extra, want in (((), ""), (("mytool",), "mytool")):
+        w = World(root, f"pymupdf2_deps_{want or 'none'}")
+        w.uv_std()
+        w.venv(".default_venv", w.other("3.13"), style="venv", xy="3.13", dists=pymupdf2 + extra)
+        ledger = w.dir / "todo.tsv"
+        out, err, rc = w.run("ensure_default_venv", env={"CSA_TODO_FILE": str(ledger)})
+        got = _text(ledger) if ledger.exists() else ""
+        reported = [l for l in (err + got).splitlines() if "Not reinstalled" in l or "Reinstall" in l]
+        bad = [n for n in ("pymupdf-layout", "pymupdf_layout", "pymupdf4llm", "onnxruntime", "numpy",
+                           "networkx", "psutil", "tabulate", "flatbuffers", "protobuf")
+               if any(n in l for l in reported)]
+        if want:
+            check(rc == 0 and not bad and any(want in l for l in reported),
+                  "old venv on pymupdf 2.1 plus a package of the person's own: only that one is "
+                  "reported", show(out, err, rc) + "\nledger:\n" + got)
+        else:
+            check(rc == 0 and not reported and link_target(w.default()) == VERSIONED,
+                  "old venv on pymupdf 2.1, new one on 1.x: nothing is reported (what pymupdf 2 "
+                  "required is not the person's own)", show(out, err, rc) + "\nledger:\n" + got)
 
     print("\nactive_venv_flipped_with_todo")
     w = World(root, "active_flipped")

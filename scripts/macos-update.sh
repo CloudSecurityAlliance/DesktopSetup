@@ -19,7 +19,7 @@
 
 set -euo pipefail
 
-SCRIPT_VERSION="2026-11-11T04:41Z"
+SCRIPT_VERSION="2026-11-11T04:47Z"
 
 # ── CSA plugin marketplaces ─────────────────────────────────────────
 # Each update run will add any entries from this list that aren't yet
@@ -949,6 +949,10 @@ venv_aside_name() {
 # $1 a Python to run, $2 the old venv, $3 the new one. Prints, on one line, the top-level
 # packages the old venv had that the new one lacks - what a rebuild did not bring back. Read
 # from the old venv's metadata, so it works when the old venv's own interpreter is gone.
+# Top-level means nothing in the OLD venv required it - not just nothing that is gone: pymupdf
+# 2.x required pymupdf-layout and pymupdf4llm, and the new venv has pymupdf 1.x, so judging by
+# the gone packages alone reported them as the person's own and told them to reinstall them -
+# which brings onnxruntime back.
 venv_extra_packages() {
   local code='import glob, os, re, sys
 from importlib import metadata
@@ -967,7 +971,7 @@ def dists(venv):
 old, new = dists(sys.argv[1]), dists(sys.argv[2])
 gone = dict((k, v) for k, v in old.items() if k not in new and k not in ("pip", "setuptools", "wheel"))
 needed = set()
-for name, d in gone.values():
+for name, d in old.values():
     for r in d.requires or []:
         m = re.match(r"[A-Za-z0-9._-]+", r)
         if m:

@@ -426,8 +426,11 @@ offered: Homebrew's 3.15, a 3.13, uv's 3.14t, or a Cellar path the next `brew up
   shells opened before the migration hold `~/.default_venv`. The active shell's directory never
   moves, so nothing dangles; the run adds the to-do *open a new terminal* (order 10).
 - **What a rebuild did not bring back is reported:** the top-level packages the old venv had
-  beyond `CSA_DOC_PY_DEPS`, read from its metadata (so it works when its interpreter is gone) —
-  a to-do with a ledger, printed without one. `macos-update.sh` has no `csa_todo_add` at all,
+  beyond `CSA_DOC_PY_DEPS`, read from its metadata (so it works when its interpreter is gone).
+  Top-level means nothing in the *old* venv required it, not merely nothing that is gone: an old
+  venv on pymupdf 2.1 rebuilt with 1.x otherwise reported `networkx onnxruntime psutil tabulate`
+  as the person's own and asked them to reinstall onnxruntime. The report is a to-do with a
+  ledger, printed without one. `macos-update.sh` has no `csa_todo_add` at all,
   and in `macos-ai-tools.sh` it returns false when `CSA_TODO_FILE` is unset, so every call is
   guarded: `if declare -F csa_todo_add >/dev/null && csa_todo_add …; then :; else <print>; fi`.
 - **The Python comes from `find_csa_python` first,** and `ensure_csa_python` only when that finds
