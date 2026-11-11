@@ -72,8 +72,19 @@ instance — and migrates them to the correct installer, preserving settings.
 
 The command is at the top under [Run this](#run-this). Beyond the list above it installs a base
 layer first if it is missing — Xcode CLI Tools, Homebrew, Node/npm, uv (kept current) —
-plus the document toolchain (`pandoc`, `typst`, and `pyyaml`/`pymupdf` in `~/.default_venv`)
-that the **document-pipeline** plugin needs to render CSA PDFs.
+plus the document toolchain that the **document-pipeline** plugin needs to render CSA PDFs:
+`pandoc` and `typst`, and three Python packages in `~/.default_venv`: `pyyaml`, `pymupdf`
+(held below 2.0, because 2.x brings in onnxruntime, which sends Microsoft telemetry by default)
+and `csa-google-workspace`.
+
+**`~/.default_venv`** is a link to `~/.default_venv-3.14`, a venv built on the Python below. If you
+already had a `~/.default_venv` (a folder, or a link to an older or broken venv), the installer
+builds `~/.default_venv-3.14`, points the link at it, and keeps the old one beside it: a folder is
+renamed (to `~/.default_venv-3.13`, for instance), and a broken `~/.default_venv-3.14` becomes
+`~/.default_venv-3.14.broken-<date>`. Nothing is deleted. It tells you about anything the old
+one had that the new one does not, and about onnxruntime left there by an earlier run, with the
+command to remove it; it never uninstalls anything itself. `macos-update.sh` repairs an existing
+`~/.default_venv` the same way but never creates one.
 
 **Python:** every run makes sure uv's Python 3.14, the standard build, is installed (Homebrew's
 `python@3.14` if uv cannot provide it), even when you already have another Python. It adds that
