@@ -1427,6 +1427,14 @@ def plan_cases(root: pathlib.Path) -> None:
     pre = code_only(extract("preflight", UPD))
     check(re.search(r'"\s{2}Default venv.*\$\(default_venv_plan --no-create\)', pre) is not None,
           "macos-update.sh's Default venv row is default_venv_plan --no-create")
+    # The gate repo's setup scripts run `uv python install 3.14` when the standard build is missing,
+    # so every Internal MCP servers row says so: it is a download the person agrees to.
+    for script in (AI, UPD, ROOT / "scripts" / "macos-plugins.sh"):
+        pre = code_only(extract("preflight", script))
+        row = pre[pre.find("Internal MCP servers"):]
+        row = row[:row.find("for setup_name")]
+        check("(installs uv's Python ${CSA_PYTHON_PREFERRED} standard build if it is missing)" in row,
+              f"{script.name}: the Internal MCP servers row names the Python download", row)
 
 
 def layout(w: World) -> dict:
@@ -1543,6 +1551,14 @@ def plan_agreement_cases(root: pathlib.Path) -> None:
         if name == "ft_only" and script == "update":
             check("macos-ai-tools.sh" in plan and "rebuild" not in plan,
                   "-update with only 3.14t: the row points at macos-ai-tools.sh, not a rebuild", plan)
+        if script == "update" and "no Python 3.14 standard build installed" in plan:
+            # The same -update run's Internal MCP servers step installs one for a CSA-internal
+            # member (the gate scripts), so "this script installs none" was false for them.
+            check("this step installs none" in plan and "this script installs none" not in plan
+                  and "For CSA-internal members the Internal MCP servers step installs one and "
+                      "the next update repairs this; otherwise run macos-ai-tools.sh" in plan,
+                  f"update {name}: the row says this STEP installs none, and what a CSA-internal "
+                  "member's same run does", plan)
         if name == "cellar_only":
             check("Cellar path too" in plan, f"{script}: a Cellar-only Python is named as why", plan)
 

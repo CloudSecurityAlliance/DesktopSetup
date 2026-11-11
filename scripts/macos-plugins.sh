@@ -26,7 +26,7 @@
 
 set -euo pipefail
 
-SCRIPT_VERSION="2026-11-11T00:14Z"
+SCRIPT_VERSION="2026-11-11T04:51Z"
 
 # ── CSA plugin marketplaces ─────────────────────────────────────────
 # Registered in sync_plugin_marketplaces() regardless of whether
@@ -603,6 +603,7 @@ preflight() {
     # internal servers while installing all four, so a person agreed to a list that omitted
     # every one of them. Enumerated so the plan and the run cannot disagree.
     echo "  Internal MCP servers install/upgrade ${#CSA_INTERNAL_SETUPS[@]} servers on Python ${CSA_PYTHON_PREFERRED} (standard build) if your GitHub account has CSA-Internal access"
+    echo "                       (installs uv's Python ${CSA_PYTHON_PREFERRED} standard build if it is missing)"
     local setup_name
     for setup_name in "${CSA_INTERNAL_SETUPS[@]}"; do
       echo "                       ${setup_name%-setup.sh}"

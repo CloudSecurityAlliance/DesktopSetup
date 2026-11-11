@@ -19,7 +19,7 @@
 
 set -euo pipefail
 
-SCRIPT_VERSION="2026-11-11T04:49Z"
+SCRIPT_VERSION="2026-11-11T04:51Z"
 
 # ── CSA plugin marketplaces ─────────────────────────────────────────
 # Each update run will add any entries from this list that aren't yet
@@ -533,6 +533,7 @@ preflight() {
     # internal servers while installing all four, so a person agreed to a list that omitted
     # every one of them. Enumerated so the plan and the run cannot disagree.
     echo "  Internal MCP servers install/upgrade ${#CSA_INTERNAL_SETUPS[@]} servers on Python ${CSA_PYTHON_PREFERRED} (standard build) if your GitHub account has CSA-Internal access"
+    echo "                       (installs uv's Python ${CSA_PYTHON_PREFERRED} standard build if it is missing)"
     local setup_name
     for setup_name in "${CSA_INTERNAL_SETUPS[@]}"; do
       echo "                       ${setup_name%-setup.sh}"
@@ -1105,7 +1106,10 @@ default_venv_plan() {
   esac
   py="$(find_csa_python)" || py=""
   if [[ -z "$py" && "${1:-}" == "--no-create" ]]; then
-    leave="there is no Python ${CSA_PYTHON_PREFERRED} standard build installed, and this script installs none - run macos-ai-tools.sh to repair it"
+    # This step installs no Python, but the same -update run may: a CSA-internal member's
+    # Internal MCP servers step (the gate repo's setup scripts) installs uv's standard build, and
+    # the next -update then repairs the venv (measured in the Task 6 acceptance run).
+    leave="there is no Python ${CSA_PYTHON_PREFERRED} standard build installed, and this step installs none. For CSA-internal members the Internal MCP servers step installs one and the next update repairs this; otherwise run macos-ai-tools.sh"
   elif [[ -n "$py" && "$reason" == *Cellar* && "$py" == */Cellar/* ]]; then
     leave="the only Python ${CSA_PYTHON_PREFERRED} is on a Cellar path too"
   fi
@@ -1113,9 +1117,9 @@ default_venv_plan() {
     # The same test the callers apply before installing the deps: sound, or Cellar-pinned (which
     # still runs today).
     if [[ -z "$reason" || "$reason" == *Cellar* ]]; then
-      printf '%s\n' "leave $CSA_VENV as it is${reason:+ ($reason)}: $leave; install/refresh $deps in it"
+      printf '%s\n' "leave $CSA_VENV as it is${reason:+ ($reason)}; install/refresh $deps in it: $leave"
     else
-      printf '%s\n' "leave $CSA_VENV as it is ($reason): $leave; nothing is installed into it"
+      printf '%s\n' "leave $CSA_VENV as it is ($reason); nothing is installed into it: $leave"
     fi
     return 0
   fi

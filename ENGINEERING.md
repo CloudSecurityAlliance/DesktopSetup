@@ -412,7 +412,11 @@ offered: Homebrew's 3.15, a 3.13, uv's 3.14t, or a Cellar path the next `brew up
   uses too) and repairs it. The plan row (`default_venv_plan`) also asks `find_csa_python`, as
   the run does first, because the Python decides the outcome: `-update` with none installed, or a
   Cellar-pinned venv whose only Python is on a Cellar path too, changes nothing, and the row says
-  so instead of naming a rebuild that will not run. The cases: a real directory (pre-symlink machines)
+  so instead of naming a rebuild that will not run. That step installs no Python, but for a
+  CSA-internal member the same `-update` run's Internal MCP servers step does (the gate repo's
+  setup scripts install uv's standard 3.14), and the next `-update` repairs the venv (measured
+  in the Task 6 acceptance run); the row says so, and every Internal MCP servers row, in all
+  three macOS scripts, names that download. The cases: a real directory (pre-symlink machines)
   is renamed to `~/.default_venv-<X.Y>` (from `pyvenv.cfg`'s `version_info`, which uv writes, or
   `version`, which `python -m venv` writes; `-unknown` without one; a timestamp on a name
   collision); a link to an older version, or a dangling one, is flipped; a link the installer
