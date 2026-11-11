@@ -642,42 +642,6 @@ def real_interpreters() -> None:
     check(tested > 0, "at least one real interpreter was exercised")
 
 
-def floor_vs_real_interpreters() -> None:
-    """python_meets_floor still gates the venv rebuild in install_doc_python_deps."""
-    print("\npython_meets_floor vs. real interpreters")
-    min_line = extract_assignment("CSA_PYTHON_MIN")
-    min_v = tuple(int(p) for p in min_line.split('"')[1].split("."))
-    check(min_v >= (3, 10), "the floor is at least 3.10 (what csa-google-workspace requires)")
-    body = "\n".join([min_line, PREF_LINE, extract("python_meets"), extract("python_meets_floor")])
-    candidates = ["/usr/bin/python3", sys.executable]
-    for name in ("python3", "python3.9", "python3.10", "python3.11", "python3.12", "python3.13"):
-        found = shutil.which(name)
-        if found:
-            candidates.append(found)
-    tested = 0
-    for path in dict.fromkeys(candidates):
-        if not os.path.exists(path):
-            continue
-        real = subprocess.run([path, "-c", "import sys;print('%d.%d' % sys.version_info[:2])"],
-                              capture_output=True, text=True)
-        if real.returncode != 0:
-            continue
-        actual = tuple(int(p) for p in real.stdout.strip().split("."))
-        expected = actual >= min_v
-        with tempfile.TemporaryDirectory() as td:
-            script = pathlib.Path(td) / "h.sh"
-            script.write_text(f'set -euo pipefail\n{body}\n'
-                              f'if python_meets_floor "{path}"; then exit 0; else exit 1; fi\n',
-                              encoding="utf-8")
-            rc = subprocess.run([BASH, str(script)], capture_output=True, text=True,
-                                env={**base_env(), "PATH": os.environ.get("PATH", ""),
-                                     "HOME": td}).returncode
-        check((rc == 0) == expected,
-              f"{path} is {'.'.join(map(str, actual))} -> {'accepts' if expected else 'rejects'}")
-        tested += 1
-    check(tested > 0, "at least one real interpreter was exercised")
-
-
 def _function_body(text: str, name: str) -> str:
     m = re.search(rf"^{re.escape(name)}\(\) \{{.*?^\}}", text, re.S | re.M)
     return m.group(0) if m else ""
@@ -697,8 +661,11 @@ def static_checks() -> None:
           "the uv plan row says uv is kept current")
     check("ensure_csa_python" in code_only(_function_body(TEXT, "install_python")),
           "install_python provisions through ensure_csa_python")
-    check("ensure_csa_python" in code_only(_function_body(TEXT, "install_doc_python_deps")),
-          "install_doc_python_deps builds on ensure_csa_python's interpreter")
+    venv = code_only(_function_body(TEXT, "ensure_default_venv"))
+    check("ensure_default_venv" in code_only(_function_body(TEXT, "install_doc_python_deps"))
+          and "find_csa_python" in venv and "ensure_csa_python" in venv,
+          "install_doc_python_deps builds ~/.default_venv on the CSA Python "
+          "(find_csa_python, then ensure_csa_python; tests/test_venv_replacement.py runs it)")
     check(re.search(r"brew install python(\s|\"|$)", code, re.M) is None,
           "the unversioned Homebrew `python` (whatever minor it is today) is never installed")
 
@@ -721,7 +688,6 @@ def main() -> int:
     resolver_cases()
     install_uv_cases()
     real_interpreters()
-    floor_vs_real_interpreters()
     static_checks()
     windows_twin()
     print()

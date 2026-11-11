@@ -8,8 +8,10 @@
 #   3. Node.js (via Homebrew, provides npm)
 #   4. uv (kept current) and Python 3.14, the standard build, uv-managed
 #      (Homebrew python@3.14 as fallback); other Pythons are left alone
-#   5. Document toolchain: pandoc + typst (via Homebrew), plus pyyaml +
-#      pymupdf in ~/.default_venv — required by the document-pipeline plugin
+#   5. Document toolchain: pandoc + typst (via Homebrew), plus pyyaml,
+#      pymupdf, csa-google-workspace and markitdown in ~/.default_venv, a
+#      link to ~/.default_venv-3.14 built on that Python — required by the
+#      document-pipeline plugin
 #   6. Git (via Homebrew, latest version)
 #   7. GitHub CLI (gh) + authentication
 #   8. 1Password (via Homebrew cask, GUI app — needed for biometric CLI unlock)
@@ -30,7 +32,7 @@
 
 set -euo pipefail
 
-SCRIPT_VERSION="2026-11-11T00:14Z"
+SCRIPT_VERSION="2026-11-11T00:59Z"
 
 # ── CSA plugin marketplaces ─────────────────────────────────────────
 # Plugin marketplaces to register with Claude Code. Each entry is an
@@ -635,16 +637,9 @@ preflight() {
   else
     echo "  typst ............. install via Homebrew"
   fi
-  # `pymupdf`, not `fitz`. Same package - `fitz` is the legacy import alias, and PyMuPDF now
-  # prints "The `fitz` API is deprecated and will be removed in future" on every use. It showed
-  # up in a real debug log. When it is finally removed this probe starts failing, and a failing
-  # probe here means the script reinstalls the dependency on every single run, forever, while
-  # reporting success. Probing the name we actually install avoids both.
-  if python3 -c 'import yaml, pymupdf' >/dev/null 2>&1; then
-    echo "  Preflight deps .... installed (pyyaml, pymupdf)"
-  else
-    echo "  Preflight deps .... install pyyaml + pymupdf into ~/.default_venv"
-  fi
+  # ~/.default_venv: this machine's repair and its reason, from the same classifier the step acts
+  # on (default_venv_state). It used to probe PATH's python3, which is not where the deps go.
+  echo "  Preflight deps .... $(default_venv_plan)"
 
   # Git
   if has_command git && brew list --formula git >/dev/null 2>&1; then
@@ -808,6 +803,15 @@ preflight() {
   for setup_name in "${CSA_INTERNAL_SETUPS[@]}"; do
     echo "                       ${setup_name%-setup.sh}"
   done
+  # Each CSA tool already installed on an interpreter that must be replaced, and why (#179 item
+  # 6) - the setup scripts above rebuild it on the CSA Python. Read-only, like the rest of the plan.
+  local tool_repairs tool_fix
+  tool_repairs="$(csa_tool_repairs)" || tool_repairs=""
+  while IFS= read -r tool_fix; do
+    if [[ -n "$tool_fix" ]]; then
+      echo "                       rebuild ${tool_fix%%: *} on Python ${CSA_PYTHON_PREFERRED} (standard build): ${tool_fix#*: }"
+    fi
+  done <<< "$tool_repairs"
   echo "                       each prints what it may do before it is used"
 
   echo ""
@@ -966,30 +970,21 @@ install_node() {
 # number ever moves (DEC-012: "version floors are read from what the consumer declares
 # (requires-python), never invented by the installer"). All four CSA MCP servers now declare
 # `requires-python = ">=3.14"`, and install_doc_python_deps puts csa_google_workspace into
-# ~/.default_venv - so a venv built on 3.10 would be one this script cannot populate, failing
-# at the `import yaml, pymupdf, csa_google_workspace` check further down rather than here.
+# ~/.default_venv - so a venv built on 3.10 would be one this script cannot populate.
 #
 # CSA-Document-Pipeline still declares >=3.10 and is satisfied by 3.14, so the maximum across
-# consumers is 3.14. MIN is what install_doc_python_deps measures an existing venv against.
+# consumers is 3.14. Nothing on macOS measures against it any more: ~/.default_venv must now BE
+# CSA_PYTHON_PREFERRED (venv_rebuild_reason), not merely clear a floor. It stays declared, pinned
+# equal to Windows' $CsaPythonMin (tests/test_python_pins.py), which Windows still resolves by
+# until #184, and tools/sweep-csa-sources.sh compares it with upstream's requires-python. Those
+# read it from this file, so this script itself does not (SC2034).
+# shellcheck disable=SC2034
 CSA_PYTHON_MIN="3.14"
 # The CSA Python: the one minor version find_csa_python accepts and install_python always
 # ensures, standard (GIL) build only. A floor says what breaks; this says what runs, and pinning
 # it is what stops macOS and Windows drifting apart the way brew's python (3.14) and winget's
 # Python.Python.3.13 already had.
 CSA_PYTHON_PREFERRED="3.14"
-
-# Presence is not usability. macOS ALWAYS ships /usr/bin/python3, and it is 3.9.6, so
-# `has_command python3` is satisfied on every stock Mac by an interpreter nothing here can
-# use. That is issue #53: the installer reported success, never installed Homebrew Python,
-# and the failure surfaced hundreds of lines into a pip resolver much later. The floor is
-# interpolated rather than hard-coded so it lives in exactly one place.
-python_meets() {
-  # $1 interpreter, $2 the dotted version it must be at least.
-  "$1" -c "import sys; sys.exit(0 if sys.version_info >= tuple(map(int, '$2'.split('.'))) else 1)" >/dev/null 2>&1
-}
-
-# Kept as a name because install_doc_python_deps asks exactly this question of an existing venv.
-python_meets_floor() { python_meets "$1" "$CSA_PYTHON_MIN"; }
 
 # ── The CSA Python ───────────────────────────────────────────────────
 # ONE interpreter, named by one resolver, verified by running it (#179). The resolver it
@@ -1172,7 +1167,10 @@ CSA_VENV="$HOME/.default_venv"
 # probe for; it pulls google-api-python-client transitively, so one entry covers both.
 # Without it those three launchers fail their own dep probe and exit 2 naming a package
 # nothing installed. It requires >= 3.10, which is why CSA_PYTHON_MIN exists.
-CSA_DOC_PY_DEPS=(pyyaml pymupdf csa-google-workspace)
+# markitdown[all] (#157) converts documents to Markdown for document-pipeline. The floor is
+# load-bearing: unpinned on 3.15 it silently resolved to 0.0.2 (measured); 0.1.9 installs on the
+# standard 3.14, onnxruntime 1.31.1 included.
+CSA_DOC_PY_DEPS=(pyyaml pymupdf csa-google-workspace "markitdown[all]>=0.1.9")
 
 install_doc_toolchain() {
   ensure_brew_in_path
@@ -1218,69 +1216,530 @@ csa_venv_pip_install() {
   "$vpy" -m pip install --quiet --upgrade "$@"
 }
 
+# ── ~/.default_venv: a link to a versioned venv ─────────────────────
+# document-pipeline's bash launchers probe $HOME/.default_venv/bin/python3. It is a RELATIVE link
+# to a versioned directory, ${CSA_VENV}-${CSA_PYTHON_PREFERRED} (the CINO's decision, 2026-11-10,
+# #179): a repair builds the new directory and flips the link, so every old directory is kept
+# for rollback and the one an active shell is using never moves (D1). Before that it was a real
+# directory built on whatever python3 PATH offered - Homebrew's 3.15, a 3.13, uv's free-threaded
+# 3.14t, or a Homebrew Cellar path the next `brew upgrade` deletes.
+#
+# KEEP IN SYNC: CSA_VENV, CSA_DOC_PY_DEPS, the three CSA-Python functions above and every
+# function from venv_cfg_get to ensure_default_venv are duplicated byte-identically in
+# macos-update.sh (tools/check-duplication.py; tests/test_python_pins.py for the array).
+# tests/test_venv_replacement.py runs them.
+
+# $1 pyvenv.cfg, $2 key. Prints the value - everything after the first "=", trimmed, inner
+# spaces kept, because a home path may contain one - or exits 1. `uv venv` writes version_info,
+# `python -m venv` writes version.
+venv_cfg_get() {
+  local line key val
+  if [[ ! -f "$1" ]]; then
+    return 1
+  fi
+  while IFS= read -r line || [[ -n "$line" ]]; do
+    if [[ "$line" != *=* ]]; then
+      continue
+    fi
+    key="${line%%=*}"
+    key="${key%"${key##*[![:space:]]}"}"
+    key="${key#"${key%%[![:space:]]*}"}"
+    if [[ "$key" == "$2" ]]; then
+      val="${line#*=}"
+      val="${val#"${val%%[![:space:]]*}"}"
+      val="${val%"${val##*[![:space:]]}"}"
+      printf '%s\n' "$val"
+      return 0
+    fi
+  done < "$1"
+  return 1
+}
+
+# $1 a venv directory. Prints the ONE reason it must be rebuilt and exits 0; exits 1, silently,
+# when it is absent or sound. Sound: bin/python3 runs, is CSA_PYTHON_PREFERRED, is the standard
+# build, and was not recorded on a Homebrew Cellar path.
+#
+# A dangling bin/python3 - its interpreter deleted, so -L is true and -x false - is BROKEN, never
+# absent. The Cellar test reads the RECORDED path, never realpath: the first symlink hop out of
+# the venv, or pyvenv.cfg's home. Homebrew's opt/python@X.Y is stable across `brew upgrade` though
+# its realpath is in the Cellar; only a recorded path containing /Cellar/ is deleted by the next
+# upgrade.
+venv_rebuild_reason() {
+  local dir="${1%/}" got cur hop rec="" home="" n=0
+  if [[ ! -e "$dir" && ! -L "$dir" ]]; then
+    return 1
+  fi
+  if [[ ! -x "$dir/bin/python3" ]]; then
+    echo "its Python no longer exists"
+    return 0
+  fi
+  got="$("$dir/bin/python3" -I -c 'import sys, sysconfig; print("%d.%d" % sys.version_info[:2], 1 if sysconfig.get_config_var("Py_GIL_DISABLED") else 0)' 2>/dev/null)" || got=""
+  case "$got" in
+    [0-9]*.[0-9]*" "[01]) ;;
+    *)
+      echo "its Python does not run"
+      return 0
+      ;;
+  esac
+  if [[ "${got% *}" != "$CSA_PYTHON_PREFERRED" ]]; then
+    echo "it is Python ${got% *}, not ${CSA_PYTHON_PREFERRED}"
+    return 0
+  fi
+  if [[ "${got#* }" != "0" ]]; then
+    echo "it is the free-threaded build"
+    return 0
+  fi
+  cur="$dir/bin/python3"
+  while [[ -L "$cur" && $n -lt 16 ]]; do
+    hop="$(readlink "$cur")" || break
+    case "$hop" in
+      /*) ;;
+      *) hop="${cur%/*}/$hop" ;;
+    esac
+    case "$hop" in
+      "$dir"/*) cur="$hop" ;;
+      *)
+        rec="$hop"
+        break
+        ;;
+    esac
+    n=$((n + 1))
+  done
+  home="$(venv_cfg_get "$dir/pyvenv.cfg" home)" || home=""
+  if [[ "$rec" == */Cellar/* || "$home" == */Cellar/* ]]; then
+    echo "it is built on a Homebrew Cellar path, which the next brew upgrade deletes"
+    return 0
+  fi
+  return 1
+}
+
+# $1 a venv directory, $2 a suffix for a name collision. Prints where the directory goes when it
+# is moved aside: ${CSA_VENV}-<X.Y> from pyvenv.cfg (version_info, or version), or
+# ${CSA_VENV}-unknown, plus -<$2> when that name is taken. ${CSA_VENV}-${CSA_PYTHON_PREFERRED} is
+# always taken: it is the venv being built.
+venv_aside_name() {
+  local v="" major minor name
+  v="$(venv_cfg_get "$1/pyvenv.cfg" version_info)" || v="$(venv_cfg_get "$1/pyvenv.cfg" version)" || v=""
+  name="${CSA_VENV}-unknown"
+  if [[ "$v" == [0-9]*.[0-9]* ]]; then
+    major="${v%%.*}"
+    minor="${v#*.}"
+    minor="${minor%%.*}"
+    if [[ -n "$minor" && "$major$minor" != *[!0-9]* ]]; then
+      name="${CSA_VENV}-${major}.${minor}"
+    fi
+  fi
+  if [[ -e "$name" || -L "$name" || "$name" == "${CSA_VENV}-${CSA_PYTHON_PREFERRED}" ]]; then
+    name="${name}-$2"
+  fi
+  printf '%s\n' "$name"
+}
+
+# $1 a Python to run, $2 the old venv, $3 the new one. Prints, on one line, the top-level
+# packages the old venv had that the new one lacks - what a rebuild did not bring back. Read
+# from the old venv's metadata, so it works when the old venv's own interpreter is gone.
+venv_extra_packages() {
+  local code='import glob, os, re, sys
+from importlib import metadata
+def norm(s):
+    return re.sub(r"[-_.]+", "-", s).lower()
+def dists(venv):
+    found = dict()
+    for d in metadata.distributions(path=glob.glob(os.path.join(venv, "lib", "python*", "site-packages"))):
+        try:
+            name = d.metadata["Name"]
+        except Exception:
+            name = None
+        if name:
+            found.setdefault(norm(name), (name, d))
+    return found
+old, new = dists(sys.argv[1]), dists(sys.argv[2])
+gone = dict((k, v) for k, v in old.items() if k not in new and k not in ("pip", "setuptools", "wheel"))
+needed = set()
+for name, d in gone.values():
+    for r in d.requires or []:
+        m = re.match(r"[A-Za-z0-9._-]+", r)
+        if m:
+            needed.add(norm(m.group(0)))
+print(" ".join(sorted(v[0] for k, v in gone.items() if k not in needed)))'
+  "$1" -I -c "$code" "$2" "$3" 2>/dev/null
+}
+
+# Classifies $CSA_VENV and changes nothing. Prints "<state>TAB<path>TAB<reason>", "-" for none:
+#   ok          a link to a sound ${CSA_VENV}-${CSA_PYTHON_PREFERRED}
+#   rebuild     a link to ${CSA_VENV}-${CSA_PYTHON_PREFERRED}, which is not sound
+#   flip        a link to anything else that will not do: an older or newer ${CSA_VENV}-<X.Y>, a
+#               target that no longer exists, or a broken venv of the person's own (<path>)
+#   foreign-ok  a link this installer did not make, to a sound venv: left alone
+#   migrate     a real directory, from before the versioned layout
+#   create      nothing there
+#   other       neither a directory nor a link
+# One classifier, so the plan row (default_venv_plan) and the repair (ensure_default_venv) cannot
+# describe two different decisions.
+default_venv_state() {
+  local versioned="${CSA_VENV}-${CSA_PYTHON_PREFERRED}" raw target name reason
+  local xy='^[0-9]+[.][0-9]+$'
+  if [[ -L "$CSA_VENV" ]]; then
+    raw="$(readlink "$CSA_VENV")" || raw=""
+    case "$raw" in
+      /*) target="$raw" ;;
+      *) target="${CSA_VENV%/*}/$raw" ;;
+    esac
+    if [[ -e "$versioned" && "$CSA_VENV" -ef "$versioned" ]]; then
+      if reason="$(venv_rebuild_reason "$versioned")"; then
+        printf 'rebuild\t%s\t%s\n' "$versioned" "$reason"
+      else
+        printf 'ok\t%s\t-\n' "$versioned"
+      fi
+      return 0
+    fi
+    if [[ ! -e "$target" ]]; then
+      printf 'flip\t%s\t%s\n' "$target" "it no longer exists"
+      return 0
+    fi
+    name="${target##*/}"
+    if reason="$(venv_rebuild_reason "$target")"; then
+      printf 'flip\t%s\t%s\n' "$target" "$reason"
+    elif [[ "$name" == "${CSA_VENV##*/}-"* && "${name#"${CSA_VENV##*/}"-}" =~ $xy && "${target%/*}" -ef "${CSA_VENV%/*}" ]]; then
+      printf 'flip\t%s\t%s\n' "$target" "it is not ${versioned##*/}"
+    else
+      printf 'foreign-ok\t%s\t-\n' "$target"
+    fi
+    return 0
+  fi
+  if [[ -d "$CSA_VENV" ]]; then
+    reason="$(venv_rebuild_reason "$CSA_VENV")" || reason="-"
+    printf 'migrate\t%s\t%s\n' "$CSA_VENV" "$reason"
+    return 0
+  fi
+  if [[ -e "$CSA_VENV" ]]; then
+    printf 'other\t%s\t-\n' "$CSA_VENV"
+    return 0
+  fi
+  printf 'create\t%s\t-\n' "$versioned"
+}
+
+# The plan row: what ensure_default_venv will do on this machine, and why. Changes nothing.
+# $1 --no-create gives the wording for -update, which never creates a venv.
+default_venv_plan() {
+  local versioned="${CSA_VENV}-${CSA_PYTHON_PREFERRED}" deps="${CSA_DOC_PY_DEPS[*]}"
+  local state action old reason build="" vr aside fix kept=""
+  state="$(default_venv_state)" || state=""
+  IFS=$'\t' read -r action old reason <<< "$state"
+  if [[ "$reason" == "-" ]]; then
+    reason=""
+  fi
+  if [[ ! -e "$versioned" && ! -L "$versioned" ]]; then
+    build="build $versioned on Python ${CSA_PYTHON_PREFERRED}"
+  elif vr="$(venv_rebuild_reason "$versioned")"; then
+    build="rebuild $versioned ($vr), keeping the old one beside it"
+  fi
+  case "$action" in
+    ok)
+      printf '%s\n' "install/refresh $deps in $CSA_VENV (Python ${CSA_PYTHON_PREFERRED}, standard build)"
+      return 0
+      ;;
+    foreign-ok)
+      printf '%s\n' "install/refresh $deps in $CSA_VENV, your own link to $old (sound, left as it is)"
+      return 0
+      ;;
+    other)
+      printf '%s\n' "skip: $CSA_VENV is not a directory or a link to one, and is left as it is"
+      return 0
+      ;;
+    create)
+      if [[ "${1:-}" == "--no-create" ]]; then
+        printf '%s\n' "none at $CSA_VENV - this script never creates one (macos-ai-tools.sh does)"
+        return 0
+      fi
+      fix="${build:-use $versioned}, link $CSA_VENV to it"
+      ;;
+    migrate)
+      aside="$(venv_aside_name "$CSA_VENV" "<timestamp>")" || aside="${CSA_VENV}-<X.Y>"
+      fix="${build:+$build, }move the directory $CSA_VENV to $aside${reason:+ ($reason)}, link $CSA_VENV to ${versioned##*/}"
+      ;;
+    flip)
+      if [[ -e "$old" ]]; then
+        kept=", which is kept"
+      fi
+      fix="${build:+$build, }link $CSA_VENV to ${versioned##*/} instead of $old ($reason)$kept"
+      ;;
+    rebuild)
+      fix="rebuild $versioned ($reason), keeping the old one beside it"
+      ;;
+    *)
+      return 0
+      ;;
+  esac
+  printf '%s\n' "$fix; install/refresh $deps in it"
+}
+
+# Makes ${CSA_VENV}-${CSA_PYTHON_PREFERRED} a sound venv on $1 (the CSA Python), with
+# CSA_DOC_PY_DEPS installed. Prints the path a broken one was moved to, if any - ONLY that goes
+# to stdout. Exits 1, with a warning and nothing changed, when it cannot.
+#
+#   absent  `uv venv --seed` straight at the final path (`python -m venv` without uv).
+#   broken  BUILD FIRST, SWAP LAST: `uv venv --seed --relocatable` at .new-$$, the deps with
+#           `uv pip` only, then the broken one renamed to .broken-<ts> and the new one into place.
+#           Measured: a venv built at one path and renamed breaks `activate` and every console
+#           script, which hardcode the creation path. --relocatable survives the rename for the
+#           seed scripts and for scripts `uv pip` installs, but NOT for one the venv's own pip
+#           installs (exit 127) - so csa_venv_pip_install, whose fallback is that pip, is never
+#           used here. Without uv there is no relocatable build: the broken one is renamed away
+#           first and `python -m venv` builds at the final path, and a failure puts it back.
+# A build whose deps failed is removed: a replacement that cannot do the job is not one, and the
+# venv it would replace may still serve csa-preflight.
+default_venv_build() {
+  local py="$1" versioned="${CSA_VENV}-${CSA_PYTHON_PREFERRED}" reason new broken
+  if [[ ! -e "$versioned" && ! -L "$versioned" ]]; then
+    info "Building $versioned on $py" >&2
+    if has_command uv; then
+      if uv venv --quiet --seed --python "$py" "$versioned" >&2 \
+        && csa_venv_pip_install "$versioned/bin/python3" "${CSA_DOC_PY_DEPS[@]}" >&2; then
+        return 0
+      fi
+    elif "$py" -m venv "$versioned" >&2 \
+      && csa_venv_pip_install "$versioned/bin/python3" "${CSA_DOC_PY_DEPS[@]}" >&2; then
+      return 0
+    fi
+    rm -rf "$versioned"
+    warn "Could not build $versioned - nothing else was changed"
+    return 1
+  fi
+  if ! reason="$(venv_rebuild_reason "$versioned")"; then
+    return 0
+  fi
+  broken="${versioned}.broken-$(date +%Y%m%d%H%M%S)"
+  info "Rebuilding $versioned on $py: $reason" >&2
+  if has_command uv; then
+    new="${versioned}.new-$$"
+    rm -rf "$new"
+    if ! uv venv --quiet --seed --relocatable --python "$py" "$new" >&2 \
+      || ! uv pip install --quiet --python "$new/bin/python3" "${CSA_DOC_PY_DEPS[@]}" >&2; then
+      rm -rf "$new"
+      warn "Could not build a replacement for $versioned - leaving it exactly as it was"
+      return 1
+    fi
+    if ! mv "$versioned" "$broken"; then
+      rm -rf "$new"
+      warn "Could not move $versioned aside - leaving it exactly as it was"
+      return 1
+    fi
+    if ! mv "$new" "$versioned"; then
+      mv "$broken" "$versioned" || true
+      rm -rf "$new"
+      warn "Could not move the replacement into place - $versioned is as it was"
+      return 1
+    fi
+  else
+    if ! mv "$versioned" "$broken"; then
+      warn "Could not move $versioned aside - leaving it exactly as it was"
+      return 1
+    fi
+    if ! "$py" -m venv "$versioned" >&2 \
+      || ! csa_venv_pip_install "$versioned/bin/python3" "${CSA_DOC_PY_DEPS[@]}" >&2; then
+      rm -rf "$versioned"
+      mv "$broken" "$versioned" || true
+      warn "Could not rebuild $versioned - the old one is back, exactly as it was"
+      return 1
+    fi
+  fi
+  warn "$versioned rebuilt on $py ($reason); the previous one is kept at $broken"
+  printf '%s\n' "$broken"
+}
+
+# Leaves $CSA_VENV a RELATIVE link to a sound ${CSA_VENV}-${CSA_PYTHON_PREFERRED} on the CSA
+# Python, repairing whatever default_venv_state found and keeping every old directory. Returns 0
+# always: document deps are never worth the rest of the run.
+#   --no-create  (-update) repair what exists, never create one, never install a Python:
+#                find_csa_python only, so no Homebrew fallback either (D4).
+# Otherwise find_csa_python first and ensure_csa_python only when it finds nothing, because
+# install_python has just run ensure_csa_python and a second install would announce itself twice.
+#
+# The flip is `ln -sfn` then `mv -h`. -h is REQUIRED: measured on macOS, a plain `mv` onto a link
+# to a directory exits 0, leaves the link unchanged and drops the new link INSIDE the old target.
+# `ln -sfn` overwrites a leftover .link-new. A real directory is renamed aside first, so the gap is
+# one rename. ~/.zshrc is never edited: its `[ ! -d "$HOME/.default_venv" ]` follows the link.
+#
+# Rebuilt even when it is the active venv (D1). $VIRTUAL_ENV is compared with -ef, never as a
+# string: `activate` records the creation path (~/.default_venv-3.14), and shells opened before
+# the migration hold ~/.default_venv. The active shell's directory never moves - or, for a real
+# directory, its path now resolves through the link - so nothing it holds dangles; it gets a
+# to-do to open a new terminal.
+ensure_default_venv() {
+  local create=1 versioned="${CSA_VENV}-${CSA_PYTHON_PREFERRED}" state action old reason
+  local what py="" broken="" aside="" why="" active=0 v extras=""
+  if [[ "${1:-}" == "--no-create" ]]; then
+    create=0
+  fi
+  state="$(default_venv_state)" || state=""
+  IFS=$'\t' read -r action old reason <<< "$state"
+  if [[ "$reason" != "-" ]]; then
+    why=" ($reason)"
+  fi
+  case "$action" in
+    ok)
+      return 0
+      ;;
+    foreign-ok)
+      info "$CSA_VENV links to $old, which this installer did not make; it is a sound Python ${CSA_PYTHON_PREFERRED} venv, so it is left as it is"
+      return 0
+      ;;
+    other)
+      warn "$CSA_VENV is not a directory or a link to one - left as it is"
+      return 0
+      ;;
+    create)
+      if [[ $create -eq 0 ]]; then
+        return 0
+      fi
+      what="$CSA_VENV"
+      ;;
+    rebuild)
+      what="$versioned$why"
+      ;;
+    flip)
+      what="$CSA_VENV, a link to $old$why,"
+      ;;
+    migrate)
+      what="$CSA_VENV, a directory from before the versioned layout$why,"
+      ;;
+    *)
+      return 0
+      ;;
+  esac
+
+  if [[ -n "${VIRTUAL_ENV:-}" ]]; then
+    if [[ "$VIRTUAL_ENV" -ef "$CSA_VENV" ]]; then
+      active=1
+    fi
+    for v in "$CSA_VENV"-*; do
+      if [[ "$VIRTUAL_ENV" -ef "$v" ]]; then
+        active=1
+      fi
+    done
+  fi
+
+  if ! py="$(find_csa_python)"; then
+    py=""
+    if [[ $create -eq 1 ]]; then
+      py="$(ensure_csa_python)" || py=""
+    fi
+  fi
+  if [[ -z "$py" ]]; then
+    warn "$what needs a Python ${CSA_PYTHON_PREFERRED} standard build to build on, and there is no Python ${CSA_PYTHON_PREFERRED} standard build - left as it is"
+    return 0
+  fi
+  if [[ "$reason" == *Cellar* && "$py" == */Cellar/* ]]; then
+    warn "$what but the only Python ${CSA_PYTHON_PREFERRED} is on a Cellar path too - left as it is"
+    return 0
+  fi
+
+  if ! broken="$(default_venv_build "$py")"; then
+    return 0
+  fi
+
+  if [[ "$action" == "migrate" ]]; then
+    aside="$(venv_aside_name "$CSA_VENV" "$(date +%Y%m%d%H%M%S)")" || aside=""
+    if [[ -z "$aside" ]] || ! mv "$CSA_VENV" "$aside"; then
+      warn "Could not move $CSA_VENV aside - left as it is; $versioned is ready and the next run links it"
+      return 0
+    fi
+    old="$aside"
+  fi
+  if [[ "$action" == "rebuild" ]]; then
+    old="$broken"
+  else
+    if ! { ln -sfn "${versioned##*/}" "${CSA_VENV}.link-new" && mv -h "${CSA_VENV}.link-new" "$CSA_VENV"; }; then
+      rm -f "${CSA_VENV}.link-new"
+      if [[ -n "$aside" ]]; then
+        mv "$aside" "$CSA_VENV" || true
+      fi
+      warn "Could not link $CSA_VENV to ${versioned##*/} - left as it was; $versioned is ready"
+      return 0
+    fi
+    case "$action" in
+      create)
+        success "Created $versioned; $CSA_VENV links to it"
+        ;;
+      migrate)
+        warn "$CSA_VENV now links to ${versioned##*/}; the directory that was there$why is kept at $aside"
+        ;;
+      flip)
+        if [[ "$old" -ef "$versioned" ]]; then
+          warn "$CSA_VENV pointed at $versioned, which no longer existed; it is rebuilt"
+        elif [[ -e "$old" ]]; then
+          warn "$CSA_VENV now links to ${versioned##*/}; it linked to $old$why, which is kept, not deleted"
+        else
+          warn "$CSA_VENV now links to ${versioned##*/}; it linked to $old, which no longer exists"
+        fi
+        ;;
+    esac
+  fi
+
+  if [[ "$action" != "create" && -d "$old" && ! "$old" -ef "$versioned" ]]; then
+    extras="$(venv_extra_packages "$py" "$old" "$versioned")" || extras=""
+  fi
+  if [[ -n "$extras" ]]; then
+    warn "Not reinstalled from $old: $extras"
+    if declare -F csa_todo_add >/dev/null && csa_todo_add 43 "Reinstall what the previous ~/.default_venv had: $extras" - "$CSA_VENV/bin/python3 -m pip install $extras"; then
+      :
+    else
+      warn "  to reinstall them: $CSA_VENV/bin/python3 -m pip install $extras"
+    fi
+  fi
+  if [[ $active -eq 1 ]]; then
+    if declare -F csa_todo_add >/dev/null && csa_todo_add 10 "Open a new terminal to use the rebuilt ~/.default_venv" - -; then
+      :
+    else
+      warn "Open a new terminal to use the rebuilt ~/.default_venv"
+    fi
+  fi
+  return 0
+}
+
+# The CSA tools uv installed ($(uv tool dir)/csa-*) whose interpreter must be replaced, one
+# "<tool>: <reason>" line each, for the Internal MCP servers plan row (#179 item 6). Read-only:
+# the private gate repo's setup scripts do the rebuilding. The test is the venv's, by the same
+# recorded-path rule, in the tool's wording.
+csa_tool_repairs() {
+  local dir tool reason
+  if ! has_command uv; then
+    return 0
+  fi
+  dir="$(uv tool dir 2>/dev/null)" || dir=""
+  if [[ -z "$dir" || ! -d "$dir" ]]; then
+    return 0
+  fi
+  for tool in "$dir"/csa-*; do
+    if [[ ! -e "$tool" && ! -L "$tool" ]]; then
+      continue
+    fi
+    if reason="$(venv_rebuild_reason "$tool")"; then
+      case "$reason" in
+        "it is Python "*) reason="${reason%%,*}" ;;
+        *Cellar*) reason="it is on a Homebrew Cellar path" ;;
+      esac
+      printf '%s: %s\n' "${tool##*/}" "$reason"
+    fi
+  done
+  return 0
+}
+
+# The document preflight deps go into ~/.default_venv, which ensure_default_venv first makes a
+# link to a sound ~/.default_venv-3.14 on the CSA Python. They used to be skipped whenever PATH's
+# python3 happened to import them - but document-pipeline's launchers probe the venv, not PATH.
 install_doc_python_deps() {
-  local py
-  if ! py="$(ensure_csa_python)"; then
-    warn "No Python ${CSA_PYTHON_PREFERRED} standard build — skipping document preflight deps"
+  local reason
+  ensure_default_venv
+  if reason="$(venv_rebuild_reason "$CSA_VENV")" && [[ "$reason" != *Cellar* ]]; then
+    warn "Skipping document preflight deps: $CSA_VENV cannot take them ($reason)"
     return 0
   fi
-
-  # Some other python3 on PATH may already satisfy them. Leave it alone.
-  if "$py" -c 'import yaml, pymupdf, csa_google_workspace' >/dev/null 2>&1; then
-    info "Document preflight deps already available to $py"
-    return 0
-  fi
-
-  # A venv created before this floor existed is a 3.9 venv and STAYS one - `python3 -m venv`
-  # does not upgrade a directory in place, so every later run would reuse it and reinstall
-  # into an interpreter csa-google-workspace refuses. It has to be replaced.
-  #
-  # BUILD FIRST, SWAP LAST. The obvious order - move the old one aside, then create the new
-  # one - leaves the machine with NO venv when creation fails, and a sub-floor venv is not
-  # worthless: it is below what csa-google-workspace needs but still serves csa-preflight,
-  # which imports only yaml and fitz. Losing that is a regression caused by the repair.
-  # Moved aside rather than deleted, because other CSA repos install into this venv too and a
-  # rename is something a person can undo.
-  if [[ -x "$CSA_VENV/bin/python3" ]] && ! python_meets_floor "$CSA_VENV/bin/python3"; then
-    # Never move a venv that is ACTIVE in the calling shell: $VIRTUAL_ENV and the python3 on
-    # that shell's PATH would both dangle, and the person is left debugging their own prompt.
-    if [[ -n "${VIRTUAL_ENV:-}" ]] && [[ "${VIRTUAL_ENV%/}" == "${CSA_VENV%/}" ]]; then
-      warn "$CSA_VENV is below ${CSA_PYTHON_MIN} but is ACTIVE in this shell — leaving it alone"
-      warn "  run 'deactivate', then re-run this script to rebuild it"
-      return 0
-    fi
-
-    local build stale
-    build="${CSA_VENV}.new.$$"
-    rm -rf "$build"
-    info "Rebuilding $CSA_VENV — it is $(get_version "$CSA_VENV/bin/python3" --version), below ${CSA_PYTHON_MIN}"
-    if ! "$py" -m venv "$build"; then
-      rm -rf "$build"
-      warn "Could not build a replacement venv — leaving $CSA_VENV exactly as it was"
-      return 0
-    fi
-
-    stale="${CSA_VENV}.pre-${CSA_PYTHON_MIN}-$(date +%Y%m%d%H%M%S)"
-    if ! mv "$CSA_VENV" "$stale"; then
-      rm -rf "$build"
-      warn "Could not move $CSA_VENV aside — leaving it exactly as it was"
-      return 0
-    fi
-    if ! mv "$build" "$CSA_VENV"; then
-      warn "Could not install the replacement venv; the old one is at $stale"
-      return 0
-    fi
-    warn "$CSA_VENV rebuilt; the previous one is at $stale (delete it once you are happy)"
-  fi
-
   if [[ ! -x "$CSA_VENV/bin/python3" ]]; then
-    info "Creating Python venv at $CSA_VENV"
-    "$py" -m venv "$CSA_VENV" || {
-      warn "Could not create $CSA_VENV — skipping document preflight deps"
-      return 0
-    }
+    warn "Skipping document preflight deps: there is no $CSA_VENV"
+    return 0
   fi
-
   info "Installing document preflight deps (${CSA_DOC_PY_DEPS[*]}) into $CSA_VENV"
   csa_venv_pip_install "$CSA_VENV/bin/python3" "${CSA_DOC_PY_DEPS[@]}" \
     || warn "Failed to install ${CSA_DOC_PY_DEPS[*]} into $CSA_VENV — csa-preflight will print its own install hint"

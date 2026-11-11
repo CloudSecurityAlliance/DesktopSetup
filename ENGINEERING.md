@@ -335,9 +335,10 @@ auto-updates); npm for the Codex and Gemini CLIs and for Wrangler; **uv for Pyth
     machine.
   - **Telling the builds apart.** `uv tool list --show-python` prints the same thing for both
     builds. Ask the interpreter for `sysconfig.get_config_var("Py_GIL_DISABLED")`.
-  - **Enforced on macOS for the interpreter the installer names** (`find_csa_python`, above).
-    Rebuilding `~/.default_venv` and the CSA tools that already sit on 3.14t is the rest of
-    #179; Windows is #184.
+  - **Enforced on macOS for the interpreter the installer names** (`find_csa_python`, above),
+    and for `~/.default_venv`, which is rebuilt off 3.14t (below). The CSA tools already on
+    3.14t are rebuilt by the private gate repo's setup scripts; `csa_tool_repairs` lists them,
+    and why, in the plan's Internal MCP servers row. Windows is #184.
 - **Node's floor is derived from the consumer that asks for most, never picked:** **22**, from
   Wrangler's `engines.node`. Enforced on both platforms.
 - **Node is pinned to the LTS line on both platforms**
@@ -355,6 +356,66 @@ auto-updates); npm for the Codex and Gemini CLIs and for Wrangler; **uv for Pyth
   installed with `npm -g` survive the switch. The unversioned formula is **removed**, not
   unlinked, because `brew upgrade` would otherwise relink it and flip the machine back to
   Current between runs.
+
+### `~/.default_venv`: a link to a versioned venv (macOS)
+
+document-pipeline's launchers are bash and probe `$HOME/.default_venv/bin/python3`, so this
+venv is where the document deps go (`CSA_DOC_PY_DEPS`: pyyaml, pymupdf, csa-google-workspace,
+and `markitdown[all]>=0.1.9` for #157 — unpinned on 3.15 it silently resolved to 0.0.2). On real
+Macs it had been built on whatever `python3` PATH offered: Homebrew's 3.15, a 3.13, uv's 3.14t, or
+a Cellar path the next `brew upgrade` deletes.
+
+- **The layout, decided by the CINO on 2026-11-10 (#179):** `~/.default_venv` is a **relative**
+  symlink to `~/.default_venv-3.14` (`${CSA_VENV}-${CSA_PYTHON_PREFERRED}`), built on the CSA
+  Python. Old versioned directories are kept for rollback and never deleted. `~/.zshrc` is
+  never edited: a `[ -d ~/.default_venv ]` test follows the link.
+- **`venv_rebuild_reason <dir>`** says why a venv must be rebuilt, or exits 1: its Python no
+  longer exists (a dangling `bin/python3` is broken, never absent), does not run, is not 3.14, is
+  free-threaded, or is **recorded** on a Homebrew Cellar path. Recorded means the first symlink
+  hop out of the venv, or `pyvenv.cfg`'s `home`, never `realpath`: Homebrew's
+  `opt/python@3.14` is stable across `brew upgrade` though its realpath is in the Cellar, so a
+  Homebrew-fallback venv is not rebuilt on every run. A Cellar venv is rebuilt only onto a
+  non-Cellar CSA Python; otherwise it is left working, with a warning.
+- **`ensure_default_venv`** classifies what is there (`default_venv_state`, which the plan row
+  uses too, so the two cannot disagree) and repairs it: a real directory (pre-symlink machines)
+  is renamed to `~/.default_venv-<X.Y>` (from `pyvenv.cfg`'s `version_info`, which uv writes, or
+  `version`, which `python -m venv` writes; `-unknown` without one; a timestamp on a name
+  collision); a link to an older version, or a dangling one, is flipped; a link the installer
+  did not make is left alone when sound and flipped (naming it) when not; a broken `-3.14` is
+  replaced. **Build first, swap last:** when the build fails, nothing has moved.
+- **The flip is `ln -sfn` then `mv -h`.** Measured on macOS: a plain `mv newlink
+  ~/.default_venv`, where that is a link to a directory, exits 0, changes nothing, and drops
+  `newlink` *inside* the old target. `mv -h` replaces the link. (GNU `mv` has no `-h`; the test
+  suite's Linux shim maps it to `-T`, the same operation.)
+- **Replacing a broken `-3.14` uses `uv venv --seed --relocatable` at `.new-$$`, filled with `uv
+  pip` only**, then renames the broken one to `.broken-<ts>` and the new one into place.
+  Measured: a venv built at one path and renamed breaks `activate` and every console script,
+  which hardcode the creation path; `--relocatable` survives the rename for seed scripts and for
+  scripts `uv pip` installs, but not for one the venv's own `pip` installs (exit 127). So
+  `csa_venv_pip_install`, whose fallback is that pip, is never used on `.new-$$`. Fresh builds
+  go straight to the final path and are not relocatable. Without uv, the broken one is renamed
+  away first and `python -m venv` builds at the final path; a failure puts it back.
+- **Rebuilt even when it is the active venv** (decision D1). `$VIRTUAL_ENV` is compared with
+  `-ef`, never as a string: `activate` records the creation path (`~/.default_venv-3.14`), while
+  shells opened before the migration hold `~/.default_venv`. The active shell's directory never
+  moves, so nothing dangles; the run adds the to-do *open a new terminal* (order 10).
+- **What a rebuild did not bring back is reported:** the top-level packages the old venv had
+  beyond `CSA_DOC_PY_DEPS`, read from its metadata (so it works when its interpreter is gone) —
+  a to-do with a ledger, printed without one. `macos-update.sh` has no `csa_todo_add` at all,
+  and in `macos-ai-tools.sh` it returns false when `CSA_TODO_FILE` is unset, so every call is
+  guarded: `if declare -F csa_todo_add >/dev/null && csa_todo_add …; then :; else <print>; fi`.
+- **The Python comes from `find_csa_python` first,** and `ensure_csa_python` only when that finds
+  nothing, so an ai-tools run (whose `install_python` has already ensured it) installs and
+  announces once. With no CSA Python at all, the venv is left as it is, with a warning.
+- **`-update` repairs, never creates** (decision D4): `update_default_venv` is its own `main()`
+  step, before `update_pip`, and calls `ensure_default_venv --no-create` (`find_csa_python`
+  only: no Python install, no Homebrew fallback), then refreshes `CSA_DOC_PY_DEPS`. Until now
+  that refresh sat at the end of `update_pip`, after two early returns, so an up-to-date machine
+  never reached it.
+- Windows has no `~/.default_venv`; its document deps are #183.
+- `tests/test_venv_replacement.py` runs all of it on stub uv, brew and interpreters, plus one
+  case on real uv with wheels it builds itself (offline), and two controls that prove the cases
+  can fail (a plain `mv`, a build without `--relocatable`).
 
 ### uv's exit codes are not states
 
@@ -397,6 +458,11 @@ setup scripts, and an undeclared value reached them empty, so the interpreter wa
 `tests/test_python_pins.py` asserts the six preferred values and the two floors agree, and that
 every `CSA_DOC_PY_DEPS=(...)` array copy in `scripts/*.sh` is identical (an array, so
 `check-duplication.py` does not see it); `--self-test` breaks each rule on purpose.
+
+**`macos-update.sh` carries its own copy of the `~/.default_venv` machinery:** `CSA_VENV`,
+`CSA_DOC_PY_DEPS`, the three CSA-Python functions and every function from `venv_cfg_get` to
+`ensure_default_venv`, byte-identical to `macos-ai-tools.sh` (`check-duplication.py` holds the
+functions, `test_python_pins.py` the array). Change both.
 
 **The plugin lists are single-source** and are the exception: `scripts/csa-plugins.txt` and
 `scripts/csa-plugins-internal.txt` are fetched from `HEAD` at runtime, so a list-only change
