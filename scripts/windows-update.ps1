@@ -17,7 +17,7 @@
 
 $ErrorActionPreference = 'Stop'
 
-$ScriptVersion = "2026-11-11T17:38Z"
+$ScriptVersion = "2026-11-10T23:51Z"
 
 # ── Snapshot location ───────────────────────────────────────
 
@@ -1335,92 +1335,12 @@ function Update-Winget {
     }
 }
 
-# The Node.js installer owns npm (#153), as Homebrew's node@24 does on macOS. npm and corepack
-# ship with Node - OpenJS.NodeJS.LTS puts them under Program Files\nodejs, and winget upgrades
-# them with Node - so npm updates only what npm itself installed, the rule macos-update.sh
-# follows. A bare `npm update -g` included npm whenever the global tree held a copy of it. On
-# macOS that installed a second npm that never runs; whether Windows can get into the same state
-# is not measured yet (#153 lists the checks), and the rule does not depend on the answer.
-function Test-NpmNodeOwned {
-    param([string]$Name)
-    return ($Name -eq 'npm' -or $Name -eq 'corepack')
-}
-
-# `npm outdated -g --json`, read: Ok, and Packages (Name, Current, Latest). JSON rather than the
-# --parseable that macOS reads, because --parseable's first field is a path and a Windows path
-# has a colon in it. npm exits 1 both when something IS outdated and when it failed, so the exit
-# code decides nothing. Measured on npm 11.20: a failure prints {"error": {"code": ...}} on
-# stdout, and "all current" prints {}. So Ok is false for an error object or for output that is
-# not JSON at all - never read as "all current". The JSON is cut out between the first { and the
-# last } because Invoke-NativeCapture merges stderr into the same text.
-function ConvertFrom-NpmOutdatedJson {
-    param([string]$Text)
-    $failed = [pscustomobject]@{ Ok = $false; Packages = @() }
-    if (-not $Text) { return $failed }
-    $start = $Text.IndexOf('{')
-    $end = $Text.LastIndexOf('}')
-    if ($start -lt 0 -or $end -lt $start) { return $failed }
-    try { $parsed = ConvertFrom-Json -InputObject $Text.Substring($start, $end - $start + 1) }
-    catch { return $failed }
-    if ($null -eq $parsed) { return $failed }
-    $packages = @()
-    foreach ($prop in $parsed.PSObject.Properties) {
-        $entry = $prop.Value
-        if ($null -eq $entry) { continue }
-        $latest = "$($entry.latest)"
-        if ($prop.Name -eq 'error' -and $null -ne $entry.code -and -not $latest) { return $failed }
-        if (-not $latest) { continue }
-        $packages += [pscustomobject]@{ Name = $prop.Name; Current = "$($entry.current)"; Latest = $latest
-                                        Location = "$($entry.location)" }
-    }
-    return [pscustomobject]@{ Ok = $true; Packages = $packages }
-}
-
-function Get-NpmGlobalOutdated {
-    $result = Invoke-NativeCapture { npm outdated -g --json }
-    return (ConvertFrom-NpmOutdatedJson $result.Output)
-}
-
-# A package `npm link` (or `npm install -g <folder>`) put in the global tree: a link to someone's
-# working copy, which `npm outdated -g` lists and `npm install -g <pkg>@latest` would replace with
-# the registry copy (both measured on npm 11.20, macOS; `npm update -g` left the link alone). On
-# Windows npm makes that link a junction; either kind is a reparse point.
-function Test-NpmLinked {
-    param([string]$Path)
-    if (-not $Path) { return $false }
-    $item = Get-Item -LiteralPath $Path -Force -ErrorAction SilentlyContinue
-    if ($null -eq $item) { return $false }
-    return [bool]($item.Attributes -band [System.IO.FileAttributes]::ReparsePoint)
-}
-
 function Update-Npm {
     if (-not (Has-Command npm)) { return }
 
-    $outdated = Get-NpmGlobalOutdated
-    if (-not $outdated.Ok) {
-        Write-Warn "Could not list outdated global npm packages (npm outdated failed); skipping"
-        return
-    }
-    $npmTargets = @()
-    foreach ($pkg in $outdated.Packages) {
-        if (Test-NpmNodeOwned $pkg.Name) { continue }
-        if (Test-NpmLinked $pkg.Location) {
-            Write-Info "  Not updating $($pkg.Name): it is linked from a local folder (npm link)"
-            continue
-        }
-        $npmTargets += "$($pkg.Name)@latest"
-    }
-    if ($npmTargets.Count -eq 0) {
-        Write-Info "Global npm packages already current"
-        return
-    }
-
-    Write-Info "Updating global npm packages: $($npmTargets -join ' ')"
-    # $LASTEXITCODE, not the return value: Invoke-NativeNpm returns npm's output lines AND the
-    # code, so `$code -ne 0` on that array was true whenever npm printed anything, and the old
-    # `npm update -g` here warned that it failed after every run that worked.
-    $null = Invoke-NativeNpm { npm install -g $npmTargets }
-    if ($LASTEXITCODE -ne 0) { Write-Warn "npm install -g failed; continuing" }
+    Write-Info "Updating global npm packages"
+    $code = Invoke-NativeNpm { npm update -g }
+    if ($code -ne 0) { Write-Warn "npm update -g failed; continuing" }
 }
 
 # No venv here, unlike macOS. macos-ai-tools.sh puts the document-pipeline deps in
@@ -1481,7 +1401,7 @@ function Show-Preflight {
     } else {
         Write-Host "  winget packages    : skipped (winget not installed)"
     }
-    if (Has-Command npm)    { Write-Host "  npm globals        : npm install -g <package>@latest for each outdated package, except npm and corepack (Node's own; winget upgrades them with Node) and npm-linked folders" }
+    if (Has-Command npm)    { Write-Host "  npm globals        : npm update -g" }
     else                    { Write-Host "  npm globals        : skipped (npm not installed)" }
     if (Has-Command python) { Write-Host "  pip packages       : upgrade pip, then every outdated package" }
     else                    { Write-Host "  pip packages       : skipped (Python not installed)" }

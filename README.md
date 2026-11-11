@@ -224,12 +224,12 @@ claude update                   # Claude Code
 ```
 
 ```powershell
-# Windows: afterwards, `npm install -g <package>@latest` for each package `npm outdated -g` lists, except npm and corepack
-winget upgrade --all; npm outdated -g; python -m pip install --upgrade pip; claude update
+# Windows
+winget upgrade --all; npm update -g; python -m pip install --upgrade pip; claude update
 ```
 
-Not `npm update -g`: npm and corepack come with Node, and on macOS that command installs a
-second npm over Homebrew's that never runs
+On macOS, not `npm update -g`: npm and corepack come with Node, and with Homebrew's node@24
+that command installs a second npm over Homebrew's, one that never runs
 ([#153](https://github.com/CloudSecurityAlliance/DesktopSetup/issues/153)).
 
 Note that doing it by hand skips the CSA layer entirely — no plugins, no MCP servers.
