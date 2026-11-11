@@ -32,7 +32,7 @@
 
 set -euo pipefail
 
-SCRIPT_VERSION="2026-11-11T04:47Z"
+SCRIPT_VERSION="2026-11-11T04:49Z"
 
 # ── CSA plugin marketplaces ─────────────────────────────────────────
 # Plugin marketplaces to register with Claude Code. Each entry is an
@@ -1023,6 +1023,14 @@ python_is_csa_build() {
 #      is accepted only if it verifies, so nothing depends on whether a shim exists.
 #   3. Homebrew's opt/python@X.Y, which is stable across `brew upgrade` (its Cellar target is not).
 #
+# Both uv calls run in a subshell with UV_PYTHON_PREFERENCE unset. Measured on uv 0.13.7: with it
+# exported, at any value, `--managed-python` is refused ("cannot be used with
+# `--python-preference`", exit 2) by both `find` and `list`, so this found nothing even with the
+# standard 3.14 installed, and ensure_csa_python went on to Homebrew. A subshell, not `env -u`:
+# the variable is dropped for those two calls only, and the tests' PATH has no /usr/bin/env.
+# An empty listing (`[]`) spawns no parser: /usr/bin/python3 on a Mac without the Command Line
+# Tools opens an install dialog, and the preflight runs this before anyone has agreed to anything.
+#
 # A path is returned as uv printed it - the minor-version directory cpython-3.14-<platform>,
 # a link uv points at the current patch release - never resolved to the patch directory
 # (cpython-3.14.10-<platform>), which a patch upgrade replaces.
@@ -1035,13 +1043,13 @@ for e in json.loads(sys.argv[1]):
             if p:
                 print(p)'
   if has_command uv; then
-    first="$(uv python find --system --managed-python "$CSA_PYTHON_PREFERRED" 2>/dev/null)" || first=""
+    first="$( (unset UV_PYTHON_PREFERENCE; uv python find --system --managed-python "$CSA_PYTHON_PREFERRED") 2>/dev/null)" || first=""
     if [[ -n "$first" ]] && python_is_csa_build "$first"; then
       printf '%s\n' "$first"
       return 0
     fi
-    listed="$(uv python list --only-installed --managed-python "$CSA_PYTHON_PREFERRED" --output-format json 2>/dev/null)" || listed=""
-    if [[ -n "$listed" ]]; then
+    listed="$( (unset UV_PYTHON_PREFERENCE; uv python list --only-installed --managed-python "$CSA_PYTHON_PREFERRED" --output-format json) 2>/dev/null)" || listed=""
+    if [[ -n "$listed" && "$listed" != "[]" ]]; then
       # Any Python that runs can parse JSON, including a 3.14t that failed the check above.
       for parser in "$first" /usr/bin/python3; do
         [[ -n "$parser" ]] || continue

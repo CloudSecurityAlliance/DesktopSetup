@@ -303,6 +303,15 @@ auto-updates); npm for the Codex and Gemini CLIs and for Wrangler; **uv for Pyth
   venv's 3.13 are both on PATH on real machines. `tests/test_csa_python.py` pins all of it.
   - **`--system` is required.** Measured on uv 0.13.7: with `VIRTUAL_ENV` set,
     `uv python find` without it returns the active venv's interpreter.
+  - **`UV_PYTHON_PREFERENCE` is dropped for those two calls**, in a subshell. Measured on uv
+    0.13.7: exported at any value, it makes both `find` and `list` refuse `--managed-python`
+    (exit 2), so the resolver found nothing with the standard 3.14 installed. `uv venv`,
+    `uv pip` and a no-op `uv python install` are unaffected, and `UV_MANAGED_PYTHON` /
+    `UV_NO_MANAGED_PYTHON` do not conflict. An empty listing (`[]`) is not handed to a parser,
+    because `/usr/bin/python3` on a Mac without the Command Line Tools opens an install dialog,
+    before consent. The stub `uv` in `tests/test_csa_python.py` refuses the same combination,
+    and a `find` or `list` missing any of its flags; `real_uv_resolver` runs the resolver
+    against real uv (required in CI's `venv-macos` job).
   - **The path is returned as uv prints it:** the minor-version directory
     (`cpython-3.14-<platform>`, a link uv points at the current patch release), never the
     resolved patch directory (`cpython-3.14.10-<platform>`), which a patch upgrade replaces.

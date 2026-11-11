@@ -248,6 +248,13 @@ jobs:
           CSA_TEST_REQUIRE_REAL_UV: "1"
         run: python3 tests/test_venv_replacement.py
 
+      # find_csa_python against real uv, including with UV_PYTHON_PREFERENCE exported (real uv
+      # refuses it alongside --managed-python, exit 2). Needs the uv-managed 3.14 installed above.
+      - name: macOS names one CSA Python, against real uv too (#179)
+        env:
+          CSA_TEST_REQUIRE_REAL_UV: "1"
+        run: python3 tests/test_csa_python.py
+
       # Resolves CSA_DOC_PY_DEPS with real uv against PyPI and fails on onnxruntime, whose
       # official macOS builds send Microsoft telemetry by default (pymupdf 2.x requires it). The
       # self-test resolves the list as it stood at 495ad6b and must report it.

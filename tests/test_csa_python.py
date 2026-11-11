@@ -25,8 +25,13 @@ other invocation (the JSON parse) to the real Python running this test. The stub
 and `info` all write chatter to stdout, so a function that leaks it fails here.
 `python_is_csa_build` is also run against the real interpreters on this machine.
 
-What this cannot prove: what real uv does. The stub reproduces behaviour measured on uv
-0.13.7 (the `--system` effect, the JSON keys), and a uv that changes it will not show up here.
+The stub reproduces behaviour measured on uv 0.13.7: the `--system` effect, the JSON keys, and
+that an exported `UV_PYTHON_PREFERENCE` (any value) makes uv refuse `--managed-python` with exit 2.
+It also refuses a `find` without `--system` or `--managed-python` and a `list` without
+`--only-installed` or `--managed-python`, so dropping any of them fails a case here
+(`flags_dropped_are_caught` proves each one does). `real_uv_resolver` runs `find_csa_python`
+against real uv, with and without `UV_PYTHON_PREFERENCE`; it is skipped without a real uv and
+uv-managed standard 3.14, unless CSA_TEST_REQUIRE_REAL_UV is set (the `venv-macos` CI job).
 
     python3 tests/test_csa_python.py
 """
@@ -160,8 +165,17 @@ UV_STUB = """#!/bin/sh
 PATH=/usr/bin:/bin
 S='{scen}'
 printf 'uv %s\\n' "$*" >> "$S/calls.log"
+has() {{ case " $* " in *" $FLAG "*) return 0 ;; esac; return 1; }}
+# Measured on uv 0.13.7: UV_PYTHON_PREFERENCE in the environment, at any value, and
+# --managed-python on the command line -> refused, exit 2, for find and list alike.
+FLAG=--managed-python
+if [ -n "${{UV_PYTHON_PREFERENCE+x}}" ] && has "$@"; then
+  echo "error: the argument '--managed-python' cannot be used with '--python-preference'" >&2
+  exit 2
+fi
 case "$1 $2" in
   "python find")
+    FLAG=--managed-python; if ! has "$@"; then echo "stub: find without --managed-python" >&2; exit 2; fi
     # Measured on uv 0.13.7: with VIRTUAL_ENV set, `uv python find` returns the active venv's
     # interpreter unless --system is given.
     if [ -n "$VIRTUAL_ENV" ]; then
@@ -170,9 +184,12 @@ case "$1 $2" in
         *) printf '%s\\n' "$VIRTUAL_ENV/bin/python3"; exit 0 ;;
       esac
     fi
+    FLAG=--system; if ! has "$@"; then echo "stub: find without --system" >&2; exit 2; fi
     if [ -f "$S/find" ]; then cat "$S/find"; exit 0; fi
     echo "error: No interpreter found" >&2; exit 2 ;;
   "python list")
+    FLAG=--only-installed; if ! has "$@"; then echo "stub: list without --only-installed" >&2; exit 2; fi
+    FLAG=--managed-python; if ! has "$@"; then echo "stub: list without --managed-python" >&2; exit 2; fi
     if [ -f "$S/list.json" ]; then cat "$S/list.json"; else echo "[]"; fi
     exit 0 ;;
   "python install")
@@ -564,6 +581,83 @@ def resolver_cases() -> None:
         check(rc == 1 and out == "", "listing entries whose variant is not `default` are skipped",
               show(out, err, rc))
 
+        print("\nuv_python_preference_exported")
+        # Real uv refuses --managed-python while UV_PYTHON_PREFERENCE is in the environment, at
+        # any value; find_csa_python drops it, in a subshell, for its two uv calls.
+        for value in ("only-managed", "managed", "system", "only-system", ""):
+            for how, setup in (("find", lambda c, s: c.uv(find=s, listing=[])),
+                               ("the listing", lambda c, s: c.uv(listing=[entry(s)]))):
+                c = Case(root, f"pref_{value or 'empty'}_{how.replace(' ', '_')}")
+                std = c.std()
+                setup(c, std)
+                out, err, rc = c.run("find_csa_python",
+                                     extra_env={"UV_PYTHON_PREFERENCE": value})
+                check(rc == 0 and only_line(out) == str(std),
+                      f"UV_PYTHON_PREFERENCE={value!r} exported: the standard 3.14 is still found "
+                      f"(through {how})", show(out, err, rc, c.calls()))
+        c = Case(root, "pref_caller_keeps_it")
+        std = c.std()
+        c.uv(find=std, listing=[entry(std)])
+        out, err, rc = c.run('find_csa_python >/dev/null\necho "AFTER=${UV_PYTHON_PREFERENCE-unset}"',
+                             extra_env={"UV_PYTHON_PREFERENCE": "only-managed"})
+        check(rc == 0 and "AFTER=only-managed" in out,
+              "and the caller's own UV_PYTHON_PREFERENCE is left as it was", show(out, err, rc))
+
+        print("\nflags_dropped_are_caught")
+        fn = extract("find_csa_python")
+        find_line = 'uv python find --system --managed-python "$CSA_PYTHON_PREFERRED"'
+        list_line = ('uv python list --only-installed --managed-python "$CSA_PYTHON_PREFERRED" '
+                     '--output-format json')
+        mutations = [
+            ("--system dropped from find", find_line, find_line.replace("--system ", ""), "find"),
+            ("--managed-python dropped from find", find_line,
+             find_line.replace("--managed-python ", ""), "find"),
+            ("--only-installed dropped from list", list_line,
+             list_line.replace("--only-installed ", ""), "list"),
+            ("--managed-python dropped from list", list_line,
+             list_line.replace("--managed-python ", ""), "list"),
+        ]
+        for label, old, new, via in mutations:
+            c = Case(root, "dropped_" + re.sub(r"\W+", "_", label))
+            std = c.std()
+            if via == "find":
+                c.uv(find=std, listing=[])          # only `uv python find` knows the path
+            else:
+                c.uv(listing=[entry(std)])           # only the listing knows it
+            out, err, rc = c.run("find_csa_python")
+            good = rc == 0 and only_line(out) == str(std)
+            mutated = fn.replace(old, new)
+            out2, err2, rc2 = c.run(mutated + "\nfind_csa_python")
+            check(good and mutated != fn and rc2 == 1 and out2 == "",
+                  f"{label}: the shipping resolver finds it, the mutated one does not",
+                  show(out, err, rc) + "\nmutated:\n" + show(out2, err2, rc2, c.calls()))
+        c = Case(root, "dropped_the_unset")
+        std = c.std()
+        c.uv(find=std, listing=[entry(std)])
+        mutated = fn.replace("unset UV_PYTHON_PREFERENCE; ", "")
+        out, err, rc = c.run(mutated + "\nfind_csa_python",
+                             extra_env={"UV_PYTHON_PREFERENCE": "only-managed"})
+        check(mutated != fn and fn.count("unset UV_PYTHON_PREFERENCE; ") == 2 and rc == 1,
+              "without the unset, UV_PYTHON_PREFERENCE blinds both calls (so the case above can "
+              "fail)", show(out, err, rc, c.calls()))
+
+        print("\nempty_listing_spawns_no_parser")
+        c = Case(root, "empty_listing")
+        ft = c.ft()
+        log = c.scen / "ft-runs.log"
+        ft.write_text("#!/bin/sh\n"
+                      f'printf "%s\\n" "$*" >> "{log}"\n'
+                      'case "$*" in\n'
+                      f'  *Py_GIL_DISABLED*) echo "{PREF} 1"; exit 0 ;;\n'
+                      "esac\n"
+                      f'exec "{sys.executable}" "$@"\n', encoding="utf-8")
+        c.uv(find=ft)                                 # no list.json: the stub lists `[]`
+        out, err, rc = c.run("find_csa_python")
+        runs = log.read_text(encoding="utf-8").splitlines() if log.exists() else []
+        check(rc == 1 and runs and all("Py_GIL_DISABLED" in r for r in runs),
+              "a `[]` listing is not handed to a parser (the probe ran; no JSON parse did)",
+              "\n".join(runs))
+
         print("\npython_is_csa_build is silent")
         c = Case(root, "silent")
         std = c.std()
@@ -670,6 +764,63 @@ def static_checks() -> None:
           "the unversioned Homebrew `python` (whatever minor it is today) is never installed")
 
 
+def real_uv_resolver() -> None:
+    """find_csa_python against real uv: the uv-managed standard 3.14 comes back with and without
+    UV_PYTHON_PREFERENCE exported. Read-only on uv's interpreter directory (measured: `uv python
+    find` and `list` change nothing there); HOME and uv's cache are temporary."""
+    print("\nreal_uv_resolver")
+    uv = shutil.which("uv")
+    require = bool(os.environ.get("CSA_TEST_REQUIRE_REAL_UV"))
+
+    def unavailable(why: str) -> None:
+        if require:
+            check(False, f"CSA_TEST_REQUIRE_REAL_UV is set, but {why}")
+        else:
+            print(f"    SKIP  {why}")
+
+    if not uv or os.name == "nt":
+        unavailable("there is no real uv here")
+        return
+    pydir = subprocess.run([uv, "python", "dir"], capture_output=True, text=True).stdout.strip()
+    with tempfile.TemporaryDirectory() as td:
+        root = pathlib.Path(td)
+        (root / "bin").mkdir()
+        (root / "bin" / "uv").symlink_to(uv)
+        (root / "home").mkdir()
+        base = {**base_env(), "PATH": f"{root / 'bin'}:/usr/bin:/bin", "HOME": str(root / "home"),
+                "UV_PYTHON_INSTALL_DIR": pydir, "UV_CACHE_DIR": str(root / "cache"),
+                "UV_NO_CONFIG": "1", "UV_PYTHON_DOWNLOADS": "never"}
+
+        def resolve(fn: str, extra: dict[str, str]) -> tuple[str, str, int]:
+            script = root / "h.sh"
+            script.write_text("#!/usr/bin/env bash\nset -euo pipefail\n" + HARNESS + "\n" + fn
+                              + "\nfind_csa_python\n", encoding="utf-8")
+            p = subprocess.run([BASH, str(script)], capture_output=True, text=True,
+                               env={**base, **extra}, timeout=120)
+            return p.stdout, p.stderr, p.returncode
+
+        out, err, rc = resolve("", {})
+        want = only_line(out)
+        if rc != 0 or not want:
+            unavailable(f"real uv ({uv}) has no uv-managed standard {PREF} in {pydir}")
+            return
+        check(True, f"real uv, nothing exported: {want}")
+        for value in ("only-managed", "system", "managed"):
+            out, err, rc = resolve("", {"UV_PYTHON_PREFERENCE": value})
+            check(rc == 0 and only_line(out) == want,
+                  f"real uv, UV_PYTHON_PREFERENCE={value} exported: the same path", show(out, err, rc))
+        # Control: is real uv still refusing the combination? If not, the unset is belt and
+        # braces rather than load-bearing - worth knowing, not worth failing over.
+        mutated = extract("find_csa_python").replace("unset UV_PYTHON_PREFERENCE; ", "")
+        out, err, rc = resolve(mutated, {"UV_PYTHON_PREFERENCE": "only-managed"})
+        if rc == 1 and out == "":
+            print("    ok    control: without the unset, real uv refuses --managed-python and the "
+                  "resolver finds nothing (so the cases above can fail)")
+        else:
+            print(f"    NOTE  real uv no longer refuses --managed-python with UV_PYTHON_PREFERENCE "
+                  f"(rc={rc}, out={out.strip()!r}); the unset is no longer load-bearing")
+
+
 def windows_twin() -> None:
     print("\nwindows_twin_exists")
     ps = WIN.read_text(encoding="utf-8")
@@ -689,6 +840,7 @@ def main() -> int:
     install_uv_cases()
     real_interpreters()
     static_checks()
+    real_uv_resolver()
     windows_twin()
     print()
     if failures:
