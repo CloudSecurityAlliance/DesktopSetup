@@ -110,6 +110,9 @@ check python3 tests/test_npm_output_filter.py
 step "version floors"
 check python3 tests/test_version_floors.py
 
+step "macOS names one CSA Python: the 3.14 standard build, verified by running it"
+check python3 tests/test_csa_python.py
+
 step "venv replacement safety"
 check python3 tests/test_venv_replacement.py
 

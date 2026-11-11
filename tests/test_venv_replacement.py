@@ -22,7 +22,7 @@ covers the happy path would have passed against the broken ordering.
 
 The function under test is extracted from the shipping script rather than copied, so this
 cannot drift from what actually runs. `$py`, `info`, `warn`, `get_version` and
-`find_usable_python` are stubbed; `python_meets_floor` and `install_doc_python_deps` are real.
+`ensure_csa_python` are stubbed; `python_meets_floor` and `install_doc_python_deps` are real.
 
     python3 tests/test_venv_replacement.py
 """
@@ -145,7 +145,7 @@ set -euo pipefail
 info() {{ echo "INFO: $*"; }}
 warn() {{ echo "WARN: $*"; }}
 get_version() {{ echo "Python 3.9.6"; }}
-find_usable_python() {{ printf '%s\\n' "{py}"; }}
+ensure_csa_python() {{ printf '%s\\n' "{py}"; }}
 CSA_VENV="{venv}"
 CSA_DOC_PY_DEPS=(pyyaml)
 {override or extract("install_doc_python_deps")}
@@ -165,7 +165,7 @@ echo "RC=$?"
 # this test demonstrates it can still detect the regression rather than merely passing.
 MOVE_FIRST = """install_doc_python_deps() {
   local py
-  py="$(find_usable_python)"
+  py="$(ensure_csa_python)"
   if [[ -x "$CSA_VENV/bin/python3" ]] && ! python_meets_floor "$CSA_VENV/bin/python3"; then
     local stale
     stale="${CSA_VENV}.pre-${CSA_PYTHON_MIN}-$(date +%Y%m%d%H%M%S)"

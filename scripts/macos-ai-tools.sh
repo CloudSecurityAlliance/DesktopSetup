@@ -6,7 +6,8 @@
 #   1. Xcode Command Line Tools
 #   2. Homebrew (macOS package manager)
 #   3. Node.js (via Homebrew, provides npm)
-#   4. Python (via Homebrew, provides python3/pip3)
+#   4. uv (kept current) and Python 3.14, the standard build, uv-managed
+#      (Homebrew python@3.14 as fallback); other Pythons are left alone
 #   5. Document toolchain: pandoc + typst (via Homebrew), plus pyyaml +
 #      pymupdf in ~/.default_venv — required by the document-pipeline plugin
 #   6. Git (via Homebrew, latest version)
@@ -29,7 +30,7 @@
 
 set -euo pipefail
 
-SCRIPT_VERSION="2026-11-10T23:52Z"
+SCRIPT_VERSION="2026-11-11T00:14Z"
 
 # ── CSA plugin marketplaces ─────────────────────────────────────────
 # Plugin marketplaces to register with Claude Code. Each entry is an
@@ -600,23 +601,27 @@ preflight() {
     echo "  Node.js ........... install node@24 (LTS) via Homebrew"
   fi
 
-  # uv
+  # uv. install_uv keeps an installed uv current, by whichever route owns it.
   if has_command uv; then
-    echo "  uv ................ installed ($(get_version uv --version))"
+    if has_command brew && brew list --formula uv >/dev/null 2>&1; then
+      echo "  uv ................ installed ($(get_version uv --version)) — keep current via Homebrew"
+    else
+      echo "  uv ................ installed ($(get_version uv --version)) — keep current via uv self update"
+    fi
   else
     echo "  uv ................ install via Homebrew"
   fi
 
   # Python
   # Reporting "installed" for any python3 is what made #53 invisible: on a stock Mac this
-  # printed a green line for Apple's 3.9.6 and the run carried on.
+  # printed a green line for Apple's 3.9.6 and the run carried on. And reporting any 3.14 is
+  # what hid #179: uv's 3.14t answered to "3.14". find_csa_python, which never installs, names
+  # the one interpreter that counts; install_python runs `uv python install` whatever it finds.
   local py_found
-  if py_found="$(find_usable_python)"; then
-    echo "  Python ............ installed ($(get_version "$py_found" --version))"
-  elif has_command python3; then
-    echo "  Python ............ $(get_version python3 --version) is below ${CSA_PYTHON_MIN} — install ${CSA_PYTHON_PREFERRED} via uv (Homebrew as fallback)"
+  if py_found="$(find_csa_python)"; then
+    echo "  Python ............ installed ($(get_version "$py_found" --version), standard build, $py_found) — ensure uv's ${CSA_PYTHON_PREFERRED}"
   else
-    echo "  Python ............ install ${CSA_PYTHON_PREFERRED} via uv (Homebrew as fallback)"
+    echo "  Python ............ install ${CSA_PYTHON_PREFERRED}, standard build, via uv (Homebrew python@${CSA_PYTHON_PREFERRED} as fallback); other Pythons left as they are"
   fi
 
   # Document toolchain (document-pipeline plugin: Markdown -> tagged PDF)
@@ -798,7 +803,7 @@ preflight() {
   # and Zendesk were appended to the list and installed without ever appearing in the plan a
   # person agreed to. A consent surface that is a second copy of the list is a consent surface
   # that will eventually describe a different installation from the one that runs.
-  echo "  Internal MCP servers install/upgrade ${#CSA_INTERNAL_SETUPS[@]} servers if your GitHub account has CSA-Internal access"
+  echo "  Internal MCP servers install/upgrade ${#CSA_INTERNAL_SETUPS[@]} servers on Python ${CSA_PYTHON_PREFERRED} (standard build) if your GitHub account has CSA-Internal access"
   local setup_name
   for setup_name in "${CSA_INTERNAL_SETUPS[@]}"; do
     echo "                       ${setup_name%-setup.sh}"
@@ -965,12 +970,12 @@ install_node() {
 # at the `import yaml, pymupdf, csa_google_workspace` check further down rather than here.
 #
 # CSA-Document-Pipeline still declares >=3.10 and is satisfied by 3.14, so the maximum across
-# consumers is 3.14. MIN and PREFERRED are now equal; the two-pass search below is therefore
-# degenerate today, and deliberately kept - they separate again the moment either moves.
+# consumers is 3.14. MIN is what install_doc_python_deps measures an existing venv against.
 CSA_PYTHON_MIN="3.14"
-# The version uv provisions when nothing usable is present. A floor says what breaks; this says
-# what a fresh machine actually gets, and pinning it is what stops macOS and Windows drifting
-# apart the way brew's python (3.14) and winget's Python.Python.3.13 already had.
+# The CSA Python: the one minor version find_csa_python accepts and install_python always
+# ensures, standard (GIL) build only. A floor says what breaks; this says what runs, and pinning
+# it is what stops macOS and Windows drifting apart the way brew's python (3.14) and winget's
+# Python.Python.3.13 already had.
 CSA_PYTHON_PREFERRED="3.14"
 
 # Presence is not usability. macOS ALWAYS ships /usr/bin/python3, and it is 3.9.6, so
@@ -983,52 +988,121 @@ python_meets() {
   "$1" -c "import sys; sys.exit(0 if sys.version_info >= tuple(map(int, '$2'.split('.'))) else 1)" >/dev/null 2>&1
 }
 
-# Kept as a name because four other call sites ask exactly this question.
+# Kept as a name because install_doc_python_deps asks exactly this question of an existing venv.
 python_meets_floor() { python_meets "$1" "$CSA_PYTHON_MIN"; }
 
-# A usable interpreter is often already present as python3.13 without being first on PATH -
-# Homebrew installs it exactly that way. Probe newest-first before concluding anything is
-# missing: installing a second copy of what the machine already has is how a bootstrap earns
-# a reputation. Prints the resolved path; non-zero when nothing on PATH clears the floor.
-find_usable_python() {
-  # uv is asked inside the loop, not after it. Measured on uv 0.12.10: `uv python install`
-  # creates NO PATH shims - an interpreter it manages lives under ~/.local/share/uv/python/
-  # and `command -v python3.14` does not find it. PATH probing alone would therefore miss a
-  # perfectly good uv-provisioned Python and reinstall one. That is fine for our purposes:
-  # install_doc_python_deps builds ~/.default_venv from whatever interpreter it is handed,
-  # and document-pipeline's launchers probe that venv - so uv can provide the interpreter
-  # without owning PATH.
-  local cand path want
-  # TWO PASSES, and the order is the whole point. The first asks for
-  # CSA_PYTHON_PREFERRED; only the second settles for CSA_PYTHON_MIN.
-  #
-  # One pass against the floor is how every CSA MCP server ended up on 3.10 while this
-  # script had already provisioned something newer: `python3` is probed first, it cleared
-  # >=3.10, the search stopped there and reported success. CSA_PYTHON_PREFERRED was then
-  # consulted only when NOTHING usable existed at all - so on any machine that already had
-  # an old Python, the preference was dead code. A floor says what is tolerable; it should
-  # never be the thing that decides what gets used.
-  for want in "$CSA_PYTHON_PREFERRED" "$CSA_PYTHON_MIN"; do
-    for cand in python3 python3.14 python3.13 python3.12 python3.11 python3.10; do
-      path="$(command -v "$cand" 2>/dev/null)" || continue
-      if python_meets "$path" "$want"; then
-        printf '%s\n' "$path"
-        return 0
-      fi
-    done
-    # Ask uv within this pass, before widening. uv-managed interpreters have no PATH
-    # shims (see above), so a uv-provisioned 3.14 is invisible to the loop above
-    # and would otherwise lose to a PATH 3.10 on the second pass - reintroducing the exact
-    # bug this two-pass structure exists to remove.
-    if has_command uv; then
-      path="$(uv python find ">=$want" 2>/dev/null)" || path=""
-      if [[ -n "$path" ]] && python_meets "$path" "$want"; then
-        printf '%s\n' "$path"
-        return 0
-      fi
-    fi
-  done
+# ── The CSA Python ───────────────────────────────────────────────────
+# ONE interpreter, named by one resolver, verified by running it (#179). The resolver it
+# replaces returned the first PATH or uv interpreter that cleared a floor, and on a real Mac
+# that was Homebrew's 3.15 (PATH python3) or uv's free-threaded python3.14t: when 3.14t is the
+# only uv-managed 3.14, `uv python find 3.14` returns it (measured, uv 0.13.7). All four CSA
+# servers landed on 3.14t that way. So nothing here trusts a name, a version string or
+# `uv tool list --show-python` (which prints the same thing for both builds): every candidate
+# is run and asked.
+#
+# KEEP SELF-CONTAINED: these three functions depend only on has_command, info, warn and
+# CSA_PYTHON_PREFERRED, so they can be shared byte-identically with another script.
 
+# $1 interpreter. Exit 0 iff it runs, is CSA_PYTHON_PREFERRED, and is the standard build
+# (sysconfig Py_GIL_DISABLED falsy - it is 1 on 3.14t). Silent. -I so neither the caller's
+# working directory nor PYTHONPATH can shadow sysconfig.
+python_is_csa_build() {
+  local got
+  [[ -n "${1:-}" ]] || return 1
+  got="$("$1" -I -c 'import sys, sysconfig; print("%d.%d" % sys.version_info[:2], 1 if sysconfig.get_config_var("Py_GIL_DISABLED") else 0)' 2>/dev/null)" || return 1
+  if [[ "$got" == "${CSA_PYTHON_PREFERRED} 0" ]]; then
+    return 0
+  fi
+  return 1
+}
+
+# Prints the CSA Python's path, or exits 1. NEVER installs anything: the preflight calls this
+# before the person has agreed to anything.
+#
+#   1. `uv python find --system --managed-python`. --system is REQUIRED: measured on uv 0.13.7,
+#      with VIRTUAL_ENV set it otherwise returns the active venv's python, which would make a
+#      venv the base of everything built on this.
+#   2. every `variant == "default"` CPython in uv's JSON listing. Parsed by Python, not awk,
+#      because a path may contain a space. uv 0.13.7 may report its ~/.local/bin shim as `path`
+#      with the managed interpreter as `symlink`; the managed one is tried first, and either
+#      is accepted only if it verifies, so nothing depends on whether a shim exists.
+#   3. Homebrew's opt/python@X.Y, which is stable across `brew upgrade` (its Cellar target is not).
+#
+# A path is returned as uv printed it - the minor-version directory cpython-3.14-<platform>,
+# a link uv points at the current patch release - never resolved to the patch directory
+# (cpython-3.14.10-<platform>), which a patch upgrade replaces.
+find_csa_python() {
+  local first="" listed="" cands="" parser cand prefix
+  local parse='import json, sys
+for e in json.loads(sys.argv[1]):
+    if e.get("variant") == "default" and e.get("implementation") == "cpython":
+        for p in (e.get("symlink"), e.get("path")):
+            if p:
+                print(p)'
+  if has_command uv; then
+    first="$(uv python find --system --managed-python "$CSA_PYTHON_PREFERRED" 2>/dev/null)" || first=""
+    if [[ -n "$first" ]] && python_is_csa_build "$first"; then
+      printf '%s\n' "$first"
+      return 0
+    fi
+    listed="$(uv python list --only-installed --managed-python "$CSA_PYTHON_PREFERRED" --output-format json 2>/dev/null)" || listed=""
+    if [[ -n "$listed" ]]; then
+      # Any Python that runs can parse JSON, including a 3.14t that failed the check above.
+      for parser in "$first" /usr/bin/python3; do
+        [[ -n "$parser" ]] || continue
+        if cands="$("$parser" -I -c "$parse" "$listed" 2>/dev/null)"; then
+          break
+        fi
+        cands=""
+      done
+      while IFS= read -r cand; do
+        if [[ -n "$cand" ]] && python_is_csa_build "$cand"; then
+          printf '%s\n' "$cand"
+          return 0
+        fi
+      done <<< "$cands"
+    fi
+  fi
+  if has_command brew; then
+    prefix="$(brew --prefix 2>/dev/null)" || prefix=""
+    cand="${prefix}/opt/python@${CSA_PYTHON_PREFERRED}/bin/python${CSA_PYTHON_PREFERRED}"
+    if [[ -n "$prefix" ]] && python_is_csa_build "$cand"; then
+      printf '%s\n' "$cand"
+      return 0
+    fi
+  fi
+  return 1
+}
+
+# Provisions the CSA Python and prints its path - ONLY the path goes to stdout, so a caller can
+# write py="$(ensure_csa_python)"; every other line goes to stderr. Exits 1, with a warning,
+# when neither uv nor Homebrew could provide one.
+#
+# `uv python install` runs even when a 3.14 is already there, because "a 3.14" may be only the
+# free-threaded one and installing the standard build beside it is the fix: once both exist,
+# uv's own resolution prefers the standard build (measured, uv 0.13.7). A no-op when present.
+# Never `3.14+gil`: uv 0.13.7 never downloads for a +gil request, so it fails on a clean machine.
+ensure_csa_python() {
+  local found
+  if has_command uv; then
+    info "Ensuring Python ${CSA_PYTHON_PREFERRED} (uv-managed, standard build)" >&2
+    uv python install "$CSA_PYTHON_PREFERRED" >&2 \
+      || warn "uv could not install Python ${CSA_PYTHON_PREFERRED}"
+  fi
+  if found="$(find_csa_python)"; then
+    printf '%s\n' "$found"
+    return 0
+  fi
+  if has_command brew; then
+    info "Installing python@${CSA_PYTHON_PREFERRED} via Homebrew, the fallback" >&2
+    brew install "python@${CSA_PYTHON_PREFERRED}" >&2 \
+      || warn "Homebrew could not install python@${CSA_PYTHON_PREFERRED}"
+    if found="$(find_csa_python)"; then
+      printf '%s\n' "$found"
+      return 0
+    fi
+  fi
+  warn "No Python ${CSA_PYTHON_PREFERRED} standard build: neither uv nor Homebrew could provide one"
   return 1
 }
 
@@ -1036,54 +1110,50 @@ find_usable_python() {
 # for two jobs: provisioning interpreters (below), and later `uv tool install` for CSA's own
 # Python CLIs once they are packaged. Chosen over pipx because it also provisions the
 # interpreter - pipx needs a working Python first, which is the bootstrap problem one layer up.
+#
+# Kept current, because the measured uv behaviour the resolver above relies on is version-bound.
+# A Homebrew-owned uv is upgraded through Homebrew, because `uv self update` fails on a Homebrew
+# install; any other uv updates itself. A failed update only warns - an older uv still works.
 install_uv() {
   ensure_brew_in_path
 
   if has_command uv; then
+    if has_command brew && brew list --formula uv >/dev/null 2>&1; then
+      csa_brew_upgrade formula uv "uv"
+    else
+      local before after out
+      before="$(get_version uv --version)" || before=""
+      if out="$(uv self update 2>&1)"; then
+        after="$(get_version uv --version)" || after=""
+        if [[ "$before" != "$after" ]]; then
+          success "uv upgraded: ${before#uv } -> ${after#uv }"
+        fi
+      else
+        warn "Could not update uv (${before:-version unknown}); continuing with it. uv said:"
+        printf '%s\n' "$out" >&2
+      fi
+    fi
     info "uv already installed: $(get_version uv --version)"
     return 0
   fi
 
   info "Installing uv"
-  brew install uv || warn "Failed to install uv - falling back to Homebrew Python"
+  brew install uv || warn "Failed to install uv - falling back to Homebrew's python@${CSA_PYTHON_PREFERRED}"
 }
 
+# ALWAYS ensures the uv-managed CSA Python, even when another Python is present - decision D3
+# of #179: uv is the one provider (DEC-012). It adds an interpreter and changes nothing else:
+# PATH's python3, Homebrew's Pythons and every other uv interpreter are left as they were.
+# Not an abort when it fails: the AI tools below do not need Python, and #51 is what an
+# optional step taking the whole installer down looks like.
 install_python() {
   ensure_brew_in_path
 
   local found
-  if found="$(find_usable_python)"; then
-    info "Python already installed: $(get_version "$found" --version) ($found)"
-    return 0
+  if found="$(ensure_csa_python)"; then
+    info "Python ready: $(get_version "$found" --version) ($found)"
   fi
-
-  if has_command python3; then
-    info "Python is $(get_version python3 --version), below the ${CSA_PYTHON_MIN} floor"
-  fi
-
-  # Prefer uv: one provider, one pinned version, identical on macOS, Windows and a tier-2
-  # Linux VM. Homebrew stays as the fallback so a uv failure cannot leave the machine with no
-  # Python at all.
-  if has_command uv; then
-    info "Installing Python ${CSA_PYTHON_PREFERRED} via uv"
-    if uv python install "$CSA_PYTHON_PREFERRED"; then
-      if found="$(find_usable_python)"; then
-        info "Python ready: $(get_version "$found" --version) ($found)"
-        return 0
-      fi
-    fi
-    warn "uv could not provide Python ${CSA_PYTHON_PREFERRED} - falling back to Homebrew"
-  fi
-
-  info "Installing Python via Homebrew"
-  brew install python || abort "Failed to install Python"
-
-  # brew puts python3 in the Homebrew prefix, which may not be resolvable in this shell yet.
-  # Say so rather than let the next step report a confusing miss.
-  ensure_brew_in_path
-  if ! find_usable_python >/dev/null 2>&1; then
-    warn "Installed Homebrew Python but no python3 >= ${CSA_PYTHON_MIN} is on PATH yet - a new shell may be needed"
-  fi
+  return 0
 }
 
 # ── Document toolchain ──────────────────────────────────────────────
@@ -1150,8 +1220,8 @@ csa_venv_pip_install() {
 
 install_doc_python_deps() {
   local py
-  if ! py="$(find_usable_python)"; then
-    warn "No python3 >= ${CSA_PYTHON_MIN} — skipping document preflight deps"
+  if ! py="$(ensure_csa_python)"; then
+    warn "No Python ${CSA_PYTHON_PREFERRED} standard build — skipping document preflight deps"
     return 0
   fi
 
@@ -2223,13 +2293,13 @@ summary() {
   # Python 3.13.1 from ~/.default_venv next to pip 26.2.1 from Homebrew's python3.14
   # site-packages, printed adjacently and read as one interpreter.
   #
-  # find_usable_python is what install_python itself uses, so the summary now reports the
-  # interpreter the run acted on, and pip through that interpreter rather than beside it.
-  # Re-resolved here rather than carried from install_python: the summary describes the machine
-  # as it is at the end, after any install and PATH change, not what was decided earlier.
+  # find_csa_python names the interpreter install_python ensured, so the summary reports the
+  # CSA Python, and pip through that interpreter rather than beside it. Re-resolved here rather
+  # than carried from install_python: the summary describes the machine as it is at the end,
+  # not what was decided earlier. find_csa_python never installs, so this cannot either.
   local summary_py summary_pip
-  if summary_py="$(find_usable_python)"; then
-    echo "  Python ............ $(get_version "$summary_py" --version) ($summary_py)"
+  if summary_py="$(find_csa_python)"; then
+    echo "  Python ............ $(get_version "$summary_py" --version), standard build ($summary_py)"
     # `|| summary_pip=""` is load-bearing, not defensive dressing. `set -o pipefail` is on, so
     # an interpreter with no pip makes this pipeline exit non-zero and `set -e` kills the script
     # HERE - at the summary, after everything succeeded - and the "not available" branch below
@@ -2243,6 +2313,8 @@ summary() {
       # precisely what somebody debugging a package that "did not install" needs to see.
       echo "  pip ............... not available for $summary_py"
     fi
+  else
+    echo "  Python ............ no ${CSA_PYTHON_PREFERRED} standard build (see the warnings above)"
   fi
   if has_command pandoc; then
     echo "  pandoc ............ $(get_version pandoc --version)"

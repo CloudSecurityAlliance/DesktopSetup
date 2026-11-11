@@ -285,12 +285,37 @@ auto-updates); npm for the Codex and Gemini CLIs and for Wrangler; **uv for Pyth
   call: without it uv picks its own managed default and ignores both PATH and anything the
   installer provisioned — which is how four CSA servers once landed on Python 3.10, the floor of
   `requires-python`, chosen by nobody.
-- **`install_python` provisions nothing when the machine already has a floor-clearing Python**,
-  deliberately, so an existing install is never churned. The honest claim is *clean machines
-  converge on `CSA_PYTHON_PREFERRED`*, not *every machine runs the same version*.
-- **uv creates no PATH shims** for interpreters it manages (measured, uv 0.12.10), so
-  `find_usable_python` / `Find-UsablePython` probe PATH first and then ask `uv python find`
-  directly. PATH probing alone would miss a good uv Python and install a second one.
+- **macOS: the installer always ensures the uv-managed 3.14 standard build** (#179, decision
+  D3). `install_python` runs `uv python install 3.14` on every run, a no-op when it is present,
+  with `brew install python@3.14` as the fallback. It adds an interpreter (and uv's
+  `~/.local/bin/python3.14` shim, below) and touches nothing else: PATH's `python3`, Homebrew's
+  Pythons and every other uv interpreter are left as they were. `install_uv` keeps uv current:
+  `brew upgrade` when Homebrew owns it, `uv self update` otherwise (it fails on a Homebrew
+  install); a failed update only warns.
+- **macOS: one resolver names the CSA Python, and verifies it by running it.**
+  `python_is_csa_build` accepts an interpreter only when it runs, reports `CSA_PYTHON_PREFERRED`,
+  and has `Py_GIL_DISABLED` falsy. `find_csa_python` tries
+  `uv python find --system --managed-python 3.14`, then every `variant == "default"` entry of
+  `uv python list --only-installed --managed-python 3.14 --output-format json`, then Homebrew's
+  `opt/python@3.14`, and prints the first that verifies. **It never installs anything**,
+  because the preflight calls it before consent; `ensure_csa_python` is the one that installs,
+  and prints only the path on stdout. PATH is never consulted: Homebrew's 3.15 and an active
+  venv's 3.13 are both on PATH on real machines. `tests/test_csa_python.py` pins all of it.
+  - **`--system` is required.** Measured on uv 0.13.7: with `VIRTUAL_ENV` set,
+    `uv python find` without it returns the active venv's interpreter.
+  - **The path is returned as uv prints it:** the minor-version directory
+    (`cpython-3.14-<platform>`, a link uv points at the current patch release), never the
+    resolved patch directory (`cpython-3.14.10-<platform>`), which a patch upgrade replaces.
+  - **uv 0.13.7 creates a `~/.local/bin/python3.14` shim** (measured 2026-11-10; the earlier
+    "uv creates no PATH shims" was measured on uv 0.12.10 and is out of date), and its JSON
+    listing may report that shim as `path`, with the managed interpreter as `symlink`. The
+    resolver tries `symlink` first and accepts either only if it verifies, so nothing depends
+    on whether a shim exists.
+- **Windows still resolves Python by floor** (`Find-UsablePython`: PATH first, then
+  `uv python find`, provisioning nothing when a floor-clearing Python exists). Its resolver
+  moves to the macOS shape in a Windows session
+  ([#184](https://github.com/CloudSecurityAlliance/DesktopSetup/issues/184)); until then the
+  platforms differ, deliberately (decision D5 of #179).
 - **Python is 3.14, and stays there until 3.15 is fully ready.** `CSA_PYTHON_MIN` and
   `CSA_PYTHON_PREFERRED` are both `3.14` on both platforms. That is a CSA policy, not a number
   derived from one consumer
@@ -310,7 +335,9 @@ auto-updates); npm for the Codex and Gemini CLIs and for Wrangler; **uv for Pyth
     machine.
   - **Telling the builds apart.** `uv tool list --show-python` prints the same thing for both
     builds. Ask the interpreter for `sysconfig.get_config_var("Py_GIL_DISABLED")`.
-  - **Not enforced yet.** Making the scripts enforce this is #179.
+  - **Enforced on macOS for the interpreter the installer names** (`find_csa_python`, above).
+    Rebuilding `~/.default_venv` and the CSA tools that already sit on 3.14t is the rest of
+    #179; Windows is #184.
 - **Node's floor is derived from the consumer that asks for most, never picked:** **22**, from
   Wrangler's `engines.node`. Enforced on both platforms.
 - **Node is pinned to the LTS line on both platforms**
@@ -384,7 +411,7 @@ every file that uses it** — `check-duplication.py` enforces byte-identical beh
 
 ## The guard layer
 
-Eleven checkers in `tools/` and twelve test files in `tests/`. **`./tools/check-all.sh` mirrors CI
+Eleven checkers in `tools/` and fourteen test files in `tests/`. **`./tools/check-all.sh` mirrors CI
 exactly** — run it before pushing.
 
 A guard here is added only for a mistake that actually shipped, names its issue in the file, and

@@ -71,9 +71,15 @@ instance — and migrates them to the correct installer, preserving settings.
 ### macOS — what else it sets up
 
 The command is at the top under [Run this](#run-this). Beyond the list above it installs a base
-layer first if it is missing — Xcode CLI Tools, Homebrew, Node/npm, uv, Python —
+layer first if it is missing — Xcode CLI Tools, Homebrew, Node/npm, uv (kept current) —
 plus the document toolchain (`pandoc`, `typst`, and `pyyaml`/`pymupdf` in `~/.default_venv`)
 that the **document-pipeline** plugin needs to render CSA PDFs.
+
+**Python:** every run makes sure uv's Python 3.14, the standard build, is installed (Homebrew's
+`python@3.14` if uv cannot provide it), even when you already have another Python. It adds that
+interpreter, plus uv's `python3.14` command in `~/.local/bin`, and changes nothing else: your
+`python3`, Homebrew's Pythons and any other uv Python stay as they are. Never the free-threaded
+`3.14t`.
 
 > **Why `-H 'Cache-Control: no-cache'`?** It forces a fresh download. Without it a stale copy
 > can sit in GitHub's CDN edge cache for a few minutes after a fix ships. Keep the header.

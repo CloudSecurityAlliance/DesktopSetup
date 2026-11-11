@@ -175,8 +175,11 @@ jobs:
       - name: npm noise filtered without hiding npm failures
         run: python3 tests/test_npm_output_filter.py
 
-      - name: Interpreter/runtime floors reject what the OS ships
+      - name: The Node floor rejects what the OS ships
         run: python3 tests/test_version_floors.py
+
+      - name: macOS names one CSA Python, the 3.14 standard build, verified by running it (#179)
+        run: python3 tests/test_csa_python.py
 
       - name: The internal-setup list agrees across all six copies
         run: python3 tests/test_internal_setup_lists.py
