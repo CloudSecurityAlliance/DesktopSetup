@@ -120,6 +120,9 @@ PLAN_LABEL: dict[str, str | dict[str, str]] = {
     "update_pip": {".sh": "pip packages", ".ps1": "pip packages"},
     "update_claude_code": "Claude Code",
     "snapshot": "Snapshot",
+    # macOS only: ~/.default_venv is repaired by its own -update step (#179). Windows has no such
+    # venv (check-parity.py's PER_PAIR says why).
+    "update_default_venv": "Default venv",
 }
 
 # A step whose label is one of two rows. `pandoc` and `typst` are installed by one step and

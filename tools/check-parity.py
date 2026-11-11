@@ -123,6 +123,11 @@ PER_PAIR = {
         "Install-GH": "macOS installs the GitHub CLI inside install_core; Windows installs it as "
                       "its own base-layer step",
     },
+    ("macos-update.sh", "windows-update.ps1"): {
+        "update_default_venv": "Windows has no `~/.default_venv`: document-pipeline's launchers "
+                               "are bash and probe `$HOME/.default_venv/bin/python3`, a POSIX "
+                               "layout; Windows document deps are #183.",
+    },
 }
 
 BASH_TOKEN = re.compile(r"\b[a-z_][a-z0-9_]*\b")

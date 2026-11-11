@@ -23,7 +23,7 @@
 
 $ErrorActionPreference = 'Stop'
 
-$ScriptVersion = "2026-10-26T15:12Z"
+$ScriptVersion = "2026-11-11T04:42Z"
 
 # ── CSA plugin marketplaces ─────────────────────────────────────────
 # Plugin marketplaces to register with Claude Code. Each entry is an
@@ -1707,7 +1707,7 @@ function Install-DocPythonDeps {
     Write-Info "Installing document preflight deps (pyyaml, pymupdf)"
     # Same shield: pip writes warnings to stderr, and a failed install must degrade to a
     # warning rather than abort setup.
-    if ((Invoke-NativeQuiet { & $py -m pip install --quiet --upgrade pyyaml pymupdf }) -ne 0) {
+    if ((Invoke-NativeQuiet { & $py -m pip install --quiet --upgrade pyyaml 'pymupdf>=1.24.3,<2' }) -ne 0) {
         Write-Warn "Failed to install pyyaml/pymupdf - csa-preflight will print its own install hint"
     }
 }
@@ -2264,11 +2264,11 @@ function Invoke-CSAInternalSetup {
         # the server on, so `uv tool install --python` lands it there. Measured 2026-09-29:
         # with no --python, uv picks its OWN managed default (3.12 on that box) and ignores
         # both PATH (3.14.3 there) and anything this installer provisioned - which is how
-        # four CSA servers ended up on 3.10.20. Only the *-ai-tools orchestrator defines
-        # $CsaPythonPreferred; elsewhere this is $null, the variable goes out empty, and the
-        # setup script falls back to its own default. Set here regardless so all three
-        # copies of this function stay byte-identical, which tools/check-duplication.py
-        # enforces. See CSA-Plugins#133.
+        # four CSA servers ended up on 3.10.20. All six entry scripts define
+        # $CsaPythonPreferred (3.14; tests/test_python_pins.py pins them), so the variable
+        # is never empty here and the setup script does not fall back to its own default.
+        # Set identically in all three copies of this function so they stay byte-identical,
+        # which tools/check-duplication.py enforces. See CSA-Plugins#133.
         $prevNested = $env:CSA_NESTED
         $prevPyPref = $env:CSA_PYTHON_PREFERRED
         $env:CSA_NESTED = '1'

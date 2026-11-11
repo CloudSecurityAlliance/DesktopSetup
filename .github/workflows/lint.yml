@@ -175,13 +175,23 @@ jobs:
       - name: npm noise filtered without hiding npm failures
         run: python3 tests/test_npm_output_filter.py
 
-      - name: Interpreter/runtime floors reject what the OS ships
+      - name: The Node floor rejects what the OS ships
         run: python3 tests/test_version_floors.py
+
+      - name: macOS names one CSA Python, the 3.14 standard build, verified by running it (#179)
+        run: python3 tests/test_csa_python.py
 
       - name: The internal-setup list agrees across all six copies
         run: python3 tests/test_internal_setup_lists.py
 
+      - name: The CSA Python pin is declared in all six scripts and they agree
+        run: |
+          python3 tests/test_python_pins.py
+          python3 tests/test_python_pins.py --self-test
+
       - name: Replacing the shared venv must not lose it
+        # On ubuntu GNU mv has no -h (the test shims it to -T), and the real-uv case skips. The
+        # venv-macos job below runs the same file where both are real.
         run: python3 tests/test_venv_replacement.py
 
       - name: A failing tool must not kill the installer (#51)
@@ -200,6 +210,55 @@ jobs:
         # A fresh checkout is clean, so "empty at the end" is the CI form of check-all.sh's
         # before/after comparison. Runs even when a test step failed, because a test that
         # writes where it should not is often also one that fails.
+        if: success() || failure()
+        run: |
+          dirty="$(git status --porcelain --untracked-files=all)"
+          if [ -n "$dirty" ]; then
+            echo "::error::the checks changed the working tree"
+            printf '%s\n' "$dirty"
+            exit 1
+          fi
+          echo "working tree unchanged"
+
+  venv-macos:
+    # ~/.default_venv is a macOS layout, and two things in its repair are only true on macOS: the
+    # flip relies on BSD `mv -h` (a plain `mv` onto a link to a directory exits 0, changes nothing
+    # and drops the new link inside the old target), and a replaced venv's console scripts survive
+    # the rename only because it was built `uv venv --relocatable` - which the test proves with real
+    # uv and wheels it builds itself, offline. The ubuntu job above shims the first and skips the
+    # second; here neither is, and CSA_TEST_REQUIRE_REAL_UV turns a skip into a failure.
+    name: venv on macOS (BSD mv, real uv)
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+
+      # Unpinned uv version on purpose: the installers keep uv current on every machine they
+      # touch, so this tracks what people run. No cache: there is nothing to cache.
+      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2  # v10.3.3
+        with:
+          enable-cache: "false"
+
+      - name: The standard Python 3.14, from uv, on PATH as python3.14
+        run: |
+          uv python install 3.14
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
+      - name: Replacing the shared venv must not lose it, on BSD mv and real uv (#179)
+        env:
+          CSA_TEST_REQUIRE_REAL_UV: "1"
+        run: python3 tests/test_venv_replacement.py
+
+      # find_csa_python against real uv, including with UV_PYTHON_PREFERENCE exported (real uv
+      # refuses it alongside --managed-python, exit 2). Needs the uv-managed 3.14 installed above.
+      - name: macOS names one CSA Python, against real uv too (#179)
+        env:
+          CSA_TEST_REQUIRE_REAL_UV: "1"
+        run: python3 tests/test_csa_python.py
+
+      # tools/check-doc-deps-resolve.py (CSA_DOC_PY_DEPS resolved against PyPI) is NOT here: it is
+      # .github/workflows/doc-deps.yml, so a PyPI outage cannot hide this job's results.
+
+      - name: The checks must not change the working tree (#72)
         if: success() || failure()
         run: |
           dirty="$(git status --porcelain --untracked-files=all)"

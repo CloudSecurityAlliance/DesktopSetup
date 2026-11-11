@@ -79,6 +79,10 @@ check python3 tools/check-script-versions.py
 step "the internal-setup list agrees across all six scripts"
 check python3 tests/test_internal_setup_lists.py
 
+step "the CSA Python pin is declared in all six scripts and they agree"
+check python3 tests/test_python_pins.py
+check python3 tests/test_python_pins.py --self-test
+
 step "the log records what the user saw, prompts included"
 check python3 tools/check-log-coverage.py
 
@@ -106,8 +110,17 @@ check python3 tests/test_npm_output_filter.py
 step "version floors"
 check python3 tests/test_version_floors.py
 
+step "macOS names one CSA Python: the 3.14 standard build, verified by running it"
+check python3 tests/test_csa_python.py
+
 step "venv replacement safety"
 check python3 tests/test_venv_replacement.py
+
+# Needs uv and PyPI; exits 77 (skipped, and named) without them. CI runs it in its own workflow,
+# .github/workflows/doc-deps.yml (pull requests on the two scripts, and weekly), where it must run.
+step "the document deps never bring in onnxruntime, resolved for real"
+check python3 tools/check-doc-deps-resolve.py
+check python3 tools/check-doc-deps-resolve.py --self-test
 
 step "a failing tool must not kill the installer"
 check python3 tests/test_survives_tool_failure.py

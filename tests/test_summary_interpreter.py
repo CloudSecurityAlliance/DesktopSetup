@@ -19,8 +19,9 @@ alias is present. So Windows could name an interpreter the installer had decline
 could not answer "is pip there for it" in either direction. `check-parity.py` cannot see this -
 it proves a step exists, not that both platforms say the same thing (#111).
 
-Both scripts already own the resolver the installer itself uses - `find_usable_python` /
-`Find-UsablePython`. The summary was the one place that forgot.
+Both scripts already own the resolver the installer itself uses - `find_csa_python` on macOS
+(it replaced `find_usable_python` for #179) and `Find-UsablePython` on Windows. The summary was
+the one place that forgot.
 
 Why this is a test and not just a one-line fix: the obvious correction is
 
@@ -131,8 +132,8 @@ check(
 )
 check(
     "macOS summary resolves the interpreter it reports",
-    "find_usable_python" in sh_summary,
-    "The summary must name the interpreter install_python itself resolved, not whatever\n"
+    "find_csa_python" in sh_summary,
+    "The summary must name the CSA Python install_python itself ensured, not whatever\n"
     "`python3` happens to mean at the end of the run.",
 )
 check(
