@@ -23,7 +23,7 @@
 
 $ErrorActionPreference = 'Stop'
 
-$ScriptVersion = "2026-11-10T23:52Z"
+$ScriptVersion = "2026-11-11T04:42Z"
 
 # ── CSA plugin marketplaces ─────────────────────────────────────────
 # Plugin marketplaces to register with Claude Code. Each entry is an
@@ -1707,7 +1707,7 @@ function Install-DocPythonDeps {
     Write-Info "Installing document preflight deps (pyyaml, pymupdf)"
     # Same shield: pip writes warnings to stderr, and a failed install must degrade to a
     # warning rather than abort setup.
-    if ((Invoke-NativeQuiet { & $py -m pip install --quiet --upgrade pyyaml pymupdf }) -ne 0) {
+    if ((Invoke-NativeQuiet { & $py -m pip install --quiet --upgrade pyyaml 'pymupdf>=1.24.3,<2' }) -ne 0) {
         Write-Warn "Failed to install pyyaml/pymupdf - csa-preflight will print its own install hint"
     }
 }
