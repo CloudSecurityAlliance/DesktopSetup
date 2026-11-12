@@ -32,12 +32,17 @@ jobs:
           done
           exit $fail
 
-      - name: shellcheck
+      # Not apt's shellcheck: whatever Ubuntu packages (0.9.0 on 24.04) is not what check-all.sh
+      # runs locally, and on 2026-11-10 the two disagreed (#186). tools/check-shellcheck.py pins
+      # one release, by version and sha256, and holds the flags and the file list; check-all.sh
+      # runs the same file. CSA_REQUIRE_PINNED_SHELLCHECK makes "could not get the pinned binary"
+      # a failure here, where a local run would fall back and say which version it ran.
+      - name: shellcheck, the pinned version (#186)
+        env:
+          CSA_REQUIRE_PINNED_SHELLCHECK: "1"
         run: |
-          sudo apt-get update -qq && sudo apt-get install -y -qq shellcheck
-          # SC1091: sourced files are not present at lint time.
-          # SC2016: single-quoted '$…' inside heredocs sent to python is intentional.
-          shellcheck --severity=warning --exclude=SC1091,SC2016 scripts/*.sh
+          python3 tools/check-shellcheck.py
+          python3 tools/check-shellcheck.py --self-test
 
   powershell:
     name: powershell

@@ -595,12 +595,12 @@ every file that uses it** — `check-duplication.py` enforces byte-identical beh
 
 ## The guard layer
 
-Eleven checkers in `tools/` and sixteen test files in `tests/`. **`./tools/check-all.sh` mirrors CI
+Thirteen checkers in `tools/` and sixteen test files in `tests/`. **`./tools/check-all.sh` mirrors CI
 exactly** — run it before pushing.
 
 A guard here is added only for a mistake that actually shipped, names its issue in the file, and
-carries a self-test that breaks its own rule on purpose ([ADR-005](DECISIONS-ADR.md)). Nine of
-eleven comply; the two that do not are logged as G1 in [`TODO.md`](TODO.md).
+carries a self-test that breaks its own rule on purpose ([ADR-005](DECISIONS-ADR.md)). All of them
+comply; the last two to lack one were closed as G1 in [`TODO.md`](TODO.md).
 
 Worth knowing individually:
 
@@ -636,6 +636,16 @@ Worth knowing individually:
   not bring in onnxruntime ([`~/.default_venv`](#default_venv-a-link-to-a-versioned-venv-macos),
   above). The one check that needs the network: exit 77 without it, a failure in its own CI
   workflow, `doc-deps.yml` (pull requests and weekly), where `CSA_TEST_REQUIRE_REAL_UV` is set.
+- **`check-shellcheck.py`** — ShellCheck at **one pinned version** (0.11.0), which both CI and
+  `check-all.sh` run, so the version, the flags and the file list exist once
+  ([#186](https://github.com/CloudSecurityAlliance/DesktopSetup/issues/186)). Before it,
+  `check-all.sh` ran whatever shellcheck was installed and CI ran Ubuntu's 0.9.0, and on
+  2026-11-10 a local 0.11.0 printed "clean" where CI failed on SC2120. It fetches the pinned
+  release for the platform, refuses it unless the sha256 matches, and caches it outside the repo.
+  If it cannot get that binary (offline, or a platform with no pinned build), it runs the
+  shellcheck on PATH and says which version that is. A different version that finds nothing exits
+  **77**: *"clean under 0.10.0, but CI pins 0.11.0"*, never a bare "clean". CI sets
+  `CSA_REQUIRE_PINNED_SHELLCHECK`, so CI itself never falls back.
 - **`check-paste-safety.py`**, **`check-shell-tail-conditionals.py`**,
   **`check-pipeline-assignments.py`** — a README must not ask for a multi-line paste; no
   tail-position conditional under `set -e`; no unguarded pipeline assignment.
@@ -663,16 +673,26 @@ version passing while the guard it tested had been deleted.
 The PowerShell half needs three things installed, or those steps print `skipped`:
 
 ```bash
-brew install shellcheck powershell
+brew install powershell
 pwsh -NoProfile -c 'Install-Module PSScriptAnalyzer -Scope CurrentUser'
 pwsh -NoProfile -c 'Install-Module Pester -RequiredVersion 5.7.1 -Scope CurrentUser'
 ```
+
+ShellCheck needs no install. `tools/check-shellcheck.py` fetches the pinned release itself, and
+uses a `brew install shellcheck` only when it cannot get that release.
 
 **Pester is pinned to 5.7.1, deliberately.** 6.1.0's manifest claims 5.1 support, but under real
 5.1 it aborts the whole run with *"a 'break' or 'continue' statement … escaped from your code"* —
 its own message cites pester/Pester#2669 — with no `break` anywhere in the suite. Both CI jobs
 and `check-all.sh` pin the same version so the framework is not itself a source of divergence.
 Being current matters less than matching CI.
+
+**ShellCheck is pinned to 0.11.0, the same way** (`VERSION` and `ASSETS` in
+`tools/check-shellcheck.py`). Here the current release is also the right choice. It has an
+Apple-silicon macOS build and GitHub-published sha256s, and 0.9.0, CI's version before #186, has
+neither. It is also what Homebrew installs. To move the pin, change both values, run `check-all.sh`,
+and fix or justify every new finding in the same PR. The file's docstring gives the `gh api`
+command that lists a release's digests.
 
 Any single test runs on its own, which is the fast loop:
 
