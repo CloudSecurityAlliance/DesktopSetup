@@ -51,14 +51,14 @@ coordinator's rulings on its findings are in the right-hand column where they se
 | **4.** M4 and Task 6 Step 1 launch real servers before M5, assuming a scratch `HOME` means no token, which fails for a keychain token | M5's step 1 became M0, run first from public source only. If any token is outside `HOME`, that server's real launch in M4 and Task 6 Step 1 waits for a go-ahead and uses the stub server meanwhile. |
 | **5.** `CSA_REG_DIR` is set inside a function run in a command substitution, so it is lost; and never set under the override | A new `csa_registrations_dir`, called directly, sets it in the caller's shell, under the override too. Tests `reg_dir_set_in_caller_shell`, `reg_dir_created_under_override`. |
 | Minor: M2's cleanup expects `identical: yes` after changing a preference on purpose | The comparison excludes `preferences` and the dummy entry; the changed preference is reported by key name and set back by the CINO. |
-| Minor: M2 doesn't say who clicks | The CINO changes the preference and quits Desktop; the AI edits and reads the file. |
+| Minor: M2 doesn't say who clicks | The CINO changes the preference and quits Desktop; the AI edits and reads the file (reordered in review 3). |
 | Minor: M2's dummy entry needs an absolute interpreter | Every dummy entry runs an absolute, verified Python with the probe script's absolute path (Task 0 rules). |
 | Minor: M4 and M6 don't state the result that changes the design | Each measurement now has a "Changes the design if" line. |
 | Minor: M5's go-ahead should say the launch may rotate a token | Task 0 Step 2's ask says it. |
 | Minor: Task 6 row 4 depends on whether Desktop happens to be running | The `.py` runs `ps` from `PATH`; Task 6 stubs it and runs both branches. |
 | Minor: an abandoned write still makes a backup and prunes older ones | Task 2: the backup is made only after the last pre-write stat check, is removed if the write is then abandoned, and pruning runs only after a successful replace and read-back. Test `abandoned_write_leaves_no_backup`. |
 | Minor: D2 has three options and one boolean | `LOCAL_SCOPE_ACTION`, one of `"report"`, `"repoint"`, `"todo"`. |
-| Size (88 KB) | This file holds both dispositions; the W tasks moved to the Windows companion; Review Focus no longer repeats the tasks' test lists. Every "Depends on" names the measurements file, and Task 0 Step 3 records results there instead of rewriting the plan. |
+| Size (88 KB) | This file holds all three reviews' dispositions; the W tasks moved to the Windows companion; Review Focus no longer repeats the tasks' test lists. Every "Depends on" names the measurements file, and Task 0 Step 3 records results there instead of rewriting the plan. |
 
 ## Review 3, at `1d18298`: 1 major, 4 minors, a cut
 

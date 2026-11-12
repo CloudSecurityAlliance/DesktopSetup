@@ -334,7 +334,7 @@ The Windows branches are in the companion.
 3. **G1 merges after M7 is recorded, and before DesktopSetup's Tasks 1–6;** both merge only when D3 allows. The first
    run that repairs then also runs the fixed probes.
    - Work in a fresh clone under the session scratchpad, never in
-     `/Users/kurt/GitHub/CloudSecurityAlliance-Internal/CSA-Plugins`.
+     `~/GitHub/CloudSecurityAlliance-Internal/CSA-Plugins`.
    - CSA-Plugins#206 is open in another session. Rebase onto main after it merges, and don't touch it. Rebase onto
      the G2/G3 PR too if it has merged, since both edit the four `.sh`.
 4. **Task 6 Step 2, the real run on the CINO's Mac,** comes after the G2/G3 PR, G1 and Tasks 1–6 have merged, with
