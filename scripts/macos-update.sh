@@ -20,7 +20,7 @@
 
 set -euo pipefail
 
-SCRIPT_VERSION="2026-11-11T18:15Z"
+SCRIPT_VERSION="2026-11-12T21:58Z"
 
 # ── CSA plugin marketplaces ─────────────────────────────────────────
 # Each update run will add any entries from this list that aren't yet
@@ -1257,7 +1257,7 @@ default_venv_state() {
 # a Cellar path too. A plan that said "rebuild" there named a step that never runs. find_csa_python
 # never installs, so the plan can ask it before anyone has agreed to anything.
 # Only macos-update.sh passes --no-create; macos-ai-tools.sh calls it with no argument, which
-# older ShellCheck (CI's 0.9; not 0.11) reports as SC2120. The optional argument is the design.
+# older ShellCheck (0.9, not the pinned 0.11) reports as SC2120. The optional argument is the design.
 # shellcheck disable=SC2120
 default_venv_plan() {
   local versioned="${CSA_VENV}-${CSA_PYTHON_PREFERRED}"
@@ -1428,7 +1428,7 @@ default_venv_build() {
 # directory, its path now resolves through the link - so nothing it holds dangles; it gets a
 # to-do to open a new terminal.
 # Only macos-update.sh passes --no-create; macos-ai-tools.sh calls it with no argument, which
-# older ShellCheck (CI's 0.9; not 0.11) reports as SC2120. The optional argument is the design.
+# older ShellCheck (0.9, not the pinned 0.11) reports as SC2120. The optional argument is the design.
 # shellcheck disable=SC2120
 ensure_default_venv() {
   local create=1 versioned="${CSA_VENV}-${CSA_PYTHON_PREFERRED}" state action old reason
