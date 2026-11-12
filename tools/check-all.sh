@@ -50,13 +50,12 @@ for f in scripts/*.sh; do
 done
 [[ $fail -eq 0 ]] && echo "    all shell scripts parse"
 
-step "shellcheck"
-if command -v shellcheck >/dev/null; then
-  check shellcheck --severity=warning --exclude=SC1091,SC2016 scripts/*.sh \
-    && echo "    clean"
-else
-  echo "    skipped (brew install shellcheck)"
-fi
+# The shellcheck CI runs, not whichever is installed: a local 0.11.0 once said "clean" where CI's
+# 0.9.0 failed (#186). The tool pins one version for both, fetches it (sha256-checked, cached
+# outside the repo), and exits 77, named below, when it can only run another version clean.
+step "shellcheck, the version CI pins"
+check python3 tools/check-shellcheck.py
+check python3 tools/check-shellcheck.py --self-test
 
 step "duplication"
 check python3 tools/check-duplication.py --diff
