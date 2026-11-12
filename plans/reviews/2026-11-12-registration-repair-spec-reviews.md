@@ -3,8 +3,9 @@
 Plan: [`plans/2026-11-12-registration-repair.md`](../2026-11-12-registration-repair.md), with its Windows companion
 [`plans/2026-11-12-registration-repair-windows.md`](../2026-11-12-registration-repair-windows.md).
 
-Two independent spec reviews (B11), both on `fable`, both on 2026-11-12. Every finding of both was accepted; none
-was rejected. Where the re-review moved something the first review placed, the first table says where it is now.
+Three independent spec reviews (B11), all on `fable`, all on 2026-11-12. Every finding of all three was accepted;
+none was rejected. Where a later review moved something an earlier one placed, the earlier table says where it is
+now.
 
 ## Review 1, at `a9ab5e4`: 3 blockers, 10 majors, 7 minors, four 1W additions
 
@@ -20,7 +21,7 @@ was rejected. Where the re-review moved something the first review placed, the f
 | **M5** symlinked configs are replaced by regular files | A10: a linked config is never written. Refused rather than written through, because the target is usually a dotfile repository, which D2 rules out. |
 | **M6** the `.py`'s own Codex and Gemini reads run from the installer's cwd | A11: they run from a fresh empty directory. |
 | **M7** G1 on Gemini: folder trust in an empty directory | M7 adds the trust question, measured before G1 merges, because the gate's `HEAD` is live on merge. G1 Step 1 applies it. |
-| **M8** `csa-skilljar-setup.sh` passes secret-bearing output as argv | G3, in the gate PR that ships first (D6). Its `.ps1` twin is a static read, so the same PR checks it (re-review, item 2). |
+| **M8** `csa-skilljar-setup.sh` passes secret-bearing output as argv | G3, in the gate PR that ships first (D6), CloudSecurityAlliance-Internal/CSA-Plugins#213, which fixes the `.sh` and the `.ps1` together. |
 | **M9** A6 routes a one-sided change around `check-parity.py`; "carried over" is the AI's | D3 is new, and the CINO's. "Carried over" is gone. A6 says plainly that `check-parity.py` does not see the change. D3 covers G1 too (re-review, item 2). |
 | **M10** "launched as <clients> launch it" over-claims | Task 3 says "launched with its registered command and settings". |
 | Minor: `import sys` does not reproduce the first stage | The probe imports `json` and `importlib.resources`. |
@@ -44,8 +45,8 @@ coordinator's rulings on its findings are in the right-hand column where they se
 
 | Finding | Change made |
 |---|---|
-| **1.** D6 and merge order step 1 rest on a PR that does not exist; step 1 blocks Task 0 needlessly | D6 cites the gate PR once, by number if it exists, otherwise by branch (`fix/desktop-config-0600-no-secret-argv`). Only Task 6 Step 2 depends on it. Task 0 starts at once. |
-| **2.** D3 and the gate PRs are incoherent: G1 merges with no D3 condition, and G3's `.ps1` twin check waits in held G2W | D3 now covers every macOS-only behaviour change in either repo, G1 included. D6's PR is the one exception, decided under P1 (safety first). G3's `.ps1` static check is in the gate PR; G2W no longer holds it. |
+| **1.** D6 and merge order step 1 rest on a PR that does not exist; step 1 blocks Task 0 needlessly | D6 cites the gate PR, now CloudSecurityAlliance-Internal/CSA-Plugins#213 (review 3). Only Task 6 Step 2 depends on it. Task 0 starts at once. |
+| **2.** D3 and the gate PRs are incoherent: G1 merges with no D3 condition, and G3's `.ps1` twin check waits in held G2W | D3 now covers every macOS-only behaviour change in either repo, G1 included. D6's PR is outside D3 because it changes the `.sh` and the `.ps1` together. G2W no longer holds the G3 `.ps1` check. |
 | **3.** Task 1 tests `dead` before `standard`, so a dead standard binary gets a re-point aimed at itself | The standard path is tested first, before any liveness check. A dead standard binary gets no action: "its setup reinstalls it". Test `dead_standard_binary_no_self_repoint`. |
 | **4.** M4 and Task 6 Step 1 launch real servers before M5, assuming a scratch `HOME` means no token, which fails for a keychain token | M5's step 1 became M0, run first from public source only. If any token is outside `HOME`, that server's real launch in M4 and Task 6 Step 1 waits for a go-ahead and uses the stub server meanwhile. |
 | **5.** `CSA_REG_DIR` is set inside a function run in a command substitution, so it is lost; and never set under the override | A new `csa_registrations_dir`, called directly, sets it in the caller's shell, under the override too. Tests `reg_dir_set_in_caller_shell`, `reg_dir_created_under_override`. |
@@ -58,3 +59,16 @@ coordinator's rulings on its findings are in the right-hand column where they se
 | Minor: an abandoned write still makes a backup and prunes older ones | Task 2: the backup is made only after the last pre-write stat check, is removed if the write is then abandoned, and pruning runs only after a successful replace and read-back. Test `abandoned_write_leaves_no_backup`. |
 | Minor: D2 has three options and one boolean | `LOCAL_SCOPE_ACTION`, one of `"report"`, `"repoint"`, `"todo"`. |
 | Size (88 KB) | This file holds both dispositions; the W tasks moved to the Windows companion; Review Focus no longer repeats the tasks' test lists. Every "Depends on" names the measurements file, and Task 0 Step 3 records results there instead of rewriting the plan. |
+
+## Review 3, at `1d18298`: 1 major, 4 minors, a cut
+
+The third review verified every earlier major as resolved.
+
+| Finding | Change made |
+|---|---|
+| **Major,** M2/M3: the dummy entry is added while Desktop runs and removed after it quits, so Desktop never starts with it, M3's Desktop part records nothing, and A8 leaves bare names indefinitely | M2's order is now: the CINO quits Desktop; the AI adds the dummy; the CINO starts Desktop (its start is M3's Desktop record); the AI edits; the CINO changes a preference and quits. The count is "four actions in Desktop". |
+| Minor, Task 3: a dead standard binary is state `standard`, which `verify` launches | It is reported `does not start: its standard binary does not run yet; its setup reinstalls it`, and never launched. Test `dead_standard_binary_not_launched`. |
+| Minor, Task 4: the "no `.py`" check runs before `csa_registrations_dir`, so `CSA_REG_DIR` is unset under `set -u`; the directory leaks when the user declines | `csa_registrations_dir` is the preview's first action after the `gh` check; each script's `csa_on_exit` removes the directory. Tests `preview_no_py_under_set_u`, `reg_dir_removed_when_declined`. |
+| Minor, Task 6 Step 1: no `CLAUDE_CONFIG_DIR`, so an exported one would point the run at the real config | It is set to scratch explicitly, and the Claude Code seeds go there. |
+| Minor, D6 and M2: the gate PR now exists; M2's secret-bearing backup is never removed | D6 cites CloudSecurityAlliance-Internal/CSA-Plugins#213. M2's step 8, and the measurement rules, delete the backup when done. |
+| Cut: "Not measured yet" duplicates Task 0's table | Replaced by one line pointing at Task 0's table. The AI-decisions section and "What is already true" are kept. |

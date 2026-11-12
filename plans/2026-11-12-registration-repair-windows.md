@@ -22,8 +22,9 @@ them is the macOS plan's D3. A green `windows-latest` CI run is not a Windows ru
 
 Every PR here is a draft until the Windows session has measured and run it end to end.
 
-**Not here:** G3's `.ps1` twin. Whether `csa-skilljar-setup.ps1` passes the `claude mcp get` output as an argument is
-a static read, so the G2/G3 gate PR checks it (macOS plan, D6).
+**Not here:** G2's and G3's `.ps1` code fixes. CloudSecurityAlliance-Internal/CSA-Plugins#213 makes them in the
+`.sh` and the `.ps1` together (macOS plan, D6). Its Desktop writer skips `fchmod` on Windows, so G2W's ACL
+measurement below still applies.
 
 ## PowerShell 5.1 constraints
 

@@ -33,7 +33,7 @@ command. Once the startup measurement allows it (M5, D5), it also checks that ea
   and reviewing are fixed there:
   - **G2** (Desktop config writers create their temp file at the default mode, under a fixed name) and **G3**
     (`csa-skilljar-setup.sh` puts secret-bearing `claude mcp get` output on `python3`'s argv) ship first, in their
-    own gate PR (D6). That PR also checks G3's `.ps1` twin, a static read.
+    own gate PR, CloudSecurityAlliance-Internal/CSA-Plugins#213, which fixes the `.ps1` too (D6).
   - **G1** (a probe can read a shadowing local or project registration instead of the user's) follows its
     measurement (M7), under D3.
 - **The Windows halves** are the companion file's W tasks, for the Windows session in #184. Whether macOS ships first
@@ -83,22 +83,13 @@ printed.
   daemons' argv. A value put on a command line is readable by every local account while that process runs. This
   rules out `claude mcp add -e` and `codex mcp add --env` for a repair (A3).
 
-**Not measured yet; Task 0 measures each before the task that depends on it.** Until then the plan calls it inferred.
-- **Where each server keeps its token:** under `HOME`, or outside it, as in the login keychain (M0).
-- **Claude Desktop's `PATH` and env for a stdio server.** The first draft took launchd's
-  `/usr/bin:/bin:/usr/sbin:/sbin` from the gate README. That is documentation, not a measurement.
-- **Whether a running Claude Code session or Claude Desktop writes its old copy over an external edit,** and whether
-  Claude Code takes a lock file when it writes `~/.claude.json`.
-- **Whether a real server, started under the real `HOME` with its token, changes a token file or opens a network
-  connection before it answers `initialize`.**
-- **Whether the gate's `claude mcp get` probe starts the server.** If it does, every run already launches each server
-  once.
-- **Each handshake's duration,** and G1's shadowing, including Gemini folder trust in an empty directory.
+**What is not measured yet** is Task 0's table. Until a measurement is recorded, the plan calls what it decides
+inferred.
 
-**Independent spec reviews (B11):** two, on `fable`, on 2026-11-12. The first, at `a9ab5e4`, found 3 blockers,
-10 majors and 7 minors, plus four additions to Task 1W, and surfaced D3 to D6. The re-review, at `762347a`, found
-5 majors and 7 minors. All are folded in; the dispositions file says where each went. Decisions go to the CINO one
-at a time (K2).
+**Independent spec reviews (B11):** three, on `fable`, on 2026-11-12. The first, at `a9ab5e4`, found 3 blockers,
+10 majors and 7 minors, plus four additions to Task 1W, and surfaced D3 to D6. The second, at `762347a`, found
+5 majors and 7 minors; the third, at `1d18298`, found 1 major and 4 minors. All are folded in; the dispositions file
+says where each went. Decisions go to the CINO one at a time (K2).
 
 ## Decisions
 
@@ -170,7 +161,7 @@ Until the CINO decides, the build ships the safe default.
     #184 and `windows_twin_exists`'s per-case SKIP keep the gap visible.
   - Plan 1's D5 (*"Hold as drafts for a Windows session"*, 2026-11-10) was his decision for Plan 1. It does not
     decide this plan.
-  - D6's gate PR is outside D3: it is a security fix, decided under P1, where safety comes before parity.
+  - D6's gate PR is outside D3: it changes the `.sh` and the `.ps1` together.
 - **Options:**
   - **(a)** Ship macOS when it passes. The Windows halves are drafts handed to #184, and the gap is recorded there and
     in TODO.md.
@@ -241,11 +232,13 @@ Until the CINO decides, the build ships the safe default.
 - **G3** (spec review M8). `csa-skilljar-setup.sh` passes `"${existing:-}"`, the `claude mcp get` output it parses
   secret values from, as an argument to `python3` in its Desktop block. macOS shows argv to every account (measured
   above), so those values are readable by other local accounts while that `python3` runs. The fix: pass it on stdin
-  or through the environment. The same PR reads `csa-skilljar-setup.ps1` for the same pattern and fixes it if found.
+  or through the environment.
 - **Why first and alone:** both are small and change nothing a user sees, and G3 is a live exposure. Neither needs a
   measurement; G1 does (M7).
-- **Where:** CSA-Plugins branch `fix/desktop-config-0600-no-secret-argv`, its own PR, built by another session. This
-  plan calls it "the G2/G3 PR" and carries no G2 or G3 task. **Only Task 6 Step 2 depends on it.**
+- **Where:** CloudSecurityAlliance-Internal/CSA-Plugins#213 (open), built by another session. It fixes both in the
+  four `.sh` and the four `.ps1`. Its one Desktop writer skips `fchmod` on Windows, which has no mode bits, so G2W's
+  ACL measurement still applies. This plan calls it "the G2/G3 PR" and carries no G2 or G3 task. **Only Task 6 Step 2
+  depends on it.**
 
 ## The AI's decisions (P4: each names its rule)
 
@@ -329,7 +322,7 @@ Until the CINO decides, the build ships the safe default.
 | Repo | Branch | Tasks |
 |---|---|---|
 | DesktopSetup | `feat/registration-repair` | 0 (measurements), 1, 2, 3, 4, 5, 6 |
-| CSA-Plugins | the G2/G3 PR's, named in D6 | G2, G3, and G3's `.ps1` read (another session) |
+| CSA-Plugins | `fix/desktop-config-0600-no-secret-argv` (#213, D6) | G2 and G3, `.sh` and `.ps1` (another session) |
 | CSA-Plugins | `fix/registration-probes` | G1 (`.sh`), after M7, under D3 |
 
 The Windows branches are in the companion.
@@ -485,7 +478,8 @@ Each point is pinned by tests named in Tasks 1–4.
 - **Isolated runs use `mktemp -d`** for `HOME`, `CLAUDE_CONFIG_DIR`, `CODEX_HOME` and `TMPDIR`. At most 4 processes,
   each with a timeout, and cleanup.
 - **A measurement that touches the real `HOME`** backs up any file it edits first (`.bak-<14 digits>`, same mode),
-  adds and removes only the dummy entry, and runs only with the CINO's go-ahead.
+  adds and removes only the dummy entry, deletes the backup when it is done (it holds the file's secrets), and runs
+  only with the CINO's go-ahead.
 
 **The dummy server,** `probe_server.py` in the scratch directory, stdlib only. On start it appends to a log in its own
 scratch directory: a start marker, its env key names, `PATH` (home as `~`), its working directory, then the method
@@ -495,7 +489,7 @@ name of each JSON-RPC message it receives. It answers `initialize`, and exits wh
 |---|---|---|---|---|
 | M0 | Where does each server keep its token and credentials: under `HOME`, or outside it (the login keychain, an absolute path)? | each server's public source | nothing | no |
 | M1 | Does a running Claude Code session write an old `.claude.json` over an external edit of a user entry's `command`? Does Claude Code take a lock file when it writes the file? | isolated `CLAUDE_CONFIG_DIR`, scratch project | nothing, unless a session there cannot reach a config write without a login; then the real config, with his go-ahead | no (fallback: yes) |
-| M2 | The same for a running Claude Desktop, across a preference change and a quit | the real Desktop config | go-ahead, and two clicks | yes |
+| M2 | The same for a running Claude Desktop, across a preference change and a quit | the real Desktop config | go-ahead, and four actions in Desktop | yes |
 | M3 | Which env key names, and which `PATH` value, each client passes to a stdio server | Claude Code and Gemini: isolated. Codex: isolated, if a launch needs no login. Desktop: the real config, in M2's session | Desktop, and Codex if it needs a login: go-ahead | Desktop: yes |
 | M4 | How long each standard binary takes to answer `initialize` | scratch `HOME`, the real `~/.local/bin` binaries; after M0 | nothing for a server whose token M0 places under `HOME`; go-ahead for any other | no; a launch may write bytecode caches into the tool's own venv, as any launch does |
 | M5 | Under the real `HOME`, does each server change a token file, or open a network connection, between spawn and 2 s after its `initialize` answer? | the real `HOME` | go-ahead | yes |
@@ -517,15 +511,22 @@ name of each JSON-RPC message it receives. It answers `initialize`, and exits wh
   - **Changes the design if** a lock is found: Task 2 takes it with the same protocol. **Or if** the edit is lost with
     no lock: the `ok` line says a running session can write its old copy back, the to-do says to restart Claude Code
     sessions, and the next run's audit is the check. Otherwise Task 2 stands as written.
-- **M2.** With the go-ahead. Who does what: **the AI** edits and reads the file; **the CINO** does the two clicks,
-  because they are in Desktop's own window.
-  1. The AI backs up the Desktop config and adds `csa-plan2-probe`.
-  2. With Desktop running, the AI edits the entry's `command` directly.
-  3. The CINO changes one preference the AI names, then quits Desktop.
-  4. The AI reads the entry: did the edit survive?
-  5. With Desktop quit, the AI removes the dummy entry and compares the file with the backup in process, excluding
+- **M2.** With the go-ahead. Who does what: **the AI** edits and reads the file; **the CINO** does four actions in
+  Desktop (quit, start, change a preference, quit), because they are in Desktop's own window. Desktop must *start*
+  with the dummy entry in place, or it never launches the dummy and M3's Desktop part records nothing.
+  1. The CINO quits Desktop, if it is running.
+  2. The AI backs up the Desktop config and adds `csa-plan2-probe`.
+  3. The CINO starts Desktop. Its start launches the dummy, whose log is M3's Desktop record.
+  4. With Desktop running, the AI edits the entry's `command` directly, to a second absolute path that runs the same
+     probe with a marker, so a later launch shows which command ran.
+  5. The CINO changes one preference the AI names, then quits Desktop.
+  6. The AI reads the entry: did the edit survive?
+  7. With Desktop quit, the AI removes the dummy entry and compares the file with the backup in process, excluding
      `preferences`. It prints `identical: yes|no`, and names the changed preference key only. The CINO sets that
-     preference back.
+     preference back the next time he uses Desktop.
+  8. The AI deletes the backup, which holds the same secrets as the config, once the comparison says `identical:
+     yes`. If it says `no`, the AI changes nothing on its own, tells the CINO which keys differ, and deletes the
+     backup once he has decided.
   - **Changes the design if** the edit survives: D4's recommendation becomes (a), for him to confirm. If it is lost,
     D4's safe default is confirmed.
 - **M3.** From the dummy server's log.
@@ -533,7 +534,7 @@ name of each JSON-RPC message it receives. It answers `initialize`, and exits wh
   - **Gemini:** `gemini mcp list`, if it connects to servers, or a session start.
   - **Codex:** a session start in an isolated `CODEX_HOME` if it needs no login. Otherwise record "not measured", and
     keep the approximation labelled as one.
-  - **Desktop:** Desktop's start in M2's session launches the dummy.
+  - **Desktop:** Desktop's start at M2's step 3 launches the dummy.
   - A health-check launch's env may differ from a session's. Each is recorded by the path that made it.
   - **Changes the design:** A8 resolves bare names on each recorded `PATH`, and Task 3 builds each client's launch env
     from the recorded key names. A client M3 could not measure keeps the approximation, labelled one.
@@ -571,7 +572,7 @@ name of each JSON-RPC message it receives. It answers `initialize`, and exits wh
 - [ ] **Step 1: The measurements that need nothing from the CINO,** in this order: M0; then M1 (isolated), M3 (its
   isolated parts), M4 (for each server M0 places under `HOME`), M6 and M7.
 - [ ] **Step 2: Ask for the go-aheads,** one at a time (K2), each saying what it touches:
-  - M2 with M3's Desktop part, in one session, including the two clicks it needs from him;
+  - M2 with M3's Desktop part, in one session, including the four actions in Desktop it needs from him;
   - M5, saying that the launch itself may refresh or rotate a token, as a client's start would, and adding M4's and
     Task 6 Step 1's real launches of any server M0 placed outside `HOME`;
   - M1's fallback, if Step 1 needed it.
@@ -622,9 +623,10 @@ rule while it is not there.
   the reasons are verbatim:
   1. **`standard`,** tested first, before any liveness check: the command, `~` expanded, is the standard path
      `$HOME/.local/bin/<entry>`, or its realpath equals the standard binary's realpath, which also covers uv's own
-     tool path. Its action is none. When the standard binary is itself dead (the incident state before the rebuild),
-     the row says `its standard binary does not run yet; its setup reinstalls it`, as Plan 1 rebuilds it. It is never
-     a re-point aimed at itself.
+     tool path. Its action is none. Its liveness is then classified too, and recorded on the finding. When the
+     standard binary is itself dead (the incident state before the rebuild), the row says `its standard binary does
+     not run yet; its setup reinstalls it`, as Plan 1 rebuilds it. It is never a re-point aimed at itself, and
+     `verify` never launches it.
   2. **`dead`,** when the command itself fails:
      - `its command does not exist`;
      - `its command is not executable`.
@@ -816,9 +818,12 @@ lift D5's safe default.
 - **Held (D5).** Without `--run`, `verify` checks only the servers in `VERIFY_ON_RERUN`. While it is empty, it
   launches nothing and prints `info<TAB>server check held until its effect on tokens is measured (#179, D5); run
   "verify --run" to check by hand`.
-- **What is launched.** Re-audit, and launch each `standard` or `elsewhere` registration that is a direct executable.
+- **What is launched.** Re-audit, and launch each `standard` or `elsewhere` registration that is a direct executable
+  and whose binary is not dead.
   - A `launcher` one is reported `not checked: launcher form`, and never launched (A12).
   - A `dead` one is reported `does not start: <reason>`, and never launched.
+  - A `standard` one whose standard binary is dead is reported `does not start: its standard binary does not run yet;
+    its setup reinstalls it`, and never launched.
   - Launches are de-duplicated on `(command, args, launch env)`. The output names every client that shares a launch.
 - **The launch env,** per client as M3 recorded it. Where M3 could not measure a client, the approximation is labelled
   one in ENGINEERING.md:
@@ -861,7 +866,7 @@ lift D5's safe default.
   - `one_process_at_a_time`: the stub holds an exclusive lock file and fails on contention;
   - `deduped_launches`;
   - `desktop_env_is_minimal`: the stub writes its env **key names** to a file;
-  - `dollar_env_not_checked`, `dead_registration_not_launched`;
+  - `dollar_env_not_checked`, `dead_registration_not_launched`, `dead_standard_binary_not_launched`;
   - `launcher_form_not_launched`: a stub `uv` logs any call, and none appears;
   - `verify_held_by_default`: `VERIFY_ON_RERUN` is empty, and nothing is launched without `--run`;
   - `verify_run_flag_runs`;
@@ -895,6 +900,9 @@ lift D5's safe default.
     `each prints what it may do before it is used`. In `-ai-tools` that is after the `csa_tool_repairs` rows.
   - **Call `repair_csa_registrations`** as the last line of `setup_csa_internal_tools`, after its loop, so it is
     behind the same `gh` gate.
+  - **Add to each script's `csa_on_exit`,** before `csa_debug_hint`:
+    `if [[ -n "${CSA_REG_DIR:-}" && -d "$CSA_REG_DIR" ]]; then rm -rf "$CSA_REG_DIR"; fi`. The directory is then
+    removed on every exit path, including when the user declines the plan or the run stops early.
   - Bump all three versions.
 - Modify: `tests/test_mcp_registrations.py`, adding `wiring_` cases that extract the five functions and
   `setup_csa_internal_tools` from each script.
@@ -929,16 +937,19 @@ lift D5's safe default.
     - `gh` is missing or unauthenticated, or the gate probe fails: it prints only the header, worded "if your GitHub
       account has CSA-Internal access", as the existing rows are.
     - There is no Python or no `.py`: it prints `registration audit skipped: <why>; nothing will be changed`.
-  - **Otherwise** it calls `csa_registrations_dir`, then runs `plan --out "$CSA_REG_DIR/plan.json" </dev/null`, with
-    `out="$(…)" || rc=$?`. It prints each `row` line under the 23-column indent, through the same helper as the rows
-    around it, so `check-log-coverage.py` holds.
+  - **Its first action after the `gh` check** is `csa_registrations_dir`, before the Python and `.py` checks, because
+    `csa_registrations_py` reads `CSA_REG_DIR`, which `set -u` would otherwise abort on.
+  - **Otherwise** it runs `plan --out "$CSA_REG_DIR/plan.json" </dev/null`, with `out="$(…)" || rc=$?`. It prints
+    each `row` line under the 23-column indent, through the same helper as the rows around it, so
+    `check-log-coverage.py` holds.
   - **A non-zero exit** prints `registration audit failed; nothing will be changed` and removes the plan file.
 - **`repair_csa_registrations`:**
   - **Apply:** call `csa_registrations_dir`, then run `apply --approved "$CSA_REG_DIR/plan.json"`. When there is no
     plan file, pass an empty approved file, so every finding is reported, not acted on.
   - **Verify:** then run `verify`, without `--run`. The `.py` decides, by D5, whether anything is launched.
   - **Printing:** map `ok`, `info` and `warn` lines onto `success`, `info` and `warn`.
-  - **Clean-up:** remove `$CSA_REG_DIR`. Never fail the run.
+  - **Clean-up:** remove `$CSA_REG_DIR` and unset it; `csa_on_exit` covers every other exit path. Never fail the
+    run.
 - **The plan's header row** in all three scripts, verbatim:
 
   ```
@@ -954,6 +965,8 @@ lift D5's safe default.
     from `preflight` to `setup_csa_internal_tools`;
   - `reg_dir_set_in_caller_shell`: after `csa_registrations_preview`, `CSA_REG_DIR` is set in the calling shell;
   - `reg_dir_created_under_override`: with `CSA_REGISTRATIONS_PY` set, the directory and plan file still exist;
+  - `preview_no_py_under_set_u`: with no Python, under `set -u`, the preview prints the skip row and does not abort;
+  - `reg_dir_removed_when_declined`: the user declines at `confirm`, and the directory is gone after exit;
   - `fetch_failure_says_skipped`: a stub `curl` fails;
   - `py_failure_survives_set_e`: the stub `.py` exits 2;
   - `no_fixed_temp_path`: the directory comes from `mktemp` and is gone afterwards;
@@ -1073,8 +1086,10 @@ real launches. Step 2 also depends on the G2/G3 PR having merged.
   names.
 
 - [ ] **Step 1: An isolated run.**
-  - **Environment:** a scratch `HOME`, `CODEX_HOME` and `TMPDIR`, with the real `codex` and `gemini` CLIs, the
-    branch's `.py` (`CSA_REGISTRATIONS_PY`), and a stub `ps` first on `PATH`.
+  - **Environment:** a scratch `HOME`, `CLAUDE_CONFIG_DIR`, `CODEX_HOME` and `TMPDIR`, each set explicitly, so an
+    exported `CLAUDE_CONFIG_DIR` cannot point the run at the real config. The real `codex` and `gemini` CLIs, the
+    branch's `.py` (`CSA_REGISTRATIONS_PY`), and a stub `ps` first on `PATH`. The Claude Code seeds go into
+    `$CLAUDE_CONFIG_DIR/.claude.json`.
   - **Standard binaries:** `$HOME/.local/bin/<entry>` symlinks to the real installed entry points. A server M0 placed
     under `HOME` finds no token under the scratch `HOME`. A server M0 placed outside it is launched for real only
     after the go-ahead, and through the stub server until then. A server launched with the seeded fake credentials may
