@@ -67,7 +67,10 @@ CloudSecurityAlliance-Internal/CSA-Plugins at `5083d16`, `internal-setup/csa-*-s
 - `'csa-google-workspace[mcp]'`;
 - `'csa-google-gmail-calendar[mcp]'`.
 
-No file on this Mac was read. None of the four sources contains `keyring`, `keychain` or `find-generic-password`.
+No file on this Mac was read. No server's `src/` contains `keyring`, `keychain` or `find-generic-password` at the
+cited tag. The search was re-run for all four, csa-skilljar included. Outside `src/`, csa-google-workspace names
+`keyring` in `requirements/build.txt` and in two design documents, and csa-zendesk names it in
+`DECISIONS-ADR/ADR-009.md`. None of that is server code.
 
 | Server | Repo, tag, commit | Token | Other credential | Override keys (registration env) |
 |---|---|---|---|---|
@@ -76,8 +79,11 @@ No file on this Mac was read. None of the four sources contains `keyring`, `keyc
 | csa-google-gmail-calendar | CloudSecurityAlliance/csa-google-gmail-calendar `v0.5.1` `fb38d7a` | `~/.csa_google_gmail_calendar/token.json` (`src/csa_google_gmail_calendar/auth.py:753-757`) | OAuth client JSON `~/.csa_google_gmail_calendar/client_secret.json` (`mcp/_config.py:38-40`) | `CSA_GGC_TOKEN_PATH` (`auth.py:753`), `CSA_GGC_CLIENT_SECRETS` (`mcp/_config.py:38`) |
 | csa-skilljar | CloudSecurityAlliance/csa-skilljar `v0.16.1` `aee5ca4` | **none on disk.** A `client_credentials` access token is held in memory (`src/csa_skilljar/auth.py:108-112`); `src/` has no `open(` call | the credentials are the registration env itself: `CSA_SKILLJAR_V2_CLIENT_ID`, `CSA_SKILLJAR_V2_CLIENT_SECRET`, `CSA_SKILLJAR_V1_API_KEY`, or a file named by `CSA_SKILLJAR_ENV_FILE` (`mcp/_config.py:74,104-109`) | `CSA_SKILLJAR_ENV_FILE` |
 
-Each repo's `main` has moved past its tag, but the token constants cited are the same at `main` (`e0ac555`,
-`56f4d04`, `060bb8f`, `a655ec3`).
+Each repo's `main` has moved past its tag, but the token constants cited are the same at `main`:
+- csa-zendesk `e0ac555`;
+- csa-google-workspace `060bb8f`;
+- csa-google-gmail-calendar `a655ec3`;
+- csa-skilljar `56f4d04`.
 
 **Result.** By default, every token is under `HOME`, and none is in the keychain. csa-skilljar keeps no token on
 disk. Its secret lives in the registration's env.
@@ -140,9 +146,17 @@ between polls.
 **Branch triggered: "a lock is found: Task 2 takes it with the same protocol."**
 1. `mkdir` the `.lock` directory beside the config (`~/.claude.json.lock` when `CLAUDE_CONFIG_DIR` is unset); hold
    it across the read, the stat check and the replace; then `rmdir` it.
-2. If it exists, wait a bounded time and retry, and never break it. If it is still held, abandon the write with
-   "changed while this ran; run again".
+2. If the lock exists, wait a bounded time and retry. Never break it. If it is still held at the timeout, skip
+   Claude Code's config this run, with the to-do `Claude Code's config is locked; close Claude Code and run again`,
+   naming the lock path. The next run's audit is the check.
 3. Keep the hold well under 10 s.
+
+**Step 2 departs from "the same protocol". This is the AI's decision (2026-11-12, the measurement review's ruling,
+under P1: safety).**
+- `proper-lockfile` breaks a stale lock, and Claude Code's stale handling was not measured.
+- Breaking a lock that a live session holds could let two writers race, so Task 2 never breaks one.
+- **The cost:** a crashed session's leftover lock blocks the repair of Claude Code's config until somebody removes
+  it. The to-do names the lock's path, and every other client is still repaired.
 
 The "edit lost with no lock" branch is not triggered. The `ok` wording should say that the change applies to
 sessions started after it.
@@ -180,7 +194,8 @@ artefact of the interpreter, not of a client.
 **Branch triggered: "Task 3 builds each client's launch env from the recorded key names; A8 resolves bare names on
 each recorded `PATH`."**
 - **Claude Code:** the caller's env plus the registered env.
-- **Codex:** its allowlist plus the registered env.
+- **Codex:** its allowlist plus the registered env. **The allowlist is a lower bound:** only the eight keys above
+  were seen to pass, and only keys in the input were tested. Codex may also pass others, such as `TZ` or `LC_*`.
 - **Gemini:** the caller's env minus secret-looking names, plus the registered env.
 - **Desktop:** keeps A8's leave rule, and the approximation stays labelled, until M2's session records it.
 - **A12's interpreter-shaping keys can arrive from the client's own env,** not only the registration. Claude Code
@@ -278,16 +293,31 @@ Neither `mcp add` created a `.gemini/` in the directory it ran from.
 
 - **M2, with M3's Desktop part, in one session.** It touches the real Claude Desktop config,
   `~/Library/Application Support/Claude/claude_desktop_config.json`:
-  - a backup at the same mode, deleted after the comparison;
-  - add, edit and remove only `csa-plan2-probe`.
+  - **A backup** beside the config, `claude_desktop_config.json.bak-<14 digits>`, at the same mode. It holds the
+    config's secrets.
+    - It is deleted once the comparison with the restored config says `identical: yes`.
+    - If the comparison says `no`, the backup stays. The AI changes nothing more and tells him which keys differ,
+      then deletes it once he has decided.
+  - **Add, edit and remove only `csa-plan2-probe`.**
+  - **The dummy's log,** in the scratch directory, records the key names of the env Desktop passes, never their
+    values, with its `PATH`, home shown as `~`. It also records the working directory and the method names. This is
+    M3's Desktop record.
 
-  It also needs four actions from him in Desktop: quit, start, change one named preference, quit.
-- **M5.** Under the real `HOME`, it launches each of the four standard binaries once, with its user-scope env read
-  in memory and passed through `subprocess`'s `env`. It records:
-  - a `stat` of each token path and its directory, before and after: `~/.config/csa-zendesk/tokens.json` (or under
-    `XDG_CONFIG_HOME`), `~/.csa_google_workspace/token.json` and `token.readonly.json`, and
-    `~/.csa_google_gmail_calendar/token.json`;
-  - remote `host:port` from `lsof` every 100 ms.
+  It also needs four actions from him in Desktop: quit, start, change one named preference, quit. **Restoring that
+  preference is his,** the next time he uses Desktop.
+- **M5.** Under the real `HOME`, it launches each of the four standard binaries once, with its user-scope env passed
+  through `subprocess`'s `env`. It touches:
+  - **the real `~/.claude.json`, which holds secrets.** It is read in memory to get each user-scope entry's env, and
+    nothing from it is printed or written;
+  - **each token path:** a `stat` of the path and its directory, before and after. The defaults are
+    `~/.config/csa-zendesk/tokens.json` (or under `XDG_CONFIG_HOME`), `~/.csa_google_workspace/token.json` and
+    `token.readonly.json`, and `~/.csa_google_gmail_calendar/token.json`. A registration that carries
+    `CSA_ZENDESK_TOKEN_FILE`, `CSA_GW_TOKEN` or `CSA_GGC_TOKEN_PATH` moves its token path, possibly outside `HOME`.
+    The stat then follows that path;
+  - **what each launched server may itself open at startup:** its token, the Google servers' `client_secret.json`
+    (`~/.csa_google_workspace/`, `~/.csa_google_gmail_calendar/`, or wherever `CSA_GW_CLIENT_SECRETS` or
+    `CSA_GGC_CLIENT_SECRETS` points), and any file named by `CSA_SKILLJAR_ENV_FILE`;
+  - **the network:** remote `host:port` from `lsof` every 100 ms.
 
   A launch may refresh or rotate a token, as a client's start would. csa-skilljar has no token file, but its launch
   carries its real client credentials and may call Skilljar's token endpoint.
