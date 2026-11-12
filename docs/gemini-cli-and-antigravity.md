@@ -3,20 +3,22 @@
 Researched 2026-11-12 for [#171](https://github.com/CloudSecurityAlliance/DesktopSetup/issues/171),
 which blocks [#167](https://github.com/CloudSecurityAlliance/DesktopSetup/issues/167). An
 independent check of every claim followed the same day, and its corrections are applied here.
-**No script has changed.** The recommendation below is the AI's; the four decisions at the end
+**No script has changed.** The recommendation below is the AI's; the three decisions at the end
 are the CINO's.
 
-**Every claim carries one of four labels:**
+**Every claim carries one of six labels:**
 
 | Label | Means |
 |---|---|
 | **measured** | Run once on one Mac (Apple Silicon, macOS Darwin 27.2) on 2026-11-12, in a throwaway `HOME`, signed out, stdin closed. The commands are in the [measurement log](#measurement-log). |
-| **reproduced** | Measured, then seen again independently: a second run on a different `agy` build the same day, or the same result reported in this repo's issues or Google's bug tracker. |
-| **vendor docs** | Google's own page, repository or install script, or a package registry or manifest entry. The source number points into [Sources](#sources). |
+| **reproduced** | Measured, then seen again in a second, independent run on a different `agy` build the same day. |
+| **reported** | Not measured here; seen by someone else and written down, in this repo's issues or a public bug report. |
+| **vendor docs** | Google's own page, repository, install script or update manifest. The source number points into [Sources](#sources). |
+| **registry** | A package registry or manifest entry: npm, Homebrew or winget. Who wrote the entry is stated where it matters; Homebrew and winget entries are community-maintained. |
 | **inferred** | Reasoned from the above, and not confirmed. No decision should rest on an inferred row alone. |
 
 **What could not be measured.** No Windows machine and no CSA Workspace sign-in were available.
-Every Windows behaviour and every sign-in outcome below is vendor docs or inferred.
+Every Windows behaviour and every sign-in outcome below is vendor docs, reported or inferred.
 
 ## The answer in brief
 
@@ -28,9 +30,10 @@ Every Windows behaviour and every sign-in outcome below is vendor docs or inferr
 - **Recommendation:** install `agy` with Google's own install script on both OSes and verify its
   code signature afterwards; update it with `agy update`; stop installing Gemini CLI on new
   machines and keep existing installs current.
-- **But not before the CINO decides how CSA staff sign in to it** (Decision 1). Until then the
-  easiest path for a refused Workspace user, which Google's own FAQ suggests, is a personal
-  account under consumer terms, where Google employees and contractors may review what is sent.
+- **Nothing installs `agy` until the CINO decides how CSA staff sign in to it** (Decision 1). Until
+  then the easiest path for a refused Workspace user, which Google's own FAQ suggests, is a
+  personal account under consumer terms, where Google employees and contractors may review what is
+  sent.
 
 ## What decides it
 
@@ -38,8 +41,8 @@ Every Windows behaviour and every sign-in outcome below is vendor docs or inferr
 
 | Account or method | Gemini CLI today | Evidence |
 |---|---|---|
-| Personal Google account, free ("Gemini Code Assist for individuals") | **No**, since 2026-06-18. Refused with: "This client is no longer supported for Gemini Code Assist for individuals. To continue using Gemini, please migrate to the Antigravity suite of products" | vendor docs [S1][S2]; reproduced: #167 (2026-10-26) and gemini-cli #29279 on 0.59.0 [S24] |
-| Personal account with Google AI Pro or Ultra | **No**, the same refusal, since 2026-06-18 | vendor docs [S1]; reproduced: gemini-cli #28229 on 0.49.0, open [S24] |
+| Personal Google account, free ("Gemini Code Assist for individuals") | **No**, since 2026-06-18. Refused with: "This client is no longer supported for Gemini Code Assist for individuals. To continue using Gemini, please migrate to the Antigravity suite of products" | vendor docs [S1][S2]; reported: #167 (2026-10-26) and gemini-cli #29279 on 0.59.0 [S24] |
+| Personal account with Google AI Pro or Ultra | **No**, the same refusal, since 2026-06-18 | vendor docs [S1]; reported: gemini-cli #28229 on 0.49.0, open [S24] |
 | Gemini Code Assist **Standard or Enterprise** licence (Google Cloud project) | **Yes**: "your access remains unchanged", and Google keeps updating Gemini CLI for these customers | vendor docs [S1][S2] |
 | **Paid** Gemini API key, or a Gemini Enterprise Agent Platform API key | **Yes**. The blog's words: "paid Gemini and Gemini Enterprise Agent Platform API keys" | vendor docs [S1] |
 | Vertex AI through Application Default Credentials, with no API key | **Not stated.** The blog names API keys only | vendor docs are silent |
@@ -48,11 +51,11 @@ Every Windows behaviour and every sign-in outcome below is vendor docs or inferr
 
 Also about Gemini CLI:
 
-- **It is maintained:** `@google/gemini-cli` 0.68.0 was published on 2026-11-10 (vendor docs [S21]).
+- **It is maintained:** Google published `@google/gemini-cli` 0.68.0 on 2026-11-10 (registry [S21]).
 - **Its own sign-in guide is stale.** Last changed 2026-09-18, it still recommends "Sign in with
   Google" to individuals and never mentions the cut-off (vendor docs [S16]).
 - **Homebrew deprecated the `gemini-cli` formula** from 2026-06-18 and disables it on
-  2026-12-18, naming the cask `antigravity-cli` as its replacement (vendor docs [S19]).
+  2026-12-18, naming the cask `antigravity-cli` as its replacement (registry [S19]).
   DesktopSetup already moves a Homebrew `gemini-cli` to npm (`migrate_gemini`), so nothing breaks.
 - It is not installed on the measurement Mac, so none of this was re-tested here.
 
@@ -85,17 +88,17 @@ Where it keeps things (vendor docs; the MCP path also reproduced):
 
 **The vendor manifest, the Homebrew cask and the winget manifest ship the same file.** All three
 name `storage.googleapis.com/antigravity-public/antigravity-cli/1.5.7-…`
-(vendor docs [S15][S18][S20]).
+(vendor docs [S15]; registry [S18][S20]).
 
 | Channel | What it is | Evidence |
 |---|---|---|
 | **Google's install script** | macOS: `curl -fsSL https://antigravity.google/cli/install.sh \| bash`, to `~/.local/bin/agy`. Windows: `irm https://antigravity.google/cli/install.ps1 \| iex`, to `%LOCALAPPDATA%\agy\bin\agy.exe`. Updated by `agy`'s own updater | vendor docs [S5][S13][S14] |
-| Homebrew cask `antigravity-cli` | 1.5.7, `auto_updates true`; `bin/agy` is a symlink into the Caskroom; `zap` trashes `~/.gemini/antigravity-cli` | vendor docs [S18] |
-| winget `Google.AntigravityCLI` | 1.5.7, `InstallerType: portable`, Google's bucket, pinned by SHA-256. **The manifest is community-generated** (its header: "Created with YamlCreate.ps1 Dumplings Mod"); "Publisher: Google" is the manifest's own metadata, not a signature | vendor docs [S20], header read 2026-11-12 |
+| Homebrew cask `antigravity-cli` | 1.5.7, `auto_updates true`; `bin/agy` is a symlink into the Caskroom; `zap` trashes `~/.gemini/antigravity-cli` | registry [S18] |
+| winget `Google.AntigravityCLI` | 1.5.7, `InstallerType: portable`, Google's bucket, pinned by SHA-256. **The manifest is community-generated** (its header: "Created with YamlCreate.ps1 Dumplings Mod"); "Publisher: Google" is the manifest's own metadata, not a signature | registry [S20], header read 2026-11-12 |
 | Gemini.app helper | `/Applications/Gemini.app/Contents/Helpers/agy` is Antigravity CLI **1.4.11** and runs outside the bundle, but moves only when Gemini.app updates: Gemini.app was current (1.141.3.1394) while the standalone channel was at 1.5.7 | reproduced (version, and running a copy); Gemini.app's own version measured |
-| Gemini Desktop for Windows | **ships no `agy`.** The 1.19.0 **x64** installer has no `agy.exe` or `antigravity` string; arm64 was not checked. Google's desktop page lists the Antigravity launcher for macOS only | measured; vendor docs [S23][S25] |
+| Gemini Desktop for Windows | **The 1.19.0 x64 installer ships no `agy`**: no `agy.exe` or `antigravity` string. The arm64 installer is unchecked. Google's desktop page lists the Antigravity launcher for macOS only | measured; vendor docs [S23]; registry [S25] |
 | GitHub release assets | `agy_cli_mac_{arm64,x64}.tar.gz`, `agy_cli_windows_{x64,arm64}.zip`; nothing updates them | vendor docs [S13] |
-| **npm: impostors only** | There is **no `@google` package.** `antigravity-cli` (0.0.1, described "Antigravity CLI - placeholder", its binary named `kirox`), `agy` (0.0.0) and `antigravity` (0.0.0) are all published by unrelated individuals. **Never install `agy` from npm** | vendor docs [S22], registry queried 2026-11-12 |
+| **npm: impostors only** | There is **no `@google` package.** `antigravity-cli` (0.0.1, described "Antigravity CLI - placeholder", its binary named `kirox`), `agy` (0.0.0) and `antigravity` (0.0.0) are all published by unrelated individuals. **Never install `agy` from npm** | registry [S22], queried 2026-11-12 |
 
 **What the install scripts do** (vendor docs [S14], script read, unless marked):
 
@@ -188,7 +191,7 @@ name `storage.googleapis.com/antigravity-public/antigravity-cli/1.5.7-…`
    wouldn't want a reviewer to see" [S12]. Shipping `agy` before Decision 1 makes that the easy
    path for every refused CSA user (vendor docs, quotes re-read 2026-11-12).
 2. **Impostor packages.** Three npm names a person might guess (`agy`, `antigravity`,
-   `antigravity-cli`) belong to third parties, and Google publishes none (vendor docs [S22]). The
+   `antigravity-cli`) belong to third parties, and Google publishes none (registry [S22]). The
    scripts and docs must name only Google's install script.
 3. **Lost MCP registrations.** Because `agy mcp add` overwrites, a registration that treats a
    failed `agy mcp list` as "not there" would replace a working entry. The sketch below adds only
@@ -198,9 +201,10 @@ name `storage.googleapis.com/antigravity-public/antigravity-cli/1.5.7-…`
 
 ## Recommendation for #167 (AI-written)
 
-**Sequencing.** Decision 1 gates #167. If #167 must ship first, the installer prints one line
-whenever it installs `agy`: personal Google sign-in is under consumer terms, so use no CSA data
-with it.
+**Sequencing: Decision 1 is a hard gate.** Until it is answered, nothing in #167 installs `agy`,
+and no installer message points anyone at it. The AI would hold back one more step for the same
+reason: registering CSA's MCP servers with `agy` (the CSA-Plugins change below) puts CSA data
+into `agy` sessions, so it should wait for the same answer.
 
 **Install route, both OSes: Google's install script**, then a signature check.
 
@@ -275,12 +279,23 @@ trap), README.md, ENGINEERING.md's AI-layer row, `docs/mcp-servers.md` (an `agy`
 **An ADR in `DECISIONS-ADR.md`** should record "vendor install script over cask and winget". It
 departs from how the four desktop apps are installed.
 
+**The Antigravity desktop App is not installed.** A Homebrew cask (`antigravity`, 2.31.2) and a
+winget id (`Google.Antigravity`) exist (registry), but DEC-032's supported list does not include
+the App, so no decision is needed.
+
 ## Decisions for the CINO, one at a time (AI-written)
 
-Ordered by the 2026-11-09 goal order: safety and privacy first.
+Ordered by the CINO's goal order, which settles conflicts between goals: safety and privacy
+first, then honesty of what is claimed, correctness, wording, speed and cost.
 
-### Decision 1: how CSA staff sign in to `agy`, and under which terms
+### Decision 1: CSA's Google licences, and the sign-in approved for CSA data (gates #167)
 
+Two questions, answered together because the sign-in depends on the licence.
+
+- **1a. What does CSA hold?** A Gemini Code Assist Standard or Enterprise licence, a Gemini
+  Enterprise licence, a Google Cloud project with billing, or a paid Gemini API key? This is
+  #171's question 1. Only the CINO or a Google admin can answer it, and it also settles Decision 3.
+- **1b. Which sign-in may CSA staff use with `agy` for CSA data?**
 - **Context.** A Workspace account signs in only after a Workspace admin provisions Antigravity
   [S9]. Google Cloud documents an Admin console control, "Allow access to Code Assist for
   individuals" [S17]; that it is the one the FAQ means is inferred. The terms differ by sign-in:
@@ -290,14 +305,24 @@ Ordered by the 2026-11-09 goal order: safety and privacy first.
     qualifies is unknown;
   - a Business account (Google Cloud): Google Cloud terms, and CLI telemetry "always off for
     business accounts" [S7][S10].
-- **Options:** (a) turn on the Workspace toggle; (b) Gemini Enterprise or a Google Cloud project
-  (Business account); (c) personal accounts only, with no CSA data; (d) Gemini API keys.
-- **Recommendation: (b) for anyone handling CSA data**, (a) only after confirming which terms
-  then apply. **#167 waits for this**, or ships with the one-line warning above.
+- **Options for 1a, if CSA holds none of these:** (i) buy Gemini Enterprise seats, or fund a
+  Google Cloud project, for the staff who will use `agy` with CSA data; (ii) buy Gemini Code
+  Assist Standard, which also keeps Gemini CLI working; (iii) buy nothing, which leaves only (a),
+  once its terms are confirmed, or (c) below.
+- **Options for 1b:** (a) turn on the Workspace toggle; (b) Gemini Enterprise or a Google Cloud
+  project (Business account); (c) personal accounts only, with no CSA data; (d) paid Gemini API
+  keys.
+- **Options for sequencing:** (x) nothing installs `agy` until 1b is answered; (y) let #167 ship
+  first, printing that a personal Google sign-in is under consumer terms and must not see CSA
+  data.
+- **Recommendation:** answer 1a first. For 1b, **(b) for anyone handling CSA data**, backed by
+  whatever 1a finds; if CSA holds nothing, (i) for those staff only, rather than a licence for
+  everyone. Choose (a) only after confirming which terms then apply. For sequencing, **(x)**:
+  (y) leaves Google's FAQ steering every refused user to a personal account.
 - **Why it needs the CINO:** spend and data policy outside the repo, and only an admin can see the
   console.
-- **What would let the AI decide next time:** a recorded CSA policy on which Google sign-ins are
-  approved for CSA data.
+- **What would let the AI decide next time:** a recorded list of the Google licences CSA holds,
+  and a CSA policy on which Google sign-ins are approved for CSA data.
 
 ### Decision 2: accept a piped install of a closed-source, daily-released, self-updating binary
 
@@ -315,25 +340,21 @@ Ordered by the 2026-11-09 goal order: safety and privacy first.
 
 ### Decision 3: keep or drop Gemini CLI
 
-- **Context.** CINO-Engineering DEC-032's supported list (amended 2026-11-06) names the Gemini
-  desktop app, Antigravity (`agy`) and Gemini on the web for Google, and leaves Gemini CLI out.
-  Gemini CLI now serves only Code Assist Standard or Enterprise licences and paid API keys.
+- **Context.** CINO-Engineering DEC-032 disagrees with itself. Its decision (2026-11-03) names
+  "Gemini CLI and Antigravity" among the supported agent tools; its 2026-11-06 amendment's list
+  names the Gemini desktop app, Antigravity (`agy`) and Gemini on the web for Google, and leaves
+  Gemini CLI out. Gemini CLI still serves Code Assist Standard or Enterprise licences and paid API
+  keys; Google has not said whether it serves Vertex AI through ADC or free-tier API keys.
 - **Options:** (a) keep installing and updating it everywhere; (b) stop installing it, keep
   updating existing installs; (c) uninstall it.
-- **Recommendation: (b)**, or (a) if Decision 1 finds a CSA Code Assist licence. When `gemini` is
-  present, print one line: personal Google sign-in no longer works with it; use `agy`. Removing a
-  tool someone may run with a paid key costs more than leaving it.
+- **Recommendation: (b)**, or (a) if Decision 1a finds a CSA Code Assist licence. Removing a tool
+  someone may run with a paid key costs more than leaving it. **No installer message points at
+  `agy` until Decision 1 is answered.** After it, a line shown when `gemini` is present says that
+  Gemini CLI no longer accepts personal Google sign-in, and names the sign-in Decision 1
+  approved.
 - **Why it needs the CINO:** it depends on the licence facts and changes the supported-tools list.
 - **What would let the AI decide next time:** DEC-032 saying explicitly whether Gemini CLI is
   supported.
-
-### Decision 4: the Antigravity desktop App
-
-- **Context.** Homebrew cask `antigravity` (2.31.2) and winget `Google.Antigravity` exist (vendor
-  docs). DEC-032 does not list the App.
-- **Recommendation: don't install it** for now; revisit if DEC-032 adds it.
-- **Why it needs the CINO:** it would add a fifth desktop app to every machine.
-- **What would let the AI decide next time:** DEC-032 listing it, or not.
 
 ## Not verified
 
