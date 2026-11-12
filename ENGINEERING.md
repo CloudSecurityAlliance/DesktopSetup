@@ -87,7 +87,7 @@ scripts/
   csa-plugins-internal.txt   # CSA-internal plugin list, same
 tools/
   check-all.sh               # everything CI runs, locally, in one command
-  check-*.py                 # eleven repo-specific checks; all eleven also run in CI
+  check-*.py                 # thirteen repo-specific checks; all thirteen also run in CI
   sweep-csa-sources.sh       # weekly drift sweep (network + gh; NOT in check-all.sh)
 tests/
   test_*.py                  # thirteen standalone executables — run one directly with python3
@@ -641,7 +641,9 @@ Worth knowing individually:
   ([#186](https://github.com/CloudSecurityAlliance/DesktopSetup/issues/186)). Before it,
   `check-all.sh` ran whatever shellcheck was installed and CI ran Ubuntu's 0.9.0, and on
   2026-11-10 a local 0.11.0 printed "clean" where CI failed on SC2120. It fetches the pinned
-  release for the platform, refuses it unless the sha256 matches, and caches it outside the repo.
+  release for the platform, refuses it unless its sha256 and its binary's match the pins, and
+  caches the binary outside the repo. The cached copy is hashed again before every run, and
+  anything else found there is deleted without being run, whatever version it claims.
   If it cannot get that binary (offline, or a platform with no pinned build), it runs the
   shellcheck on PATH and says which version that is. A different version that finds nothing exits
   **77**: *"clean under 0.10.0, but CI pins 0.11.0"*, never a bare "clean". CI sets
@@ -691,8 +693,9 @@ Being current matters less than matching CI.
 `tools/check-shellcheck.py`). Here the current release is also the right choice. It has an
 Apple-silicon macOS build and GitHub-published sha256s, and 0.9.0, CI's version before #186, has
 neither. It is also what Homebrew installs. To move the pin, change both values, run `check-all.sh`,
-and fix or justify every new finding in the same PR. The file's docstring gives the `gh api`
-command that lists a release's digests.
+and fix or justify every new finding in the same PR. `ASSETS` also pins each binary's sha256,
+which GitHub does not publish. The file's docstring gives the `gh api` command that lists a
+release's digests and the commands that take each binary's from its verified archive.
 
 Any single test runs on its own, which is the fast loop:
 

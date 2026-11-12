@@ -16,9 +16,13 @@ file list therefore exist once.
 Which shellcheck runs, in order:
 
   1. The pinned release binary, cached outside the repo, because check-all.sh asserts that the run
-     does not change the working tree. It is used only if its --version is the pin.
+     does not change the working tree. It is hashed before every run and used only if its sha256
+     is the binary's pin in ASSETS. Anything else in its place is deleted without being run, even
+     if it would answer --version with the pin: the cache is writable, so what it says about
+     itself proves nothing.
   2. Otherwise the pinned release archive for this platform, downloaded from GitHub and refused
-     unless its sha256 is the one pinned in ASSETS. A mismatch is a failure, never a fallback.
+     unless its sha256 is the one pinned in ASSETS, and unless the binary inside it matches its
+     own pin too. A mismatch is a failure, never a fallback.
   3. Otherwise (offline, or no pinned build for this platform) the shellcheck on PATH, and the
      result says that it was used:
        - the pinned version: its result counts, since the same version gives the same findings;
@@ -35,17 +39,25 @@ Rosetta on an M-series Mac) and with a sha256 that GitHub publishes for every as
 assets have none). It is also what Homebrew installs, so a Mac's PATH fallback usually agrees too.
 It was measured on 2026-11-12 and reports nothing in scripts/*.sh.
 
-To move the pin, change VERSION and every sha256 in ASSETS. GitHub publishes the digests:
+To move the pin, change VERSION and every sha256 in ASSETS. GitHub publishes the archives' digests:
 
     gh api repos/koalaman/shellcheck/releases/tags/vX.Y.Z --jq '.assets[] | .name + " " + .digest'
+
+It does not publish the binaries'. Take each from its archive once the archive matches its digest:
+
+    tar -xzOf shellcheck-vX.Y.Z.linux.x86_64.tar.gz shellcheck-vX.Y.Z/shellcheck | shasum -a 256
+    unzip -p shellcheck-vX.Y.Z.zip shellcheck.exe | shasum -a 256
 
 Then run ./tools/check-all.sh, and fix or justify every new finding in the same PR.
 
 --self-test breaks the rule on purpose. It first runs offline, with stand-in shellchecks:
 
   - another version that finds nothing must exit 77 and name both versions (the #186 case), never 0;
-  - an archive whose sha256 is not the pin must be refused, without falling back;
-  - a stale cached binary must not be used.
+  - an archive whose sha256 is not the pin must be refused, without falling back, and so must an
+    archive that matches but holds a binary that does not;
+  - a stale cached binary must not be used;
+  - a planted fake in the cache that reports the pinned version must never be run, with or
+    without CSA_REQUIRE_PINNED_SHELLCHECK: the fake writes a marker file if it is.
 
 Then it uses the real pinned binary, and exits 77 if that cannot be had. A fixture with a
 deliberate SC2120 must be reported, and the fixture's SC2119 (info) must not. That shows the
@@ -81,23 +93,29 @@ RELEASES = f"https://github.com/koalaman/shellcheck/releases/download/v{VERSION}
 ARGS = ["--severity=warning", "--exclude=SC1091,SC2016"]
 GLOB = "scripts/*.sh"
 _T = f"shellcheck-v{VERSION}"
-# (os, cpu) -> (release asset, its sha256 as GitHub publishes it, the binary inside it).
+# (os, cpu) -> (release asset, its sha256 as GitHub publishes it, the binary inside it, that
+# binary's sha256). The binary's digest is what a cached copy is checked against before each run.
 ASSETS = {
     ("darwin", "arm64"): (f"{_T}.darwin.aarch64.tar.gz",
                           "339b930feb1ea764467013cc1f72d09cd6b869ebf1013296ba9055ab2ffbd26f",
-                          f"{_T}/shellcheck"),
+                          f"{_T}/shellcheck",
+                          "61c17246d69f012cd458ae82f244c46023dac75d1b69733ca1cc7d28fb270fd7"),
     ("darwin", "x86_64"): (f"{_T}.darwin.x86_64.tar.gz",
                            "c2c15e08df0e8fbc374c335b230a7ee958c313fa5714817a59aa59f1aa594f51",
-                           f"{_T}/shellcheck"),
+                           f"{_T}/shellcheck",
+                           "2589be755bb115f4421b8271eb7c08df1e03729f00350c1e4cf53b4a0bf9c2df"),
     ("linux", "x86_64"): (f"{_T}.linux.x86_64.tar.gz",
                           "b7af85e41cc99489dcc21d66c6d5f3685138f06d34651e6d34b42ec6d54fe6f6",
-                          f"{_T}/shellcheck"),
+                          f"{_T}/shellcheck",
+                          "4da528ddb3a4d1b7b24a59d4e16eb2f5fd960f4bd9a3708a15baddbdf1d5a55b"),
     ("linux", "arm64"): (f"{_T}.linux.aarch64.tar.gz",
                          "68a8133197a50beb8803f8d42f9908d1af1c5540d4bb05fdfca8c1fa47decefc",
-                         f"{_T}/shellcheck"),
+                         f"{_T}/shellcheck",
+                         "127f13925eadd52c341bca0ebaf9ab0dbd78c6468f30a8f262a528bf8de47546"),
     ("windows", "x86_64"): (f"{_T}.zip",
                             "8a4e35ab0b331c85d73567b12f2a444df187f483e5079ceffa6bda1faa2e740e",
-                            "shellcheck.exe"),
+                            "shellcheck.exe",
+                            "c9e82ada36ef4b8d4caf1f97fa89289048c8f4a33c2c76ffffc88bfe09ff00c5"),
 }
 REQUIRE_ENV = "CSA_REQUIRE_PINNED_SHELLCHECK"
 SKIP = 77
@@ -183,18 +201,22 @@ def copy_member(archive: pathlib.Path, member: str, out: pathlib.Path) -> None:
         raise Refused(f"{archive.name}: no usable {member} ({e})") from None
 
 
-def fetch_pinned(cache: pathlib.Path, asset: str, sha: str, member: str,
+def fetch_pinned(cache: pathlib.Path, asset: str, sha: str, member: str, binary_sha: str,
                  base: str = RELEASES, prefix: tuple[str, ...] = ()) -> list[str]:
-    """The pinned binary as a command. It comes from the cache if it still reports VERSION;
-    otherwise it is downloaded, checked against `sha`, and cached. Raises OSError when it cannot
-    be had, and Refused when what arrived is not what was pinned. `prefix` lets the self-test run a
-    stand-in through the Python running this file."""
+    """The pinned binary as a command. A cached copy is used only if its sha256 is `binary_sha`,
+    checked before anything runs it: the cache is writable, so what a cached file says about itself
+    proves nothing. Otherwise the archive is downloaded and checked against `sha`, the binary in it
+    against `binary_sha`, and the binary is cached. Raises OSError when it cannot be had, and
+    Refused when what arrived is not what was pinned. `prefix` lets the self-test run a stand-in
+    through the Python running this file."""
     binary = cache / f"v{VERSION}-{sha[:12]}" / pathlib.PurePosixPath(member).name
     cmd = [*prefix, str(binary)]
     if binary.is_file():
-        if version_of(cmd) == VERSION:
+        if sha256_of(binary) == binary_sha:
             return cmd
-        binary.unlink()                   # stale or damaged: fetch it again
+        # Stale, damaged or planted. It is never run, whatever it would say; fetch it again.
+        print(f"    deleted {binary} without running it: its sha256 is not the pinned binary's")
+        binary.unlink()
     cache.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(dir=cache) as td:
         archive = pathlib.Path(td) / asset
@@ -204,6 +226,10 @@ def fetch_pinned(cache: pathlib.Path, asset: str, sha: str, member: str,
             raise Refused(f"{asset} has sha256 {got}, but the pin is {sha}. Refusing to run it.")
         out = pathlib.Path(td) / binary.name
         copy_member(archive, member, out)
+        got = sha256_of(out)
+        if got != binary_sha:
+            raise Refused(f"{asset} matches its sha256, but its {member} has sha256 {got}, and "
+                          f"the pin is {binary_sha}. Refusing to run it.")
         out.chmod(0o755)
         reported = version_of([*prefix, str(out)])
         if reported != VERSION:
@@ -290,10 +316,14 @@ def run_check(root: pathlib.Path, cache: pathlib.Path, require: bool,
 FIXTURE = '#!/usr/bin/env bash\ngreet() { echo "hello ${1}"; }\ngreet\n'
 
 
-def _stand_in(path: pathlib.Path, version: str, rc: int) -> pathlib.Path:
-    """A Python file that answers --version like shellcheck and exits `rc` on a lint."""
+def _stand_in(path: pathlib.Path, version: str, rc: int,
+              marker: pathlib.Path | None = None) -> pathlib.Path:
+    """A Python file that answers --version like shellcheck and exits `rc` on a lint. Given a
+    `marker`, it first creates that file, so a case can tell whether it was run at all."""
+    ran = f"open({str(marker)!r}, 'w').close()\n" if marker else ""
     path.write_text(
         "import sys\n"
+        f"{ran}"
         "if '--version' in sys.argv:\n"
         "    print('ShellCheck - shell script analysis tool')\n"
         f"    print('version: {version}')\n"
@@ -383,41 +413,75 @@ def hermetic_cases(td: pathlib.Path) -> list[tuple[str, bool, str]]:
     served = td / "served"
     served.mkdir()
     good = _stand_in(td / "good.py", VERSION, 0)
+    bsha = sha256_of(good)                # the binary copied out of each archive is good.py
+    nowhere = (td / "nowhere").as_uri() + "/"
     for asset, member in ((f"{_T}.selftest.tar.gz", f"{_T}/shellcheck"),
                           (f"{_T}.selftest.zip", "shellcheck.exe")):
         sha = _archive(served, asset, member, good)
         base = served.as_uri() + "/"
         cache = td / f"cache-{asset}"
         fetch = functools.partial(fetch_pinned, base=base, prefix=py)
+        offline = functools.partial(fetch_pinned, base=nowhere, prefix=py)
 
-        got, out = _quiet(fetch, cache, asset, "0" * 64, member)
-        leftovers = [p for p in cache.rglob("*") if p.is_file()] if cache.exists() else []
+        def cached_files() -> list[pathlib.Path]:
+            return [p for p in cache.rglob("*") if p.is_file()] if cache.exists() else []
+
+        got, out = _quiet(fetch, cache, asset, "0" * 64, member, bsha)
         case(f"{asset}: a sha256 that is not the pin -> refused, nothing cached",
-             isinstance(got, Refused) and not leftovers, str(got))
+             isinstance(got, Refused) and not cached_files(), str(got))
+
+        got, out = _quiet(fetch, cache, asset, sha, member, "0" * 64)
+        case(f"{asset}: the archive matches its pin but its binary does not -> refused, "
+             f"nothing cached", isinstance(got, Refused) and not cached_files(), str(got))
 
         rc, out = _quiet(check, root, cache, False, _never,
-                         lambda c, *a: fetch(c, asset, "0" * 64, member))
+                         lambda c, *a: fetch(c, asset, "0" * 64, member, bsha))
         case(f"{asset}: a refused archive fails the run and never falls back to PATH",
              rc == 1 and "Refusing" in out, out)
 
-        got, out = _quiet(fetch, cache, asset, sha, member)
+        got, out = _quiet(fetch, cache, asset, sha, member, bsha)
         case(f"{asset}: the pinned sha256 -> extracted and cached",
              isinstance(got, list) and pathlib.Path(got[-1]).is_file(), str(got))
 
-        got2, out = _quiet(fetch_pinned, cache, asset, sha, member,
-                           base=(td / "nowhere").as_uri() + "/", prefix=py)
+        got2, out = _quiet(offline, cache, asset, sha, member, bsha)
         case(f"{asset}: a cached pinned binary is used without downloading", got2 == got,
              str(got2))
 
-        if isinstance(got, list):
-            _stand_in(pathlib.Path(got[-1]), other, 0)           # the cache goes stale
-            got3, out = _quiet(fetch, cache, asset, sha, member)
-            case(f"{asset}: a cached binary reporting another version is replaced",
-                 got3 == got and version_of(got3) == VERSION, str(got3))
+        if not isinstance(got, list):
+            continue
+        binary = pathlib.Path(got[-1])
+        _stand_in(binary, other, 0)                              # the cache goes stale
+        got3, out = _quiet(fetch, cache, asset, sha, member, bsha)
+        case(f"{asset}: a cached binary reporting another version is replaced",
+             got3 == got and version_of(got3) == VERSION and sha256_of(binary) == bsha, str(got3))
 
-    bad = [k for k, (asset, sha, _m) in ASSETS.items()
-           if not asset.startswith(_T) or not re.fullmatch(r"[0-9a-f]{64}", sha)]
-    case("every pinned asset is this version's and has a sha256", not bad, str(bad))
+        # A file planted in the cache that answers --version with the pin, and is clean. Asking
+        # it its version runs it, so it must not be asked anything: it writes `marker` if run.
+        for require in (False, True):
+            marker = td / f"ran-{asset}-{require}"
+            _stand_in(binary, VERSION, 0, marker)
+            rc, out = _quiet(check, root, cache, require, lambda: None,
+                             lambda c, *a: offline(c, asset, sha, member, bsha))
+            want = 1 if require else SKIP
+            case(f"{asset}: a planted fake reporting {VERSION} in the cache, offline"
+                 f"{', ' + REQUIRE_ENV if require else ''} -> deleted unrun, never reported as "
+                 f"the pin, {want}",
+                 not marker.exists() and not binary.exists() and rc == want
+                 and "pinned release binary" not in out and "clean: shellcheck" not in out, out)
+
+        marker = td / f"ran-{asset}-online"
+        _stand_in(binary, VERSION, 0, marker)
+        rc, out = _quiet(check, root, cache, True, _never,
+                         lambda c, *a: fetch(c, asset, sha, member, bsha))
+        case(f"{asset}: a planted fake in the cache, online -> replaced unrun by the pinned binary",
+             not marker.exists() and rc == 0 and "pinned release binary" in out
+             and sha256_of(binary) == bsha, out)
+
+    hexes = re.compile(r"[0-9a-f]{64}")
+    bad = [k for k, (asset, sha, _m, binary_sha) in ASSETS.items()
+           if not asset.startswith(_T) or not all(map(hexes.fullmatch, (sha, binary_sha)))]
+    case("every pinned asset is this version's, with a sha256 for it and for its binary",
+         not bad, str(bad))
     return cases
 
 
