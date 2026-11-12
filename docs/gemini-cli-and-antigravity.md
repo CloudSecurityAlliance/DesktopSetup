@@ -236,8 +236,11 @@ into `agy` sessions, so it should wait for the same answer.
   `agy.<n>.old`-style files (AGENTS.md's Windows trap; inferred from the macOS rename).
 
 **MCP registration** (CloudSecurityAlliance-Internal/CSA-Plugins, `register_other_clients` in its
-four `.sh` and four `.ps1` setup scripts, kept identical by `check-duplication.py` [S26]). Keep the
-Gemini branch where `gemini` is present, and add an `agy` branch. A sketch, not tested:
+four `.sh` and four `.ps1` setup scripts, kept identical by `check-duplication.py` [S26]). **Held
+until Decision 1 is answered**, like everything else here (see Sequencing). This change lands in
+CSA-Plugins, which #167's gate does not cover, so the hold has to be kept there too. Once
+Decision 1 is answered: keep the Gemini branch where `gemini` is present, and add an `agy` branch.
+A sketch, not tested:
 
 ```bash
   # ---- Antigravity CLI (agy) ----
@@ -268,7 +271,8 @@ Gemini branch where `gemini` is present, and add an `agy` branch. A sketch, not 
 copy-into-`~/.gemini/antigravity-cli/skills/` method also still matches the docs.
 
 **Machines already set up.** Leave `~/.gemini/settings.json` alone. Don't run
-`agy plugin import gemini`. Register the CSA servers with `agy` directly.
+`agy plugin import gemini`. Once Decision 1 is answered, and not before, register the CSA servers
+with `agy` directly.
 
 **Gemini CLI:** Decision 3, option (b).
 
@@ -307,8 +311,9 @@ Two questions, answered together because the sign-in depends on the licence.
     business accounts" [S7][S10].
 - **Options for 1a, if CSA holds none of these:** (i) buy Gemini Enterprise seats, or fund a
   Google Cloud project, for the staff who will use `agy` with CSA data; (ii) buy Gemini Code
-  Assist Standard, which also keeps Gemini CLI working; (iii) buy nothing, which leaves only (a),
-  once its terms are confirmed, or (c) below.
+  Assist Standard, which keeps Gemini CLI working [S1]. Whether it also signs in to `agy` is
+  unconfirmed: Google's FAQ names Workspace provisioning and Gemini Enterprise, not Code Assist
+  [S9]; (iii) buy nothing, which leaves only (a), once its terms are confirmed, or (c) below.
 - **Options for 1b:** (a) turn on the Workspace toggle; (b) Gemini Enterprise or a Google Cloud
   project (Business account); (c) personal accounts only, with no CSA data; (d) paid Gemini API
   keys.
