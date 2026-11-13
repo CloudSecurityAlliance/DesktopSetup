@@ -49,28 +49,44 @@ number no JSON client can read back (`1e999`, NaN) is not rewritten. mkstemp plu
 keeps the mode, not the file's extended attributes or ACLs. Codex's config.toml is edited line
 by line: only the `command` line, and the `args` line for the `-m` form, change.
 
-Neither ever opens a token, OAuth state or credential file, runs a server, or prints an env
-VALUE - only key names and counts. The values it reads stay in memory, and a value is written
-only back into the file it came from and that file's backup. Its own client calls (`codex mcp
-list|get --json`, the probe of each interpreter) run from a fresh, empty directory, so a project
+`verify` re-audits and checks that each registered server answers an MCP `initialize`
+handshake, launched with its registered command and settings: its own command (a direct
+executable only), its args, and the env its client hands a server as M3 measured it, plus its
+registered env (an approximation of each client's; see launch_env). One launch at a time, each
+in a fresh empty directory and its own process group, which is stopped after the answer or 20 s,
+bounded (end). A dead or launcher-form registration, a dead standard binary, and one whose
+settings this cannot reproduce are reported and never launched. Identical launches are made
+once. It checks that a server answers when launched this way, not that it works in a client
+(#177). A rerun runs it without --run, and then checks only the servers VERIFY_ON_RERUN names:
+none, until D5 is decided.
+
+None of them ever opens a token, OAuth state or credential file, or prints an env VALUE - only
+key names and counts; a server's own output is shown masked (mask). The values it reads stay in
+memory, and a value is written only back into the file it came from and that file's backup, or
+into the env of a server verify launches. Only verify runs a server, and what a server does at
+its start is the server's (M5). Its own client calls (`codex mcp list|get --json`, the probe of
+each interpreter) and the servers it launches run from a fresh, empty directory, so a project
 config in the caller's directory cannot stand in for the user's.
 
 The plan's decisions are the constants below, each at its safe default until the CINO answers
 (plans/2026-11-12-registration-repair.md, D1-D5); measurements it relies on are in
-plans/reviews/2026-11-12-registration-repair-measurements.md (M0, M3, M7).
+plans/reviews/2026-11-12-registration-repair-measurements.md (M0, M1, M3-M7).
 
     python3 -I scripts/csa-mcp-registrations.py plan                   # print the plan
     python3 -I scripts/csa-mcp-registrations.py plan --out plan.json   # and record it
     python3 -I scripts/csa-mcp-registrations.py apply --approved plan.json
     python3 -I scripts/csa-mcp-registrations.py apply                  # by hand: plan, then apply
+    python3 -I scripts/csa-mcp-registrations.py verify                 # a rerun: held by D5
+    python3 -I scripts/csa-mcp-registrations.py verify --run           # by hand: check them all
 
 `plan` prints one `row<TAB>text` line per row of the plan, and `log<TAB>text` for what is only
 logged. --out must be a new file: an existing one, or the path of any client's config, is
 refused and left as it is. Exit 0, or 2 on an error, in which case no plan file is left.
 
-`apply` prints `ok<TAB>`, `warn<TAB>` and `info<TAB>` lines. Its to-dos (restart a client, quit
-Claude Desktop, a registration left for somebody to fix) go to CSA_TODO_FILE when it is set, and
-are printed as `info` lines when it is not. Exit 0, or 2 on an internal error.
+`apply` and `verify` print `ok<TAB>`, `warn<TAB>` and `info<TAB>` lines. Their to-dos (restart a
+client, quit Claude Desktop, a registration left for somebody to fix, a server that did not
+answer) go to CSA_TODO_FILE when it is set, and are printed as `info` lines when it is not. Exit
+0, or 2 on an internal error.
 """
 import argparse
 import collections
@@ -81,6 +97,7 @@ import json
 import os
 import re
 import secrets
+import selectors
 import shutil
 import signal
 import stat
@@ -90,7 +107,7 @@ import tempfile
 import time
 import unicodedata
 
-SCRIPT_VERSION = "2026-11-13T17:18Z"
+SCRIPT_VERSION = "2026-11-13T17:53Z"
 
 # ── The plan's decisions (D1-D5). Each is pinned by one test; an answer changes the constant. ──
 
@@ -109,9 +126,13 @@ LOCAL_SCOPE_ACTION = "todo"
 #     Pinned by desktop_running_skipped_with_quit_todo.
 WRITE_DESKTOP_WHILE_RUNNING = False
 
-# D5. The servers a rerun checks with an MCP `initialize` handshake. Empty (b) until M5 shows
-#     what a server touches at startup; while a server is held, the plan prints no check row for
-#     it, so the plan claims nothing the run will not do. Pinned by no_check_rows_while_held.
+# D5. The servers a rerun checks with an MCP `initialize` handshake: empty (b), so a rerun
+#     launches nothing, until the CINO answers D5. M5 has since measured each server's start
+#     (2026-11-13: no token file changed, no connection seen, for all four), which makes each a
+#     candidate for (c); the answer is still his. While a server is held, the plan prints no
+#     check row for it and `verify` does not launch it, so nothing claims what the run will not
+#     do. `verify --run` checks every server by hand. Pinned by verify_held_by_default and
+#     no_check_rows_while_held.
 VERIFY_ON_RERUN = frozenset()
 
 # ── The servers ────────────────────────────────────────────────────────────────────────────────
@@ -717,6 +738,9 @@ class Finding(object):
         self.todo = None
         self.row = None
         self.fingerprint = None
+        # The file its command names, `~` expanded and a bare name resolved on its client's
+        # PATH: what verify launches. None where it was not resolved.
+        self.resolved = None
 
     def leave(self, state, reason):
         self.state = state
@@ -924,6 +948,7 @@ def classify(reg, ctx):
         return f.leave("unchecked", R_RELATIVE)
     else:
         resolved = command
+    f.resolved = resolved
 
     # 1. standard, before any liveness check: a dead standard binary is reinstalled by its
     #    setup, never re-pointed at itself.
@@ -1464,15 +1489,18 @@ def signals_held():
 
     The cost: a create that hangs (a stalled disk or network volume) ignores Ctrl-C, SIGTERM and
     SIGHUP until it returns. SIGQUIT (Ctrl-backslash) and SIGKILL still end it, and leave at
-    most what exits_on_signals says a run killed outright leaves."""
+    most what exits_on_signals says a run killed outright leaves.
+
+    It yields the mask it found (None without masks), for a child started inside the block:
+    a child inherits the mask, and must not start with these held (verify's spawn)."""
     mask = getattr(signal, "pthread_sigmask", None)
     sigs = {getattr(signal, n) for n in STOP_SIGNALS if hasattr(signal, n)}
     if mask is None or not sigs:  # Windows: no signal masks (#184)
-        yield
+        yield None
         return
     old = mask(signal.SIG_BLOCK, sigs)
     try:
-        yield
+        yield old
     finally:
         mask(signal.SIG_SETMASK, old)
 
@@ -2098,10 +2126,11 @@ def edit_codex(path, changes, ctx, stamp):
 
 @contextlib.contextmanager
 def exits_on_signals():
-    """While apply runs, SIGTERM and SIGHUP raise SystemExit, and SIGINT KeyboardInterrupt,
-    instead of ending the process where it stands, so every clean-up on the way out runs: the
-    temp file holding a config's secrets is removed, an unused backup with it, and Claude Code's
-    lock is released (review of d39f719: both were left). Once stopping, the stop signals are
+    """While apply or verify runs, SIGTERM and SIGHUP raise SystemExit, and SIGINT
+    KeyboardInterrupt, instead of ending the process where it stands, so every clean-up on the
+    way out runs: the temp file holding a config's secrets is removed, an unused backup with it,
+    and Claude Code's lock is released (review of d39f719: both were left); a server verify
+    launched is stopped with its whole process group. Once stopping, the stop signals are
     held to the end, and one already on its way is ignored, so a second one can neither cut the
     clean-up short nor kill the exit (review of 79aa251: HUP+TERM and INT+INT left the unused
     backup). Run in process, a caller that goes on after a stop must unblock the stop signals
@@ -2243,6 +2272,469 @@ def apply(args):
     return 0
 
 
+# ── verify: each registered server answers an MCP initialize handshake ─────────────────────────
+
+# M4 and M5: the slowest answer measured was 2.94 s, a cold first start, so 20 s stands.
+HANDSHAKE_TIMEOUT = 20
+# The teardown (S2, end): stdin closed, then up to EXIT_GRACE for the server to leave by itself
+# (each CSA server did in about 0.1 s, M5), then SIGTERM to its process group and up to
+# TERM_GRACE, then SIGKILL and up to KILL_GRACE. With the timeout: 24 s at most per launch, and
+# 2 s more only for a process that outlives SIGKILL.
+EXIT_GRACE = 2.0
+TERM_GRACE = 2.0
+KILL_GRACE = 2.0
+POLL = 0.05
+# Once it has exited, how long its pipes may still be read for what it wrote before it went.
+DRAIN = 0.5
+STDERR_KEPT = 64 * 1024   # the tail of its stderr, for the last line
+LINE_MAX = 1024 * 1024    # a stdout line longer than this is skipped, not held
+SHOWN_MAX = 200           # characters of its last stderr line shown
+NAME_MAX = 100            # characters of its own name and version shown
+PROTOCOL_VERSION = "2025-06-18"
+CHECK_CLIENT = "csa-desktopsetup-check"
+# What may be launched: a registration that is a direct executable (A12) and works. A launcher
+# form, a dead one, and one this does not recognise or cannot resolve are reported, never run.
+LAUNCHED_STATES = ("standard", "elsewhere")
+
+# The launch env, per client, as M3 recorded what each hands a stdio server. Each is an
+# approximation, labelled one in ENGINEERING.md, so the output says "launched with its registered
+# command and settings", never "as <client> launches it":
+#   Claude Code  the caller's whole env (here, the installer's), plus the registration's. It also
+#                adds keys of its own (CLAUDECODE, a session id, ...), which this does not.
+#   Codex        only CODEX_ENV of the caller's - a lower bound: only the keys in M3's input were
+#                tested - and those its registration names in env_vars, plus the registration's.
+#                It also prepends two directories of its own to PATH, which hold no CSA binary;
+#                this does not.
+#   Gemini       the caller's env minus what looks secret, by Gemini CLI's own rule
+#                (gemini_drops), plus the registration's.
+#   Desktop      DESKTOP_ENV of the caller's, plus the registration's. M3 also saw LC_CTYPE and
+#                __CF_USER_TEXT_ENCODING, which Python and macOS add to any process started
+#                without them (inferred from a bare-env start), so they are left to those. Its
+#                PATH is DESKTOP_PATH when that is set, else the installer's: M3's one-Mac Desktop
+#                PATH is not applied (the A8 ruling, 2026-11-13). A Desktop entry this launches
+#                has an absolute command, so PATH does not choose the binary.
+# The installer's own keys are kept out of every one, so a server never writes into the
+# installer's log or to-do list. OS_KEYS, which macOS gives every process whatever its parent
+# passes (M3: in every record, a bare-env start included), are passed to every one as they are:
+# the server gets them either way, and two launches that differ only there are one launch.
+INSTALLER_KEYS = ("CSA_TODO_FILE", "CSA_LOG", "CSA_DEBUG", "CSA_NESTED")
+INSTALLER_PREFIX = "CSA_REGISTRATIONS_"
+CODEX_ENV = ("HOME", "LANG", "LOGNAME", "PATH", "SHELL", "TERM", "TMPDIR", "USER")
+DESKTOP_ENV = ("HOME", "LOGNAME", "PATH", "SHELL", "USER")
+OS_KEYS = ("__CF_USER_TEXT_ENCODING",)
+
+# Gemini CLI 0.67.0's rule (shouldRedactEnvironmentVariable, which its sanitizeEnvironment
+# applies), read from its installed bundle on 2026-11-13. M3's run agrees: inherited
+# PLAN2_FAKE_TOKEN and PLAN2_FAKE_API_KEY were dropped, PLAN2_PLAIN kept, and the registration's
+# env passed whatever its names. Not reproduced: the allow and block lists a settings file can
+# add, and its strict mode under GitHub Actions.
+GEMINI_DROP = ("CLIENT_ID", "DB_URI", "CONNECTION_STRING", "AWS_DEFAULT_REGION",
+               "AZURE_CLIENT_ID", "AZURE_TENANT_ID", "SLACK_WEBHOOK_URL", "TWILIO_ACCOUNT_SID",
+               "DATABASE_URL", "GOOGLE_CLOUD_PROJECT", "GOOGLE_CLOUD_ACCOUNT",
+               "FIREBASE_PROJECT_ID")
+GEMINI_SECRET_NAME = re.compile(
+    "TOKEN|SECRET|PASSWORD|PASSWD|KEY|AUTH|CREDENTIAL|CREDS|PRIVATE|CERT", re.I)
+GEMINI_SECRET_VALUE = re.compile("|".join((
+    r"-----BEGIN (RSA|OPENSSH|EC|PGP) PRIVATE KEY-----",
+    r"-----BEGIN CERTIFICATE-----",
+    r"(https?|ftp|smtp)://[^:\s]{1,1024}:[^@\s]{1,1024}@",
+    r"(ghp|gho|ghu|ghs|ghr|github_pat)_[a-zA-Z0-9_]{36,}",
+    r"AIzaSy[a-zA-Z0-9_\\-]{33}",
+    r"AKIA[A-Z0-9]{16}",
+    r"eyJ[a-zA-Z0-9_-]{0,10240}\.[a-zA-Z0-9_-]{0,10240}\.[a-zA-Z0-9_-]{0,10240}",
+    r"(s|r)k_(live|test)_[0-9a-zA-Z]{24}",
+    r"xox[abpr]-[a-zA-Z0-9-]+",
+)), re.I)
+
+# Masking (mask): an env value this long or longer is shown as `<KEY>`; then the gate scripts'
+# csa_redact patterns, for credential shapes no value covers, keeping the key.
+MASK_MIN = 4
+REDACTIONS = (
+    (re.compile(r"\x1b\[[0-9;]*m"), ""),
+    (re.compile(r'(oauth_token|client_secret|refresh_token|access_token|private_key)'
+                r'("?\s*[:=]\s*"?)[^\s,}"]+', re.I), r"\1\2<redacted>"),
+    (re.compile(r"(gh[pousr]_[A-Za-z0-9]{16,}|github_pat_[A-Za-z0-9_]{20,})"), "<redacted>"),
+    (re.compile(r'("?temp_clone_token"?\s*[:=]\s*"?)[A-Za-z0-9]{16,}'), r"\1<redacted>"),
+    (re.compile(r"(Bearer\s+)\S{16,}"), r"\1<redacted>"),
+    (re.compile(r"ya29\.[A-Za-z0-9._-]{20,}"), "<redacted>"),
+)
+
+TODO_CHECK = 45
+# Not the plan's "server check held until its effect on tokens is measured": M5 has measured it
+# (2026-11-13), and what holds the check now is D5's answer. Reworded under P2, honesty.
+I_HELD = ('server check held: whether a rerun launches the CSA servers to check them is not '
+          'decided yet (#179, D5); run "verify --run" to check by hand')
+I_HELD_SOME = ('server check held for {names}: whether a rerun launches them to check them is '
+               'not decided yet (#179, D5); run "verify --run" to check by hand')
+I_NOTHING = "no CSA MCP server registration to check"
+I_CLIENT = "{client}: {status}; nothing there was checked"
+OK_CHECK = ("{name} answers an MCP initialize handshake, launched with its registered command "
+            "and settings ({clients}; {server})")
+W_CHECK = "{name}, launched with its registered command and settings ({clients}): {why}"
+I_JUNK = "{name} ({clients}): {n} line{s} on its stdout {were} not JSON, and skipped"
+W_STUCK = "{name} ({clients}): its process group could not be stopped, even by SIGKILL"
+T_NO_ANSWER = ("{name} did not answer when launched with its {client} registration's command "
+               "and settings")
+N_LAUNCHER = "not checked: launcher form"
+N_DEAD = "does not start: {why}"
+N_NOT_STDIO = "not checked: it is not a stdio registration, which is all this checks"
+N_DOLLAR_ENV = ("not checked: its environment uses $-expansion, which this check does not "
+                "reproduce")
+N_DOLLAR_ARGS = "not checked: its args use $-expansion, which this check does not reproduce"
+N_KEYS = ("not checked: its {keys} setting{s} change{v} which Python code it runs, so it is not "
+          "launched")
+N_CWD = ("not checked: it sets its own working directory, which this check does not "
+         "reproduce")
+
+
+def gemini_drops(key, value):
+    """Does Gemini CLI keep this inherited variable from a server it starts? (GEMINI_DROP)"""
+    key = key.upper()
+    if key.startswith("GEMINI_CLI_"):
+        return False
+    if GEMINI_SECRET_VALUE.search(value):
+        return True
+    if key.startswith("GIT_CONFIG_"):
+        return False
+    return key in GEMINI_DROP or GEMINI_SECRET_NAME.search(key) is not None
+
+
+def launch_env(reg, ctx):
+    """The env `reg`'s client hands its server, as M3 measured it, plus the registration's."""
+    caller = {k: v for k, v in ctx.environ.items()
+              if k not in INSTALLER_KEYS and not k.startswith(INSTALLER_PREFIX)}
+    if reg.client == DESKTOP:
+        env = {k: caller[k] for k in DESKTOP_ENV if k in caller}
+        if DESKTOP_PATH is not None:
+            env["PATH"] = DESKTOP_PATH
+    elif reg.client == CODEX:
+        named = reg.other.get("env_vars")
+        names = list(CODEX_ENV) + [n for n in (named if isinstance(named, list) else [])
+                                   if isinstance(n, str)]
+        env = {k: caller[k] for k in names if k in caller}
+    elif reg.client == GEMINI:
+        env = {k: v for k, v in caller.items() if not gemini_drops(k, v)}
+    else:
+        env = caller
+    env.update({k: caller[k] for k in OS_KEYS if k in caller and k not in env})
+    env.update(reg.env)
+    return env
+
+
+def mask(text, env):
+    """`text` with every value in `env` of MASK_MIN characters or more shown as `<KEY>`, the
+    longest first, so a value holding another is masked whole; then the REDACTIONS. Every value
+    of the launch env, not only the registration's: the caller's can hold a secret too."""
+    for key, value in sorted(env.items(), key=lambda kv: (-len(kv[1]), kv[0])):
+        if len(value) >= MASK_MIN:
+            text = text.replace(value, f"<{key}>")
+    for pattern, repl in REDACTIONS:
+        text = pattern.sub(repl, text)
+    return text
+
+
+def shown(text, env, limit):
+    """What of a server's own text may be printed: masked first, so a cut can never leave half
+    a value unmasked, then cleaned, then cut."""
+    return clean(mask(text, env))[:limit]
+
+
+def check_of(f, ctx):
+    """("launch", (argv, env)) for a registration verify launches, else (kind, why not)."""
+    reg = f.reg
+    if f.state not in LAUNCHED_STATES:
+        if f.state == "launcher":
+            return "info", N_LAUNCHER
+        if f.state == "dead":
+            return "warn", N_DEAD.format(why=f.reason)
+        if reg.transport != "stdio":
+            return "info", N_NOT_STDIO
+        why = f.reason or ""
+        return "info", why if why.startswith("not checked: ") else "not checked: " + why
+    if f.state == "standard" and not f.live:
+        return "warn", N_DEAD.format(why=R_STANDARD_DEAD)
+    keys = interpreter_keys(reg.env)
+    if keys:
+        many = len(keys) > 1
+        return "info", N_KEYS.format(keys=keys_text(keys, " and "), s="s" if many else "",
+                                     v="" if many else "s")
+    if any("$" in v for v in reg.env.values()):
+        return "info", N_DOLLAR_ENV
+    if any("$" in a for a in reg.args):
+        return "info", N_DOLLAR_ARGS
+    if reg.other.get("cwd"):
+        return "info", N_CWD
+    return "launch", ([f.resolved] + reg.args, launch_env(reg, ctx))
+
+
+def spawn(argv, env, cwd, mask_found):
+    """Start the server in a session, and so a process group, of its own (S2), stdin a pipe.
+    Called with the stop signals held, so the start and its record cannot be split by one; the
+    child gets the mask that was in place before (signals_held), not the held one."""
+    def unhold():
+        signal.pthread_sigmask(signal.SIG_SETMASK, mask_found)
+
+    return subprocess.Popen(argv, cwd=cwd, env=env, stdin=subprocess.PIPE,
+                            stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                            start_new_session=True,
+                            preexec_fn=unhold if mask_found is not None else None)
+
+
+def parse_line(line):
+    """("answer", message) for a JSON-RPC response to id 1; "junk" for a line that is not
+    JSON; "other" for any other JSON (a notification, a request, another id); "blank"."""
+    text = line.strip()
+    if not text:
+        return "blank", None
+    try:
+        msg = json.loads(text.decode("utf-8"))
+    except (ValueError, RecursionError):
+        return "junk", None
+    if (isinstance(msg, dict) and type(msg.get("id")) is int and msg["id"] == 1
+            and ("result" in msg or "error" in msg)):
+        return "answer", msg
+    return "other", None
+
+
+def answered(msg, env):
+    """(passed, what to say) for the response to the initialize request."""
+    if "error" in msg:
+        err = msg["error"]
+        code = err.get("code") if isinstance(err, dict) else None
+        # The code only: an error's message is the server's own text, and can carry a value.
+        return False, ("answered with error %d" % code if type(code) is int
+                       else "answered with an error")
+    result = msg.get("result")
+    info = result.get("serverInfo") if isinstance(result, dict) else None
+    name = info.get("name") if isinstance(info, dict) else None
+    if not isinstance(name, str) or not name.strip():
+        return False, "answered without a server name"
+    version = info.get("version")
+    server = shown(name, env, NAME_MAX)
+    if isinstance(version, str) and version.strip():
+        server += " " + shown(version, env, NAME_MAX)
+    return True, server
+
+
+def exchange(p, env, timeout):
+    """Send the initialize request and read until its answer, the server's exit, or `timeout`:
+    (passed, what to say, lines skipped as not JSON). Bounded memory: stderr's tail only, and
+    no stdout line longer than LINE_MAX is held."""
+    request = {"jsonrpc": "2.0", "id": 1, "method": "initialize",
+               "params": {"protocolVersion": PROTOCOL_VERSION, "capabilities": {},
+                          "clientInfo": {"name": CHECK_CLIENT, "version": SCRIPT_VERSION}}}
+    try:
+        p.stdin.write((json.dumps(request) + "\n").encode("utf-8"))
+        p.stdin.flush()
+    except OSError:
+        pass  # it has gone already: what it left says why
+    out, err, junk, skipping = b"", b"", 0, False
+    deadline = time.monotonic() + timeout
+    drain = None
+    sel = selectors.DefaultSelector()
+    try:
+        sel.register(p.stdout, selectors.EVENT_READ, "out")
+        sel.register(p.stderr, selectors.EVENT_READ, "err")
+        while True:
+            now = time.monotonic()
+            if drain is None and p.poll() is not None:
+                drain = now + DRAIN
+            if drain is not None and (now >= drain or not sel.get_map()):
+                kind, msg = parse_line(out) if out and not skipping else ("blank", None)
+                if kind == "answer":
+                    return answered(msg, env) + (junk,)
+                lines = [ln for ln in err.decode("utf-8", "replace").splitlines() if ln.strip()]
+                code = p.returncode
+                why = ("exited %d before answering" % code if code >= 0
+                       else "exited on signal %d before answering" % -code)
+                if lines:
+                    why += ": " + shown(lines[-1].strip(), env, SHOWN_MAX)
+                return False, why, junk + (kind == "junk")
+            if now >= deadline:
+                return False, "did not answer within %gs" % timeout, junk
+            wait = min(POLL, deadline - now)
+            if not sel.get_map():
+                time.sleep(wait)
+                continue
+            for key, _ in sel.select(wait):
+                data = os.read(key.fileobj.fileno(), 65536)
+                if not data:
+                    sel.unregister(key.fileobj)
+                    continue
+                if key.data == "err":
+                    err = (err + data)[-STDERR_KEPT:]
+                    continue
+                out += data
+                while True:
+                    nl = out.find(b"\n")
+                    if skipping:
+                        if nl < 0:
+                            out = b""
+                            break
+                        out, skipping = out[nl + 1:], False
+                        continue
+                    if nl < 0:
+                        if len(out) > LINE_MAX:
+                            out, skipping, junk = b"", True, junk + 1
+                        break
+                    line, out = out[:nl], out[nl + 1:]
+                    kind, msg = parse_line(line)
+                    if kind == "answer":
+                        return answered(msg, env) + (junk,)
+                    junk += kind == "junk"
+    finally:
+        sel.close()
+
+
+def signal_group(pgid, sig):
+    try:
+        os.killpg(pgid, sig)
+    except OSError:
+        pass
+
+
+def group_alive(pgid):
+    """Is anything left in the process group to stop? ESRCH says nothing is. EPERM is what
+    macOS answers for a group whose only members are zombies (seen 2026-11-13), and for a member
+    no longer this user's: nothing this run can signal, either way."""
+    try:
+        os.killpg(pgid, 0)
+    except OSError:
+        return False
+    return True
+
+
+def gone(p, pgid, grace):
+    """Wait up to `grace` for the server to have exited and its group to be empty."""
+    deadline = time.monotonic() + grace
+    while True:
+        if p.poll() is not None and not group_alive(pgid):
+            return True
+        if time.monotonic() >= deadline:
+            return False
+        time.sleep(POLL)
+
+
+def end(p):
+    """Stop a launched server and everything in its process group, bounded (S2): stdin closed,
+    up to EXIT_GRACE for it to leave by itself, then SIGTERM to the group and up to TERM_GRACE,
+    then SIGKILL and up to KILL_GRACE; the leader is reaped. True when nothing of it is left.
+
+    The group is signalled only while it still has a member: the leader, until it is reaped,
+    or a child it left. A group id is not reused while any member lives. A process that leaves
+    the group (setsid) is outside this; no CSA server does."""
+    pgid = p.pid  # start_new_session: the server leads its own group
+    hook("ending", None)
+    try:
+        p.stdin.close()
+    except OSError:
+        pass
+    stopped = gone(p, pgid, EXIT_GRACE)
+    for sig, grace in ((signal.SIGTERM, TERM_GRACE), (signal.SIGKILL, KILL_GRACE)):
+        if stopped:
+            break
+        signal_group(pgid, sig)
+        stopped = gone(p, pgid, grace)
+    for stream in (p.stdout, p.stderr):
+        try:
+            stream.close()
+        except OSError:
+            pass
+    return stopped
+
+
+def run_check(argv, env, timeout):
+    """Launch one server in a fresh empty directory, ask, and stop it: (passed, what to say,
+    lines skipped as not JSON, stopped). The stop runs on every way out, a stop signal
+    included, with the stop signals held so a second one cannot cut it short; the directory,
+    and anything the server wrote there, is removed after it."""
+    stopped = True
+    with empty_dir() as cwd:
+        p = None
+        try:
+            try:
+                with signals_held() as found:
+                    p = spawn(argv, env, cwd, found)
+            except OSError as e:
+                why = e.strerror or type(e).__name__
+                return False, f"could not be started ({why})", 0, True
+            passed, text, junk = exchange(p, env, timeout)
+        finally:
+            if p is not None:
+                with signals_held():
+                    stopped = end(p)
+    return passed, text, junk, stopped
+
+
+def report(argv, env, shared, todos):
+    """Run one launch, shared by every finding in `shared`, and say what it showed."""
+    names = []
+    for f in shared:
+        if f.reg.name not in names:
+            names.append(f.reg.name)
+    name = " and ".join(names)
+    clients = ", ".join(f.reg.where() for f in shared)
+    try:
+        passed, text, junk, stopped = run_check(argv, env, HANDSHAKE_TIMEOUT)
+    except Exception as e:  # this launch only: the others are still checked
+        passed, text, junk, stopped = False, f"the check failed ({describe_error(e)})", 0, True
+    if passed:
+        emit("ok", OK_CHECK.format(name=name, clients=clients, server=text))
+    else:
+        emit("warn", W_CHECK.format(name=name, clients=clients, why=text))
+        for f in shared:
+            todos.add(TODO_CHECK, T_NO_ANSWER.format(name=f.reg.name, client=f.reg.where()))
+    if junk:
+        emit("info", I_JUNK.format(name=name, clients=clients, n=junk, s="" if junk == 1 else "s",
+                                   were="was" if junk == 1 else "were"))
+    if not stopped:
+        emit("warn", W_STUCK.format(name=name, clients=clients))
+
+
+def verify(args):
+    """Re-audit, then check each registered server the run may check: with --run every one,
+    without it those VERIFY_ON_RERUN names (D5). One launch at a time, identical launches once."""
+    names = set(SERVERS) if args.run else set(VERIFY_ON_RERUN) & set(SERVERS)
+    if not names:
+        emit("info", I_HELD)  # and nothing else: no audit, no probe, no launch
+        return 0
+    ctx = Context(os.environ, args.system_applications)
+    clients, findings = audit(ctx)
+    for line in ctx.logs:
+        emit("log", line)
+    for client, status in clients:
+        if status not in ("ok", "not installed", "no config yet"):
+            emit("info", I_CLIENT.format(client=client, status=status))
+    held = [n for n in SERVERS if n not in names and any(f.reg.name == n for f in findings)]
+    if held:
+        emit("info", I_HELD_SOME.format(names=", ".join(held)))
+    findings = [f for f in findings if f.reg.name in names]
+    if not findings:
+        emit("info", I_NOTHING)
+        return 0
+    launches = collections.OrderedDict()
+    order = []
+    for f in findings:
+        kind, what = check_of(f, ctx)
+        if kind != "launch":
+            order.append((kind, f"{f.reg.label()}: {what}"))
+            continue
+        argv, env = what
+        key = (tuple(argv), tuple(sorted(env.items())))  # A5: identical launches made once
+        if key not in launches:
+            launches[key] = (argv, env, [])
+            order.append(("launch", key))
+        launches[key][2].append(f)
+    todos = Todos()
+    for kind, item in order:
+        if kind == "launch":
+            report(*launches[item], todos=todos)
+        else:
+            emit(kind, item)
+    todos.flush(ctx.environ)
+    return 0
+
+
 def main(argv=None):
     if hasattr(sys.stdout, "reconfigure"):
         sys.stdout.reconfigure(encoding="utf-8", errors="replace")
@@ -2258,16 +2750,22 @@ def main(argv=None):
     a.add_argument("--approved", metavar="FILE",
                    help="the plan file agreed to (plan --out); without it, re-plan and apply")
     a.add_argument("--system-applications", default="/Applications", help=argparse.SUPPRESS)
+    v = sub.add_parser("verify", help="check that each registered server answers an MCP "
+                                      "initialize handshake; a rerun's check is held (D5)")
+    v.add_argument("--run", action="store_true",
+                   help="check every server now, by hand, whatever a rerun holds")
+    v.add_argument("--system-applications", default="/Applications", help=argparse.SUPPRESS)
     try:
         args = ap.parse_args(argv)
     except SystemExit as e:
         # argparse has said why. Nothing was created, and whatever is at --out is not touched:
         # this run made it no more than any other file (review of e62c775).
         return 0 if e.code in (0, None) else 2
-    if args.command == "apply":
+    if args.command in ("apply", "verify"):
+        act = apply if args.command == "apply" else verify
         try:
             with exits_on_signals():
-                return apply(args)
+                return act(args)
         except SystemExit:
             say("stopped by a signal, with what was reported done")
             raise
