@@ -90,7 +90,7 @@ tools/
   check-*.py                 # fourteen repo-specific checks; all fourteen also run in CI
   sweep-csa-sources.sh       # weekly drift sweep (network + gh; NOT in check-all.sh)
 tests/
-  test_*.py                  # thirteen standalone executables — run one directly with python3
+  test_*.py                  # fourteen standalone executables — run one directly with python3
   NativeWrappers.Tests.ps1   # Pester; the only suite that needs real 5.1 to mean anything
   DesktopApps.Tests.ps1      # Pester; windows-update.ps1's wait before replacing a running app
   NpmGlobals.Tests.ps1       # Pester; the npm installers run install -g <pkg>@latest (#153)
@@ -242,8 +242,10 @@ Four consequences worth keeping:
   unavailable.
 - **`tests/test_prompt_visibility.py` is the one genuine casualty** and exits **77**, not 0. It
   needs a real pty on both ends; three cheaper harnesses each produced a false negative.
-- **Git Bash has no `pgrep` and no `ps -o ppid=`**, so the macOS running-client detection cannot
-  be exercised from a Windows box at all ([FRICTION-003](FRICTION.md)).
+- **Git Bash has no `lsof` and no `ps -o ppid=`**, which the macOS running-client detection
+  (`running_ai_clients`) reads. `tests/test_running_clients.py` runs its logic against stubs, so
+  that part runs on Windows too; its live check of the real `pgrep` and `lsof` needs a Mac
+  ([FRICTION-003](FRICTION.md)).
 
 **So a green run on Windows is worth slightly less than a green run on macOS** — one fewer check
 — and `check-all.sh` says so explicitly rather than leaving you to remember.
@@ -595,7 +597,7 @@ every file that uses it** — `check-duplication.py` enforces byte-identical beh
 
 ## The guard layer
 
-Fourteen checkers in `tools/` and sixteen test files in `tests/`. **`./tools/check-all.sh` mirrors CI
+Fourteen checkers in `tools/` and seventeen test files in `tests/`. **`./tools/check-all.sh` mirrors CI
 exactly** — run it before pushing.
 
 A guard here is added only for a mistake that actually shipped, names its issue in the file, and

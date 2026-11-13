@@ -32,7 +32,7 @@
 
 set -euo pipefail
 
-SCRIPT_VERSION="2026-11-12T21:58Z"
+SCRIPT_VERSION="2026-11-13T00:03Z"
 
 # ── CSA plugin marketplaces ─────────────────────────────────────────
 # Plugin marketplaces to register with Claude Code. Each entry is an
@@ -308,23 +308,88 @@ if [[ -z "${NONINTERACTIVE-}" ]]; then
   fi
 fi
 
-# ── Running process check ────────────────────────────────────────────
+# ── Running AI clients ──────────────────────────────────────────────
+#
+# Which AI clients are running, identified by the PATH of the image each process executes, never
+# by its name: the rule Get-RunningAiClients set on Windows (#109). Measured on a Mac on
+# 2026-11-12 (TODO.md H1), the name failed here in three ways:
+#   - The name is what somebody typed. `pgrep -x` and `ps -o comm=` both read argv[0]:
+#     `exec -a fakename /bin/sleep` is found by `pgrep -x fakename` and not by `pgrep -x sleep`.
+#     Claude Code typed in a shell is "claude", started by path it is "<home>/.local/bin/claude",
+#     and the image both run is ~/.local/share/claude/versions/<version>, whose kernel name
+#     (`ps -o ucomm=`) is the version number.
+#   - The name found the wrong program. `pgrep -x codex` matched five processes and called them
+#     all "Codex CLI": two were the npm Codex CLI, two its app-server daemon, and one was
+#     ChatGPT.app's bundled Contents/Resources/codex-cli/.../codex. Claude Desktop and ChatGPT
+#     Desktop were never looked for at all.
+#   - The path moves under a running process. Updating the Codex CLI, npm renamed the package
+#     directory of a session still running to node_modules/@openai/.codex-<random>/, as Claude
+#     Code's updater renames its image on Windows. lsof reports the image where it is now.
+#
+# `lsof -d txt` lists each process's executable first, then what it maps (checked for a native
+# binary, an app bundle and node), in about 0.2 s for 850 processes. This user's only.
+#
+# Listed: the clients that run CSA MCP servers, as on Windows. A desktop app counts by its MAIN
+# executable only, app_running's rule: on 2026-11-12 twelve processes under
+# ChatGPT.app/Contents/Resources ran while ChatGPT did not - all descended from the Codex CLI,
+# which borrows ChatGPT's bundled node and codex. Not listed:
+#   - the Gemini CLI: an npm package running as `node`, so no image path names it (as on Windows);
+#   - Gemini Desktop and Copilot: they run no CSA server (Windows dropped its Gemini rule for that
+#     reason, #161). Replacing a running desktop app is wait_for_app_exit's job, when it happens;
+#   - the Codex CLI's app-server daemon (~/.codex/packages/), which it starts and can outlive it.
 
-check_running_tools() {
-  local running=()
-  pgrep -x claude >/dev/null 2>&1 && running+=("Claude Code")
-  pgrep -x codex >/dev/null 2>&1 && running+=("Codex CLI")
-  pgrep -x gemini >/dev/null 2>&1 && running+=("Gemini CLI")
-
-  if [[ ${#running[@]} -gt 0 ]]; then
-    warn "These tools are currently running: ${running[*]}"
-    echo "  It's safe to continue, but running sessions will stay on the old version."
-    echo "  For a clean migration, close them first and re-run this script."
-    echo ""
-    if ! confirm "Continue anyway?"; then
-      abort "Aborted. Close running tools and try again."
+# This script's own process and everything that started it, bounded. The one-liner is routinely
+# run FROM Claude Code, and "Claude Code is running" about the session running the installer is a
+# finding nobody can act on (Get-CsaAncestorPids on Windows). At most 12 hops, stopping when ps
+# has no answer or a process is its own parent, so a strange process table cannot hang a run.
+csa_ancestor_pids() {
+  local pid="$$" ppid i=0
+  while [[ $i -lt 12 ]] && [[ -n "$pid" ]] && [[ "$pid" != "0" ]]; do
+    echo "$pid"
+    ppid="$(ps -o ppid= -p "$pid" 2>/dev/null | tr -d ' ')" || ppid=""
+    if [[ -z "$ppid" ]] || [[ "$ppid" == "$pid" ]]; then
+      break
     fi
+    pid="$ppid"
+    i=$((i + 1))
+  done
+}
+
+# Prints each running client's name once, sorted.
+running_ai_clients() {
+  local mine txt
+  mine="$(csa_ancestor_pids | tr '\n' ' ')" || mine=""
+  # Captured whole, not piped: lsof's exit status is not part of the answer, and under pipefail
+  # a non-zero one would fail the function and throw the list away.
+  txt="$(lsof -n -P -a -d txt -u "$(id -u)" -Fpn 2>/dev/null)" || true
+  printf '%s\n' "$txt" | awk -v mine=" $mine" -v home="$HOME" '
+    /^p/ { pid = substr($0, 2); first = 1; next }
+    /^n/ && first {
+      first = 0
+      if (index(mine, " " pid " ")) next
+      path = substr($0, 2); name = ""
+      if (index(path, "/Applications/Claude.app/Contents/MacOS/") == 1)       name = "Claude Desktop"
+      else if (index(path, "/Applications/ChatGPT.app/Contents/MacOS/") == 1) name = "ChatGPT Desktop"
+      else if (index(path, home "/.local/share/claude/versions/") == 1)       name = "Claude Code"
+      else if (index(path, "/node_modules/@openai/") && path ~ /\/codex$/)    name = "Codex CLI"
+      else if (index(path, "/Caskroom/codex/") || index(path, "/Cellar/codex/")) name = "Codex CLI"
+      if (name != "") found[name] = 1
+    }
+    END { for (n in found) print n }' | sort
+}
+
+# States what is running and asks nothing, as Check-RunningTools has on Windows since #109. The
+# `Continue anyway?` that stood here fired on every run that found a familiar name, over a risk
+# macOS does not have: a running program's files can be replaced under it, and it keeps the
+# version it started with. A desktop app that has to be replaced is waited for at that moment
+# (wait_for_app_exit).
+check_running_tools() {
+  local running
+  running="$(running_ai_clients)" || running=""
+  if [[ -z "$running" ]]; then
+    return 0
   fi
+  info "Found ${running//$'\n'/, } running - no need to close anything. Each keeps the version it started with until it is restarted."
 }
 
 # ── Helpers ─────────────────────────────────────────────────────────

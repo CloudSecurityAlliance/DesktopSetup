@@ -140,6 +140,9 @@ check python3 tests/test_summary_interpreter.py
 step "a desktop app is replaced only after it is quit, and never mistaken for a look-alike"
 check python3 tests/test_desktop_apps.py
 
+step "a running AI client is named by its image path, never its name or the installer's own ancestry"
+check python3 tests/test_running_clients.py
+
 step "the plan must cover what main() runs"
 check python3 tools/check-plan-covers-steps.py
 

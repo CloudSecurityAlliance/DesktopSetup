@@ -57,6 +57,11 @@ The shell logic *can* be exercised, which is the partial mitigation:
 `tests/test_summary_interpreter.py` lifts a span out of `macos-ai-tools.sh` and runs it under
 whatever `bash` exists, and says in its own docstring that this is not macOS.
 
+**Update 2026-11-12:** the macOS detection was written on a Mac (TODO.md H1) and now reads image
+paths with `lsof` rather than names with `pgrep`. `tests/test_running_clients.py` runs it against
+`ps` and `lsof` stubs built from a measured process table, so the logic runs under Git Bash too;
+only its live check of the real tools is macOS-only.
+
 ## FRICTION-004 — The authoring machine is not a clean machine, in a way that matters
 
 **Open.** On the authoring Windows box, `python` and `python3` both resolve to
