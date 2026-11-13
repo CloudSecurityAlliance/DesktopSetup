@@ -3,7 +3,11 @@
 Claude Desktop, Codex and Gemini, says what is wrong with each, and writes nothing but its own
 plan file (#179, plans/2026-11-12-registration-repair.md Task 1). And `apply` (Task 2): it
 re-points only a dead registration that plan showed and that is unchanged since, changing only
-its command, through Claude Code's own lock, with no backup left by a write it abandons.
+its command, through Claude Code's own lock, with no backup left by a write it abandons. And
+`verify` (Task 3): it launches each registered server that is a direct executable, one at a
+time, with each client's env as M3 measured it, asks for an MCP `initialize`, and stops its
+whole process group, bounded; it never launches a dead or launcher-form registration, prints no
+env value, and launches nothing at all without `--run` while D5 holds. Its servers are stubs.
 
 What matters most about an auditor that will later drive a repair is what it refuses to
 claim: a dead standard binary is never a re-point aimed at itself; a launcher form, an
@@ -41,6 +45,7 @@ import json
 import os
 import re
 import secrets
+import shutil
 import signal
 import stat
 import subprocess
@@ -223,6 +228,8 @@ class World(object):
         self.out = self.tmp / "out" / "plan.json"
         self.out.parent.mkdir()
         self.ledger = self.tmp / "todo.tsv"
+        self.slog = self.tmp / "server.log"
+        self.slog.write_text("")
         self.extra_env = {}
         self.unset = set()
 
@@ -324,6 +331,56 @@ class World(object):
             os.environ.clear()
             os.environ.update(saved)
         return Applied(rc, out.getvalue(), err.getvalue(), self)
+
+    def verify_argv(self, run, args):
+        return (["verify", "--system-applications", str(self.apps)] + (["--run"] if run else [])
+                + list(args))
+
+    def verify(self, *args, run=True, ledger=True):
+        """`verify --run` (or, with run=False, `verify`) as a CLI, as the entry scripts run it."""
+        cmd = [sys.executable, "-I", str(SCRIPT)] + self.verify_argv(run, args)
+        r = subprocess.run(cmd, env=self.apply_env(ledger), cwd=str(self.tmp),
+                           capture_output=True, text=True, timeout=300)
+        return Applied(r.returncode, r.stdout, r.stderr, self)
+
+    def verify_inproc(self, mod, *args, run=True, ledger=True):
+        saved = dict(os.environ)
+        out, err = io.StringIO(), io.StringIO()
+        try:
+            os.environ.clear()
+            os.environ.update(self.apply_env(ledger))
+            with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+                rc = mod.main(self.verify_argv(run, args))
+        finally:
+            os.environ.clear()
+            os.environ.update(saved)
+        return Applied(rc, out.getvalue(), err.getvalue(), self)
+
+    # ── stub MCP servers, for verify ───────────────────────────────────────────────────────
+    def server(self, path, mode="answer", name="csa-stub", version="9.9.9", interp=None, **opts):
+        """A stub MCP server at `path`: a Python script whose shebang is `interp`, this test's
+        own Python by default. It logs to self.slog, one JSON object a line: its start (pid,
+        process group, session, working directory and its listing, its env KEY NAMES - never a
+        value), each request, and its end. `mode` is what it does (STUB_SERVER).
+
+        Its second line is a no-op to Python and, to a shell, an exec of this test's Python on
+        the file: so with a shell as `interp` (partial_python) it still runs as the stub. macOS
+        will not exec a script as another script's interpreter, so a sh wrapper cannot serve."""
+        conf = dict(opts, mode=mode, name=name, version=version, log=str(self.slog))
+        return write_exec(path, f"#!{interp or sys.executable}\n"
+                                f'"exec" "{sys.executable}" "$0" "$@"\n'
+                                f"CONF = {json.dumps(conf)!r}\n" + STUB_SERVER)
+
+    def std_server(self, name, **kw):
+        """The standard binary, ~/.local/bin/<entry>, as a stub server named <name>-stub."""
+        kw.setdefault("name", name + "-stub")
+        return self.server(self.home / ".local" / "bin" / SPEC[name][0], **kw)
+
+    def server_log(self):
+        return [json.loads(ln) for ln in self.slog.read_text().splitlines() if ln.strip()]
+
+    def starts(self):
+        return [e for e in self.server_log() if e["ev"] == "start"]
 
     # ── stubs ──────────────────────────────────────────────────────────────────────────────
     def stub(self, name, body):
@@ -521,6 +578,74 @@ sys.exit(2)
 '''
 
 
+# A stub MCP server for verify's cases (World.server). CONF is set by the line above this text.
+# Its modes: answer (an initialize result), junk (lines that are not JSON, a notification and an
+# answer to another id, then the answer), error (an error answer), exit (its env on stderr, then
+# CONF["last"], then exit 3 before answering), silent (ignores SIGTERM, starts a grandchild in
+# its own process group, and never answers). `lock` makes it hold an exclusive lock for its whole
+# life and give up on contention; `delay` and `linger` hold it before its answer and after stdin
+# closes.
+STUB_SERVER = r'''
+import fcntl, json, os, signal, subprocess, sys, time
+CONF = json.loads(CONF)
+
+
+def log(**ev):
+    ev["pid"] = os.getpid()
+    with open(CONF["log"], "a") as f:
+        f.write(json.dumps(ev) + "\n")
+
+
+def say(msg):
+    sys.stdout.write(json.dumps(msg) + "\n")
+    sys.stdout.flush()
+
+
+mode = CONF["mode"]
+log(ev="start", server=CONF["name"], pgid=os.getpgid(0), sid=os.getsid(0), cwd=os.getcwd(),
+    listing=len(os.listdir(".")), keys=sorted(os.environ), args=sys.argv[1:],
+    blocked=sorted(int(s) for s in signal.pthread_sigmask(signal.SIG_BLOCK, [])))
+if CONF.get("lock"):
+    held = open(CONF["lock"], "a")
+    try:
+        fcntl.flock(held, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError:
+        log(ev="contention")
+        sys.exit(1)
+if mode == "exit":
+    for key, value in sorted(os.environ.items()):
+        sys.stderr.write("%s=%s\n" % (key, value))
+    sys.stderr.write(CONF["last"] + "\n")
+    sys.stderr.flush()
+    sys.exit(3)
+if mode == "silent":
+    signal.signal(signal.SIGTERM, signal.SIG_IGN)
+    child = subprocess.Popen(["/bin/sleep", "60"])
+    log(ev="grandchild", child=child.pid)
+    while True:
+        time.sleep(1)
+if mode == "junk":
+    sys.stdout.write("starting up\n{not json\n")
+    say({"jsonrpc": "2.0", "method": "notifications/message", "params": {}})
+    say({"jsonrpc": "2.0", "id": 7, "result": {}})
+for line in sys.stdin:
+    msg = json.loads(line)
+    params = msg.get("params") or {}
+    log(ev="recv", method=msg.get("method"), id=msg.get("id"),
+        protocolVersion=params.get("protocolVersion"), client=params.get("clientInfo"))
+    time.sleep(CONF.get("delay", 0))
+    if mode == "error":
+        say({"jsonrpc": "2.0", "id": msg["id"],
+             "error": {"code": -32602, "message": CONF.get("message", "no")}})
+    else:
+        say({"jsonrpc": "2.0", "id": msg["id"],
+             "result": {"protocolVersion": "2025-06-18", "capabilities": {},
+                        "serverInfo": {"name": CONF["name"], "version": CONF["version"]}}})
+time.sleep(CONF.get("linger", 0))
+log(ev="end")
+'''
+
+
 class Applied(object):
     """What `apply` printed, and the to-do ledger it wrote."""
 
@@ -537,7 +662,7 @@ class Applied(object):
         self.todos = [tuple(ln.split("\t")) for ln in self.ledger_text.splitlines()]
 
     def ok(self):
-        expect(self.rc == 0, f"apply exited {self.rc}: {self.stderr.strip()[-400:]}")
+        expect(self.rc == 0, f"exited {self.rc}: {self.stderr.strip()[-400:]}")
 
     def has_todo(self, order, title):
         return (str(order), title, "-", "-") in self.todos
@@ -3538,6 +3663,547 @@ def duplicate_plan_row_resolves_to_leave():
 
 
 # ═════════════════════════════════════════════════════════════════════════════════════════════
+# verify (Task 3): each registered server answers an MCP initialize handshake, launched with its
+# registered command and settings - one at a time, bounded, and with no secret in what it prints
+# ═════════════════════════════════════════════════════════════════════════════════════════════
+
+# Verbatim from the plan, Task 3, except where a comment says why not.
+OK_CHECK = ("answers an MCP initialize handshake, launched with its registered command and "
+            "settings")
+N_LAUNCHER = "not checked: launcher form"
+N_DOLLAR = "not checked: its environment uses $-expansion, which this check does not reproduce"
+N_DEAD = "does not start: "
+T_NO_ANSWER = ("{name} did not answer when launched with its {client} registration's command "
+               "and settings")
+# Not the plan's "...held until its effect on tokens is measured": M5 has measured it
+# (2026-11-13), and the hold now waits on D5's answer. Reworded under P2, honesty.
+HELD = ('server check held: whether a rerun launches the CSA servers to check them is not '
+        'decided yet (#179, D5); run "verify --run" to check by hand')
+CC_USER = "Claude Code (user scope)"
+
+
+def ok_line(name, clients, server):
+    return f"{name} {OK_CHECK} ({clients}; {server})"
+
+
+def bare_keys():
+    """The env keys this interpreter, or the OS, adds to a process started with none at all:
+    on macOS __CF_USER_TEXT_ENCODING, and LC_CTYPE, which Python sets when no locale is (the
+    measurement record, M3's Desktop part)."""
+    r = subprocess.run([sys.executable, "-c", "import json, os; print(json.dumps(sorted(os.environ)))"],
+                       env={}, capture_output=True, text=True, timeout=60, check=True)
+    return set(json.loads(r.stdout))
+
+
+def group_members(pgid):
+    """The live (not zombie) processes left in a process group, polled for up to 2 s so the
+    system can reap an orphan first."""
+    ps = shutil.which("ps", path="/bin:/usr/bin")
+    deadline = time.time() + 2
+    while True:
+        out = subprocess.run([ps, "-A", "-o", "pid=,pgid=,stat="], capture_output=True,
+                             text=True, timeout=30).stdout
+        live = [int(f[0]) for f in (ln.split() for ln in out.splitlines())
+                if len(f) >= 3 and f[1] == str(pgid) and not f[2].startswith("Z")]
+        if not live or time.time() >= deadline:
+            return live
+        time.sleep(0.1)
+
+
+def kill_stub_groups(w):
+    """Whatever a broken mutant left running, gone: the stubs' groups and grandchildren."""
+    for e in w.server_log() if w.slog.exists() else []:
+        for target, kill in ((e.get("pgid"), os.killpg), (e.get("child"), os.kill)):
+            if target:
+                try:
+                    kill(target, signal.SIGKILL)
+                except OSError:
+                    pass
+
+
+def partial_python(w):
+    """An "interpreter" that fails the stdlib probe the audit makes (`-I -B -c ...` is no shell
+    command line), yet runs a stub: a `python3.14` that is /bin/sh, a real binary the kernel
+    will exec. A registration on it is dead, and launching it would still log a start."""
+    p = w.tmp / "partial" / "bin" / "python3.14"
+    p.parent.mkdir(parents=True)
+    p.symlink_to("/bin/sh")
+    return p
+
+
+@case
+def answers():
+    with world() as w:
+        w.std_server("csa-zendesk")
+        w.claude(user={"csa-zendesk": reg("~/.local/bin/csa-zendesk-mcp",
+                                          env={"CSA_ZD_ALLOWLIST_WRITE": SECRET_A})})
+        a = w.verify()
+        a.ok()
+        want = ok_line("csa-zendesk", CC_USER, "csa-zendesk-stub 9.9.9")
+        expect(a.oks == [want], f"oks {a.oks}, warns {a.warns}, infos {a.infos}")
+        starts = w.starts()
+        expect(len(starts) == 1, f"{len(starts)} launches")
+        s = starts[0]
+        expect(s["sid"] == s["pid"] == s["pgid"], "the server was not started in a session of its own")
+        held = {int(x) for x in (signal.SIGTERM, signal.SIGHUP, signal.SIGINT)} & set(s["blocked"])
+        expect(not held, f"the server started with the stop signals held: {sorted(held)}")
+        expect(s["listing"] == 0 and s["cwd"] != str(w.tmp), f"not run in an empty directory: {s}")
+        expect(not os.path.exists(s["cwd"]), "its working directory was left behind")
+        expect("CSA_ZD_ALLOWLIST_WRITE" in s["keys"], "the registration's setting was not passed")
+        recv = [e for e in w.server_log() if e["ev"] == "recv"]
+        version = load_module().SCRIPT_VERSION
+        expect(len(recv) == 1 and recv[0]["method"] == "initialize" and recv[0]["id"] == 1
+               and recv[0]["protocolVersion"] == "2025-06-18"
+               and recv[0]["client"] == {"name": "csa-desktopsetup-check", "version": version},
+               f"the request: {recv}")
+        expect(any(e["ev"] == "end" for e in w.server_log()), "its stdin was never closed")
+        expect(not a.todos, f"to-dos for a server that answered: {a.todos}")
+        expect(SECRET_A not in a.stdout + a.stderr + a.ledger_text, "a value was printed")
+
+
+@case
+def junk_before_response_tolerated():
+    with world() as w:
+        w.std_server("csa-zendesk", mode="junk")
+        w.claude(user={"csa-zendesk": reg(std_bin(w, "csa-zendesk"))})
+        a = w.verify()
+        a.ok()
+        expect(a.oks == [ok_line("csa-zendesk", CC_USER, "csa-zendesk-stub 9.9.9")],
+               f"oks {a.oks}, warns {a.warns}")
+        expect([i for i in a.infos if "2 lines on its stdout were not JSON" in i],
+               f"the lines skipped were not counted: {a.infos}")
+
+
+@case
+def error_response_reported():
+    with world() as w:
+        w.std_server("csa-zendesk", mode="error", message=SECRET_A)
+        w.claude(user={"csa-zendesk": reg(std_bin(w, "csa-zendesk"))})
+        a = w.verify()
+        a.ok()
+        expect(not a.oks and a.warned("answered with error -32602"), f"warns {a.warns}")
+        expect(SECRET_A not in a.stdout + a.stderr + a.ledger_text, "the error's message was printed")
+        expect(a.has_todo(45, T_NO_ANSWER.format(name="csa-zendesk", client=CC_USER)),
+               f"ledger {a.todos}")
+
+
+@case
+def silent_server_times_out_and_is_killed():
+    # It ignores SIGTERM and has a child of its own: the whole process group goes, by SIGKILL.
+    with world() as w:
+        mod = load_module()
+        mod.HANDSHAKE_TIMEOUT = 1
+        mod.EXIT_GRACE = mod.TERM_GRACE = 0.5
+        w.std_server("csa-zendesk", mode="silent")
+        w.claude(user={"csa-zendesk": reg(std_bin(w, "csa-zendesk"))})
+        try:
+            a = w.verify_inproc(mod)
+            events = w.server_log()
+            starts = [e for e in events if e["ev"] == "start"]
+            children = [e["child"] for e in events if e["ev"] == "grandchild"]
+            left = group_members(starts[0]["pgid"]) if starts else []
+        finally:
+            kill_stub_groups(w)
+        a.ok()
+        expect(a.warned("did not answer within 1s"), f"warns {a.warns}")
+        expect(starts and children, "fixture: the stub and its child did not start")
+        expect(not left, f"left running in its process group: {left}")
+        expect(a.has_todo(45, T_NO_ANSWER.format(name="csa-zendesk", client=CC_USER)),
+               f"ledger {a.todos}")
+
+
+@case
+def exits_before_answering_masked():
+    with world() as w:
+        bearer = "tok" + "Q7x" * 10
+        last = f"fatal: refused {SECRET_A} with Authorization: Bearer {bearer} " + "x" * 300
+        w.std_server("csa-zendesk", mode="exit", last=last)
+        w.claude(user={"csa-zendesk": reg(std_bin(w, "csa-zendesk"),
+                                          env={"CSA_ZD_ALLOWLIST_WRITE": SECRET_A,
+                                               "CSA_ZD_ALLOWLIST_READ": SECRET_B})})
+        a = w.verify()
+        a.ok()
+        warns = a.warned("exited 3 before answering: fatal: refused <CSA_ZD_ALLOWLIST_WRITE> "
+                         "with Authorization: Bearer <redacted> ")
+        expect(warns, f"warns {a.warns}")
+        shown = warns[0].split("before answering: ", 1)[1]
+        expect(len(shown) == 200, f"the stderr line shown is {len(shown)} characters, not 200")
+        for s in SECRETS + (bearer,):
+            expect(s not in a.stdout + a.stderr + a.ledger_text, "a value reached the output")
+
+
+@case
+def one_process_at_a_time():
+    # Each stub holds one exclusive lock for its whole life, lingers 0.5 s after its stdin
+    # closes, and gives up if the lock is taken: two at once would show as contention.
+    with world() as w:
+        lock = w.tmp / "one.lock"
+        user = {}
+        for name in ("csa-zendesk", "csa-skilljar", "csa-google-workspace"):
+            w.std_server(name, lock=str(lock), delay=0.2, linger=0.5)
+            user[name] = reg(std_bin(w, name))
+        w.claude(user=user)
+        try:
+            a = w.verify()
+        finally:
+            kill_stub_groups(w)
+        a.ok()
+        contention = [e for e in w.server_log() if e["ev"] == "contention"]
+        expect(not contention, f"two servers ran at once: {contention}")
+        expect(len(a.oks) == 3, f"oks {a.oks}, warns {a.warns}")
+
+
+@case
+def deduped_launches():
+    with world() as w:
+        # macOS gives every process this key, whatever its parent passes (M3), so Codex's
+        # allowlist leaving it out must not make a second launch. Set here, so Linux sees it too.
+        w.extra_env["__CF_USER_TEXT_ENCODING"] = "0x1F5:0x0:0x0"
+        w.std_server("csa-zendesk")
+        cmd = std_bin(w, "csa-zendesk")
+        proj = w.home / "GitHub" / "proj"
+        proj.mkdir(parents=True)
+        w.claude(user={"csa-zendesk": reg(cmd)},
+                 projects={str(proj): {"mcpServers": {"csa-zendesk": reg(cmd)}}})
+        w.gemini({"csa-zendesk": reg(cmd)})
+        w.codex([{"name": "csa-zendesk", "transport": {"type": "stdio", "command": cmd}}])
+        a = w.verify()
+        a.ok()
+        expect(len(w.starts()) == 1, f"{len(w.starts())} launches of one command, args and env")
+        clients = f"{CC_USER}, Claude Code (local scope, ~/GitHub/proj), Codex, Gemini"
+        expect(a.oks == [ok_line("csa-zendesk", clients, "csa-zendesk-stub 9.9.9")],
+               f"oks {a.oks}, warns {a.warns}")
+
+
+@case
+def desktop_env_is_minimal():
+    # M3: Claude Desktop hands a server HOME LOGNAME PATH SHELL USER and its registered env.
+    with world() as w:
+        added = bare_keys()
+        w.extra_env.update({"LOGNAME": "u", "USER": "u", "SHELL": "/bin/zsh", "TERM": "xterm",
+                            "PLAN_PLAIN": "plain", "PLAN_FAKE_TOKEN": SECRET_B})
+        w.std_server("csa-skilljar")
+        w.desktop({"csa-skilljar": reg(std_bin(w, "csa-skilljar"),
+                                       env={"CSA_SKILLJAR_PROFILE": "prof"})})
+        a = w.verify()
+        a.ok()
+        expect(a.oks == [ok_line("csa-skilljar", "Claude Desktop", "csa-skilljar-stub 9.9.9")],
+               f"oks {a.oks}, warns {a.warns}, infos {a.infos}")
+        got = set(w.starts()[0]["keys"]) - added
+        want = {"HOME", "LOGNAME", "PATH", "SHELL", "USER", "CSA_SKILLJAR_PROFILE"}
+        expect(got == want, f"extra {sorted(got - want)}, missing {sorted(want - got)}")
+
+
+@case
+def client_env_as_measured():
+    # M3: Claude Code passes the caller's whole env; Gemini drops the names that look secret;
+    # Codex passes eight keys and those its registration names in env_vars. Each adds the
+    # registration's env, and none gets the installer's own keys.
+    with world() as w:
+        added = bare_keys()
+        w.extra_env.update({"LOGNAME": "u", "USER": "u", "SHELL": "/bin/zsh", "TERM": "xterm",
+                            "PLAN_PLAIN": "plain", "PLAN_FAKE_TOKEN": SECRET_B,
+                            "PLAN_FAKE_API_KEY": SECRET_C, "CSA_LOG": str(w.tmp / "log"),
+                            "CSA_DEBUG": "1", "CSA_NESTED": "1", "CSA_REGISTRATIONS_PY": "x",
+                            # A plain name whose value Gemini's rule calls a secret.
+                            "PLAN_MIRROR": "https://user:pw@mirror.invalid/simple"})
+        w.std_server("csa-zendesk")
+        cmd = std_bin(w, "csa-zendesk")
+        w.claude(user={"csa-zendesk": reg(cmd, env={"MARK_CC": "1"})})
+        w.gemini({"csa-zendesk": reg(cmd, env={"MARK_GEMINI": "1",
+                                               "CSA_FAKE_CLIENT_SECRET": SECRET_A})})
+        w.codex([{"name": "csa-zendesk", "transport": {
+            "type": "stdio", "command": cmd, "env": {"MARK_CODEX": "1"}, "env_vars": ["PLAN_PLAIN"]}}])
+        a = w.verify()
+        a.ok()
+        expect(len(a.oks) == 3, f"oks {a.oks}, warns {a.warns}, infos {a.infos}")
+        inherited = set(w.apply_env(True)) - {"CSA_TODO_FILE", "CSA_LOG", "CSA_DEBUG",
+                                              "CSA_NESTED", "CSA_REGISTRATIONS_PY"}
+        want = {
+            "MARK_CC": inherited | {"MARK_CC"},
+            "MARK_GEMINI": (inherited - {"PLAN_FAKE_TOKEN", "PLAN_FAKE_API_KEY", "PLAN_MIRROR"})
+                           | {"MARK_GEMINI", "CSA_FAKE_CLIENT_SECRET"},
+            "MARK_CODEX": {"HOME", "LANG", "LOGNAME", "PATH", "SHELL", "TERM", "TMPDIR", "USER",
+                           "PLAN_PLAIN", "MARK_CODEX"},
+        }
+        seen = set()
+        for s in w.starts():
+            mark = [k for k in s["keys"] if k.startswith("MARK_")]
+            expect(len(mark) == 1, f"a launch with markers {mark}")
+            got = set(s["keys"]) - added
+            seen.add(mark[0])
+            expect(got == want[mark[0]] - added,
+                   f"{mark[0]}: extra {sorted(got - want[mark[0]])}, "
+                   f"missing {sorted(want[mark[0]] - got)}")
+        expect(seen == set(want), f"launched {sorted(seen)}")
+
+
+@case
+def dollar_env_not_checked():
+    with world() as w:
+        w.std_server("csa-zendesk")
+        w.std_server("csa-skilljar")
+        w.claude(user={
+            "csa-zendesk": reg(std_bin(w, "csa-zendesk"), env={"K": "$HOME/x"}),
+            "csa-skilljar": reg(std_bin(w, "csa-skilljar"), ["--profile", "${P}"])})
+        a = w.verify()
+        a.ok()
+        expect(f"csa-zendesk in {CC_USER}: {N_DOLLAR}" in a.infos, f"infos {a.infos}")
+        expect(f"csa-skilljar in {CC_USER}: not checked: its args use $-expansion, which this "
+               "check does not reproduce" in a.infos, f"infos {a.infos}")
+        expect(not w.starts(), f"launched: {w.starts()}")
+
+
+@case
+def dead_registration_not_launched():
+    with world() as w:
+        dead = w.server(w.home / "GitHub" / "zd" / "csa-zendesk-mcp", interp=partial_python(w))
+        subprocess.run([str(dead)], input=b"", env=w.env(), timeout=60, capture_output=True)
+        expect(w.starts(), "fixture: launched, the stub would run and log its start")
+        w.slog.write_text("")
+        w.claude(user={"csa-zendesk": reg(dead), "csa-skilljar": reg(gone(w, "csa-skilljar"))})
+        a = w.verify()
+        a.ok()
+        expect(f"csa-zendesk in {CC_USER}: {N_DEAD}{R_PY_BROKEN}" in a.warns, f"warns {a.warns}")
+        expect(f"csa-skilljar in {CC_USER}: {N_DEAD}{R_MISSING}" in a.warns, f"warns {a.warns}")
+        expect(not w.starts(), f"a dead registration was launched: {w.starts()}")
+
+
+@case
+def dead_standard_binary_not_launched():
+    with world() as w:
+        w.std_server("csa-zendesk", interp=partial_python(w))
+        w.claude(user={"csa-zendesk": reg(std_bin(w, "csa-zendesk"))})
+        a = w.verify()
+        a.ok()
+        expect(f"csa-zendesk in {CC_USER}: {N_DEAD}{R_STANDARD_DEAD}" in a.warns, f"warns {a.warns}")
+        expect(not w.starts(), f"a dead standard binary was launched: {w.starts()}")
+
+
+@case
+def launcher_form_not_launched():
+    with world() as w:
+        checkout = w.home / "GitHub" / "csa-google-gmail-calendar"
+        checkout.mkdir(parents=True)
+        write_exec(w.stubs / "uv", f"#!{w.uv_python}\nopen({str(w.log)!r}, 'a').write('uv ran\\n')\n")
+        w.stub("uvx", "exit 0")
+        write_exec(w.stubs / "npx", f'#!/bin/sh\nprintf "npx ran\\n" >> "{w.log}"\n')
+        w.claude(user={
+            "csa-google-gmail-calendar": reg("uv", ["run", "--directory", str(checkout),
+                                                    "csa-google-gmail-calendar"]),
+            "csa-zendesk": reg("uvx", ["--from", "csa-zendesk[server]", "csa-zendesk-mcp"]),
+            "csa-skilljar": reg("npx", ["-y", "csa-skilljar"]),
+        })
+        before = snapshot(checkout)
+        a = w.verify()
+        a.ok()
+        for name in ("csa-google-gmail-calendar", "csa-zendesk", "csa-skilljar"):
+            expect(f"{name} in {CC_USER}: {N_LAUNCHER}" in a.infos, f"{name}: infos {a.infos}")
+        ran = [ln for ln in w.stub_log() if ln.startswith(("uv", "npx"))]
+        expect(not ran, f"a launcher was run: {ran}")
+        expect(snapshot(checkout) == before, "the checkout changed")
+
+
+@case
+def interpreter_keys_not_launched():
+    # A12: a setting that changes which Python code runs - here into a checkout - is not
+    # launched by the check, working or not: a launch can write into that tree.
+    with world() as w:
+        srv = w.server(w.home / "GitHub" / "zd" / "srv", name="zd")
+        w.claude(user={"csa-zendesk": reg(srv, env={"PYTHONPATH": str(w.home / "GitHub")})})
+        a = w.verify()
+        a.ok()
+        want = (f"csa-zendesk in {CC_USER}: not checked: its PYTHONPATH setting changes which "
+                "Python code it runs, so it is not launched")
+        expect(want in a.infos, f"infos {a.infos}, oks {a.oks}")
+        expect(not w.starts(), f"launched: {w.starts()}")
+
+
+@case
+def own_cwd_not_checked():
+    # Gemini and Codex can start a server in a directory of its own: not reproduced, not run.
+    with world() as w:
+        w.std_server("csa-zendesk")
+        w.gemini({"csa-zendesk": reg(std_bin(w, "csa-zendesk"), cwd=str(w.home))})
+        a = w.verify()
+        a.ok()
+        want = ("csa-zendesk in Gemini: not checked: it sets its own working directory, which "
+                "this check does not reproduce")
+        expect(want in a.infos, f"infos {a.infos}, oks {a.oks}")
+        expect(not w.starts(), f"launched: {w.starts()}")
+
+
+@case
+def token_files_untouched():
+    # Stubs only: what a real server does to its token is M5's. The check itself never opens,
+    # changes or even reaches a token file, at mode 000 in a directory at mode 000.
+    with world() as w:
+        tokens = [w.home / ".config" / "csa-zendesk" / "tokens.json",
+                  w.home / ".csa_google_workspace" / "token.json",
+                  w.home / ".csa_google_gmail_calendar" / "token.json"]
+        for t in tokens:
+            t.parent.mkdir(parents=True)
+            t.write_text('{"fake": true}')
+            t.chmod(0)
+        user = {}
+        for name in ("csa-zendesk", "csa-google-workspace", "csa-google-gmail-calendar"):
+            w.std_server(name)
+            user[name] = reg(std_bin(w, name))
+        w.claude(user=user)
+
+        def stats():
+            return [(st.st_ino, st.st_mtime_ns, st.st_size, st.st_mode)
+                    for st in (os.stat(t) for t in tokens)]
+
+        before = stats()
+        try:
+            for t in tokens:
+                t.parent.chmod(0)
+            a = w.verify()
+        finally:
+            for t in tokens:
+                t.parent.chmod(0o700)
+        a.ok()
+        expect(len(a.oks) == 3, f"oks {a.oks}, warns {a.warns}")
+        expect(stats() == before, "a token file changed")
+
+
+@case
+def verify_held_by_default():
+    with world() as w:
+        mod = load_module()
+        expect(mod.VERIFY_ON_RERUN == frozenset(), "D5's safe default is (b): a rerun checks nothing")
+        w.std_server("csa-zendesk")
+        w.claude(user={"csa-zendesk": reg(std_bin(w, "csa-zendesk"))})
+        a = w.verify(run=False)
+        a.ok()
+        expect(a.infos == [HELD] and not a.oks and not a.warns,
+               f"infos {a.infos}, oks {a.oks}, warns {a.warns}")
+        expect(not w.starts(), f"a server was launched without --run: {w.starts()}")
+        expect(w.stub_log() == [], f"held, it still ran something: {w.stub_log()}")
+
+
+@case
+def rerun_checks_only_allowed_servers():
+    # D5 (c)'s mechanism: a rerun checks the servers VERIFY_ON_RERUN names, and says the rest
+    # are held.
+    with world() as w:
+        mod = load_module()
+        mod.VERIFY_ON_RERUN = frozenset({"csa-zendesk"})
+        w.std_server("csa-zendesk")
+        w.std_server("csa-skilljar")
+        w.claude(user={"csa-zendesk": reg(std_bin(w, "csa-zendesk")),
+                       "csa-skilljar": reg(std_bin(w, "csa-skilljar"))})
+        a = w.verify_inproc(mod, run=False)
+        a.ok()
+        expect(a.oks == [ok_line("csa-zendesk", CC_USER, "csa-zendesk-stub 9.9.9")],
+               f"oks {a.oks}, warns {a.warns}")
+        expect([s["server"] for s in w.starts()] == ["csa-zendesk-stub"], f"{w.starts()}")
+        expect([i for i in a.infos if "held for csa-skilljar" in i], f"infos {a.infos}")
+
+
+@case
+def verify_run_flag_runs():
+    with world() as w:
+        w.std_server("csa-zendesk")
+        w.std_server("csa-skilljar")
+        w.claude(user={"csa-zendesk": reg(std_bin(w, "csa-zendesk")),
+                       "csa-skilljar": reg(std_bin(w, "csa-skilljar"))})
+        a = w.verify(run=True)
+        a.ok()
+        expect(a.oks == [ok_line("csa-skilljar", CC_USER, "csa-skilljar-stub 9.9.9"),
+                         ok_line("csa-zendesk", CC_USER, "csa-zendesk-stub 9.9.9")],
+               f"oks {a.oks}, warns {a.warns}, infos {a.infos}")
+        expect(len(w.starts()) == 2, f"{len(w.starts())} launches")
+
+
+@case
+def failure_todo_and_ledger_absent_print():
+    with world() as w:
+        w.std_server("csa-zendesk", mode="error")
+        w.claude(user={"csa-zendesk": reg(std_bin(w, "csa-zendesk"))})
+        title = T_NO_ANSWER.format(name="csa-zendesk", client=CC_USER)
+        a = w.verify()
+        a.ok()
+        expect(a.has_todo(45, title), f"ledger {a.todos}")
+        expect(title not in a.infos, "printed as well as written to the ledger")
+        b = w.verify(ledger=False)
+        b.ok()
+        expect(title in b.infos, f"no ledger, and not printed: {b.infos}")
+
+
+# Runs verify --run with short grace periods and the given timeout, so a test can stop it with a
+# real signal while a server is running; at `point` (a TEST_HOOK point) it says so and waits.
+VERIFY_DRIVER = r'''
+import importlib.util, sys, time
+spec = importlib.util.spec_from_file_location("m", sys.argv[1])
+mod = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(mod)
+mod.EXIT_GRACE = mod.TERM_GRACE = 0.5
+mod.HANDSHAKE_TIMEOUT = float(sys.argv[2])
+point, marker = sys.argv[3], sys.argv[4]
+
+def hold(at, path):
+    if at == point:
+        open(marker, "w").close()
+        time.sleep(3)
+
+mod.TEST_HOOK = hold
+sys.exit(mod.main(sys.argv[5:]))
+'''
+
+# (signal, where it lands, the timeout, exit status, what stderr says). "asking": while verify
+# waits for an answer; "ending": as it starts to stop the server, which no signal may cut short.
+VERIFY_STOPS = [
+    (signal.SIGTERM, "asking", 20, 143, b"stopped by a signal"),
+    (signal.SIGINT, "asking", 20, 130, b"stopped by an interrupt"),
+    (signal.SIGTERM, "ending", 1, 143, b"stopped by a signal"),
+]
+
+
+@case
+def signal_during_check_leaves_no_server():
+    for sig, point, timeout, status, said in VERIFY_STOPS:
+        where = f"{sig.name} while {point}"
+        with world() as w:
+            w.std_server("csa-zendesk", mode="silent")
+            w.claude(user={"csa-zendesk": reg(std_bin(w, "csa-zendesk"))})
+            driver = w.tmp / "verify-driver.py"
+            driver.write_text(VERIFY_DRIVER)
+            marker = w.tmp / "at-point"
+            p = subprocess.Popen([sys.executable, "-I", str(driver), str(SCRIPT), str(timeout),
+                                  point, str(marker)] + w.verify_argv(True, []),
+                                 env=w.apply_env(False),
+                                 cwd=str(w.tmp), stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                 preexec_fn=lambda: [signal.signal(s, signal.SIG_DFL) for s in
+                                                     (signal.SIGTERM, signal.SIGHUP, signal.SIGINT)])
+            try:
+                deadline = time.time() + 120
+
+                def there():
+                    if point == "asking":
+                        return [e for e in w.server_log() if e["ev"] == "grandchild"]
+                    return marker.exists()
+
+                while not there() and p.poll() is None and time.time() < deadline:
+                    time.sleep(0.05)
+                expect(w.starts() and there(), f"{where}: never got there")
+                p.send_signal(sig)
+                _, err = p.communicate(timeout=60)
+                start = w.starts()[0]
+                left = group_members(start["pgid"])
+            finally:
+                if p.poll() is None:
+                    p.kill()
+                    p.communicate()
+                kill_stub_groups(w)
+            expect(p.returncode == status, f"{where}: exit {p.returncode}: {err[-300:]!r}")
+            expect(not left, f"{where}: the server's group is still running: {left}")
+            expect(not os.path.exists(start["cwd"]), f"{where}: its working directory was left")
+            expect(said in err and b"Traceback" not in err, f"{where}: stderr {err[-300:]!r}")
+
+
+# ═════════════════════════════════════════════════════════════════════════════════════════════
 # The file itself
 # ═════════════════════════════════════════════════════════════════════════════════════════════
 
@@ -3848,6 +4514,84 @@ MUTATIONS = [
      'STOP_SIGNALS = ("SIGTERM", "SIGHUP", "SIGINT")', 'STOP_SIGNALS = ("SIGTERM", "SIGHUP")'),
     ("signal_mid_write_leaves_nothing", "remove the backup of a config already replaced",
      "        if any(os.path.lexists(n) for n in made):", "        if True:"),
+    # ── verify: Task 3 Step 4, the plan's four ──
+    ("silent_server_times_out_and_is_killed", "remove the process-group kill",
+     "        os.killpg(pgid, sig)\n", "        os.kill(pgid, sig)\n"),
+    ("exits_before_answering_masked", "skip masking",
+     "    return clean(mask(text, env))[:limit]", "    return clean(text)[:limit]"),
+    ("launcher_form_not_launched", "launch launcher forms",
+     'LAUNCHED_STATES = ("standard", "elsewhere")',
+     'LAUNCHED_STATES = ("standard", "elsewhere", "launcher")'),
+    ("verify_held_by_default", "default VERIFY_ON_RERUN to all four",
+     "VERIFY_ON_RERUN = frozenset()",
+     'VERIFY_ON_RERUN = frozenset(("csa-google-workspace", "csa-google-gmail-calendar", '
+     '"csa-skilljar", "csa-zendesk"))'),
+    # ── verify: the guards Task 3 added, each broken on purpose (ADR-005) ──
+    ("exits_before_answering_masked", "drop the gate's token redactions",
+     "    for pattern, repl in REDACTIONS:\n        text = pattern.sub(repl, text)\n", ""),
+    ("exits_before_answering_masked", "cut a server's line before masking it",
+     "    return clean(mask(text, env))[:limit]", "    return clean(mask(text[:limit], env))"),
+    ("error_response_reported", "print the error's own message",
+     '        return False, ("answered with error %d" % code if type(code) is int\n'
+     '                       else "answered with an error")',
+     '        return False, "answered with error %s: %s" % (code, err.get("message"))'),
+    ("dead_registration_not_launched", "launch a dead registration",
+     'LAUNCHED_STATES = ("standard", "elsewhere")',
+     'LAUNCHED_STATES = ("standard", "elsewhere", "dead")'),
+    ("dead_standard_binary_not_launched", "launch a dead standard binary",
+     '    if f.state == "standard" and not f.live:\n', '    if False:\n'),
+    ("dollar_env_not_checked", "launch an env that uses $-expansion",
+     '    if any("$" in v for v in reg.env.values()):\n', '    if False:\n'),
+    ("dollar_env_not_checked", "launch args that use $-expansion",
+     '    if any("$" in a for a in reg.args):\n', '    if False:\n'),
+    ("interpreter_keys_not_launched", "launch an env that changes which Python code runs",
+     "    keys = interpreter_keys(reg.env)\n    if keys:\n",
+     "    keys = interpreter_keys(reg.env)\n    if False:\n"),
+    ("own_cwd_not_checked", "launch a registration with a working directory of its own",
+     '    if reg.other.get("cwd"):\n', '    if False:\n'),
+    ("deduped_launches", "launch once per registration, not once per launch",
+     "        key = (tuple(argv), tuple(sorted(env.items())))",
+     "        key = (tuple(argv), tuple(sorted(env.items())), id(f))"),
+    ("deduped_launches", "leave the OS's own keys to the clients that pass everything",
+     "    env.update({k: caller[k] for k in OS_KEYS if k in caller and k not in env})\n", ""),
+    ("desktop_env_is_minimal", "hand Claude Desktop's server the caller's whole env",
+     "        env = {k: caller[k] for k in DESKTOP_ENV if k in caller}", "        env = dict(caller)"),
+    ("client_env_as_measured", "pass Gemini every inherited key",
+     "        env = {k: v for k, v in caller.items() if not gemini_drops(k, v)}",
+     "        env = dict(caller)"),
+    ("client_env_as_measured", "judge Gemini's keys by name only",
+     "    if GEMINI_SECRET_VALUE.search(value):\n", "    if False:\n"),
+    ("client_env_as_measured", "ignore Codex's env_vars",
+     "        env = {k: caller[k] for k in names if k in caller}",
+     "        env = {k: caller[k] for k in CODEX_ENV if k in caller}"),
+    ("client_env_as_measured", "pass the installer's own keys on",
+     "              if k not in INSTALLER_KEYS and not k.startswith(INSTALLER_PREFIX)}",
+     "              if True}"),
+    ("one_process_at_a_time", "go on before the server has gone",
+     "    stopped = gone(p, pgid, EXIT_GRACE)\n", "    stopped = True\n"),
+    ("silent_server_times_out_and_is_killed", "never escalate to SIGKILL",
+     "    for sig, grace in ((signal.SIGTERM, TERM_GRACE), (signal.SIGKILL, KILL_GRACE)):",
+     "    for sig, grace in ((signal.SIGTERM, TERM_GRACE),):"),
+    ("junk_before_response_tolerated", "give up at the first line that is not the answer",
+     '                    junk += kind == "junk"\n', '                    return False, "junk", junk\n'),
+    ("junk_before_response_tolerated", "count no line it skipped",
+     '                    junk += kind == "junk"\n', "                    pass\n"),
+    ("answers", "run the server in the caller's directory",
+     "    with empty_dir() as cwd:\n        p = None\n",
+     "    with contextlib.nullcontext(os.getcwd()) as cwd:\n        p = None\n"),
+    ("answers", "start the server in verify's own session",
+     "                            start_new_session=True,\n                            preexec_fn=",
+     "                            start_new_session=False,\n                            preexec_fn="),
+    ("answers", "start the server with the stop signals held",
+     "preexec_fn=unhold if mask_found is not None else None)", "preexec_fn=None)"),
+    ("failure_todo_and_ledger_absent_print", "leave no to-do for a server that did not answer",
+     "            todos.add(TODO_CHECK, T_NO_ANSWER.format(name=f.reg.name, client=f.reg.where()))\n",
+     "            pass\n"),
+    ("signal_during_check_leaves_no_server", "let a stop signal end verify where it stands",
+     "            with exits_on_signals():\n", "            with contextlib.nullcontext():\n"),
+    ("signal_during_check_leaves_no_server", "stop the server without holding the stop signals",
+     "                with signals_held():\n                    stopped = end(p)\n",
+     "                stopped = end(p)\n"),
 ]
 
 

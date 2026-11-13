@@ -849,6 +849,55 @@ scripts, with a version bump each. The loop uses `continue`, not `return`, so an
 script cannot disable the servers listed after it — which is also why a stale list produced **no
 output at all** until the drift report was added.
 
+#### The server check: `scripts/csa-mcp-registrations.py verify`
+
+`verify --run` launches each registered CSA server with its registered command and settings, and
+sends it one MCP `initialize`
+([#179](https://github.com/CloudSecurityAlliance/DesktopSetup/issues/179), Plan 2 Task 3). It
+shows the server answers when launched that way, **not** that it works in a client: tool
+discovery and an authorised read in each client are
+[#177](https://github.com/CloudSecurityAlliance/DesktopSetup/issues/177)'s. A rerun runs
+`verify` without `--run`, which checks only the servers `VERIFY_ON_RERUN` names. That is none
+until the CINO answers D5, so a rerun launches nothing.
+
+- **What it launches:** a registration whose command is a direct executable that works (A12).
+  It never launches these, and says why:
+  - a launcher form (`uv run`, `uvx`, `npx`, …): `not checked: launcher form`;
+  - a dead registration, or a dead standard binary: `does not start: <reason>`;
+  - a registration whose env holds an interpreter-shaping key, whose env or args use
+    `$`-expansion, or that sets its own working directory: `not checked: …`.
+
+  Identical launches are made once, and the line names every client that shares one.
+- **How:** one launch at a time, each in a fresh empty directory, in a session and process group
+  of its own. After the answer, or 20 s, its stdin is closed and it has 2 s to exit. Then its
+  group gets SIGTERM and 2 s, then SIGKILL, and the server is reaped. A stop signal runs the same
+  teardown.
+- **Its launch env approximates each client's,** from M3 in
+  [the measurement record](plans/reviews/2026-11-12-registration-repair-measurements.md). So the
+  output says "launched with its registered command and settings", never "as <client> launches
+  it". Every client also gets the registration's env, and none gets the installer's own keys
+  (`CSA_TODO_FILE`, `CSA_LOG`, `CSA_DEBUG`, `CSA_NESTED`, `CSA_REGISTRATIONS_*`).
+  - **Claude Code:** the installer's whole env. Claude Code also adds keys of its own (a session
+    id, …); the check does not.
+  - **Codex:** only `HOME LANG LOGNAME PATH SHELL TERM TMPDIR USER`, and the keys its
+    registration names in `env_vars`. Those eight are a lower bound: only the keys in M3's input
+    were tested. The two directories Codex prepends to `PATH` hold no CSA binary, and are not
+    added.
+  - **Gemini:** the installer's env minus what looks secret, by Gemini CLI 0.67's own rule, read
+    from its installed bundle. Its settings' allow and block lists are not reproduced.
+  - **Claude Desktop:** `HOME LOGNAME PATH SHELL USER`. M3 also recorded `LC_CTYPE` and
+    `__CF_USER_TEXT_ENCODING`; Python and macOS add those to any process started without them
+    (inferred), so they are left to them. `PATH` is the installer's: M3's one-Mac Desktop `PATH`
+    is not applied (the A8 ruling of 2026-11-13). A Desktop entry the check launches has an
+    absolute command, so `PATH` does not choose the binary.
+- **What it prints:** the server's name and version, an error's code (never its message), and
+  at most 200 characters of its last stderr line. Every env value of four characters or more is
+  masked as `<KEY>` first, then the `csa_redact` credential shapes. No env value is printed.
+- **Run time:** M4 measured 0.35–0.61 s to an answer warm, and up to about 3 s cold. M5, with
+  real credentials, measured at most 1.84 s, and each server exited about 0.1 s after its stdin
+  closed. A launch is bounded at 24 s: 20 s, then 2 s and 2 s. A process that outlives SIGKILL
+  adds 2 s more. While D5 holds, a rerun adds nothing.
+
 ---
 
 ## Periodic source sweep
