@@ -7,8 +7,8 @@ isolated parts, M4, M6 and M7, all taken on 2026-11-12 on the CINO's Mac.
 
 **Step 2 so far:**
 - **M5 is recorded below.** It ran with the CINO's go-ahead on 2026-11-13.
-- **M2 and M3's Desktop part** were approved in the same answer. Another session is running them with him, and they
-  are not recorded here yet.
+- **M2 and M3's Desktop part are recorded below.** They were approved in the same answer, and the coordinating
+  session ran them with him on 2026-11-13.
 
 Until a measurement is recorded, its safe default stands (D4, A8, D5).
 
@@ -181,7 +181,7 @@ names look secret (`PLAN2_FAKE_TOKEN`, `PLAN2_FAKE_API_KEY`), a plain one (`PLAN
 | Codex 0.167.2, a session start (`codex exec`, model provider a closed local port, no login) | **only** `HOME`, `LANG`, `LOGNAME`, `PATH`, `SHELL`, `TERM`, `TMPDIR`, `USER` of the inherited keys, **+ the registered env**. `XDG_CONFIG_HOME`, `PYTHONPATH` and the rest were dropped. | inherited, with two Codex directories prepended: `$CODEX_HOME/tmp/arg0-macos/codex-arg0<rand>` and the npm package's `vendor/aarch64-apple-darwin/codex-path` | the caller's directory | `initialize`, `notifications/initialized`, `tools/list` |
 | Gemini 0.67.0, `gemini mcp list` in a **trusted** folder | inherited keys **except names that look secret** (`PLAN2_FAKE_TOKEN` and `PLAN2_FAKE_API_KEY` were dropped; `PLAN2_PLAIN` passed), **+ the registered env** (`CSA_PLAN2_FAKE_CLIENT_SECRET` passed) + `GEMINI_CLI`, `GEMINI_CLI_NO_RELAUNCH` | inherited, unchanged | the caller's directory | `initialize`, `notifications/initialized`, `ping` |
 | Gemini, `gemini mcp list` in an **untrusted** folder | not launched | — | — | — |
-| Claude Desktop | **awaiting the CINO's go-ahead** (M2's session) | | | |
+| Claude Desktop, at its start (M2's session, 2026-11-13) | `HOME`, `LC_CTYPE`, `LOGNAME`, `PATH`, `SHELL`, `USER`, `__CF_USER_TEXT_ENCODING`, **+ the registered env** | its own, which may be a fallback (see "M2 and M3's Desktop part") | `/` | `initialize`, `notifications/initialized`, `tools/list` |
 
 Not measured: a Codex TUI session, and a Gemini chat session. A Gemini session needs a login or an API key, and
 `gemini mcp list` was the path the plan allows. Codex's allowlist was tested only against the keys passed; it may
@@ -203,7 +203,8 @@ each recorded `PATH`."**
 - **Codex:** its allowlist plus the registered env. **The allowlist is a lower bound:** only the eight keys above
   were seen to pass, and only keys in the input were tested. Codex may also pass others, such as `TZ` or `LC_*`.
 - **Gemini:** the caller's env minus secret-looking names, plus the registered env.
-- **Desktop:** keeps A8's leave rule, and the approximation stays labelled, until M2's session records it.
+- **Desktop:** recorded in M2's session. Its six keys plus the registered env, and its `PATH`, which carries an
+  extraction caveat. See "M2 and M3's Desktop part" for the branch.
 - **A12's interpreter-shaping keys can arrive from the client's own env,** not only the registration. Claude Code
   and Gemini pass an inherited `PYTHONPATH`.
 
@@ -355,12 +356,92 @@ question to the CINO lists what each server touched."**
 - **M4's timeout is confirmed.** With credentials present, the slowest answer was 1.84 s, so the 20 s timeout
   stands.
 
+## M2 and M3's Desktop part (the real Claude Desktop config): does a running Desktop overwrite an edit, and what does it pass a server?
+
+**Go-ahead.** The CINO's answer, verbatim: *"Both, now (Recommended)"* (2026-11-13). The coordinating session ran
+this with him interactively, and every result below was observed by that session. This session did not touch the
+Desktop config or the Desktop app.
+
+**Method**, in the plan's order:
+1. Desktop was quit.
+2. The config was backed up beside itself, at mode `0600`.
+3. The dummy `csa-plan2-probe` was added. Its command is the absolute uv `cpython-3.14.10` interpreter, with args
+   `[probe_server.py, "A-original"]`.
+4. The CINO started Desktop, which launched the dummy.
+5. While Desktop ran, the dummy's command was edited in the file to a wrapper that runs the same probe with the
+   marker `B-edited`.
+6. The CINO quit Desktop. He was asked to change one preference first, and **did not**, so no preference changed.
+7. The entry was read back.
+8. The dummy was removed, and the config was compared with the backup.
+9. The backup was deleted.
+
+Desktop ran for about 14 minutes between its start and its quit.
+
+### M3, Claude Desktop
+
+| What | Observed |
+|---|---|
+| Launches at start | 3: two at once, then one 3 s later |
+| Env key names the server got | `HOME`, `LC_CTYPE`, `LOGNAME`, `PATH`, `SHELL`, `USER`, `__CF_USER_TEXT_ENCODING`. The registered env is added to these; the dummy had none. |
+| `PATH`, home as `~` | `~/.nvm/versions/node/v23.7.0/bin:~/.nvm/versions/node/v26.13.0/bin:/usr/local/bin:/opt/homebrew/bin:~/Library/pnpm:~/.local/bin:~/.pyenv/shims:/usr/bin:/bin:/usr/sbin:/sbin` |
+| Working directory | `/` |
+| Methods sent | `initialize`, `notifications/initialized`, `tools/list` |
+
+- **The `PATH` may be a fallback.** At this start, Desktop's own log said
+  `[CCD] Shell environment extraction failed (attempt 1), using process.env: Shell environment extraction timed out`.
+  The `PATH` recorded may therefore be its fallback, `process.env`, and not what a successful login-shell extraction
+  gives. One start was measured, so the successful-extraction case is not.
+- **`LC_CTYPE` is probably Python's own,** not Desktop's. No `LANG` or `LC_*` was passed, and with none Python
+  coerces the C locale and sets `LC_CTYPE` itself (PEP 538). The dummy's isolated self-test showed the same key.
+- **Desktop passes far less than the CLIs:** six keys plus macOS's own, against Claude Code's whole env (M3,
+  isolated parts).
+- **This session's observation.** M5's process listing showed Desktop starting each CSA server through
+  `/Applications/Claude.app/Contents/Helpers/disclaimer --pgroup -- ~/.local/bin/<entry>`, so a server's parent under
+  Desktop is that helper.
+
+**Branch triggered (A8, Task 3): "A8 resolves bare names on each recorded `PATH`; Task 3 builds Desktop's launch env
+from the recorded key names."**
+- **A8:** a bare-name Desktop entry resolves on the `PATH` above, which includes `~/.local/bin`. That resolution
+  is labelled with the extraction caveat: it is the `PATH` Desktop passed at a start whose shell extraction timed out.
+- **Task 3:** Desktop's launch env is `HOME`, `LOGNAME`, `PATH`, `SHELL` and `USER`, with the `PATH` above, plus the
+  registration's env. `LC_CTYPE` and `__CF_USER_TEXT_ENCODING` are left to the interpreter and the OS.
+
+### M2
+
+| Question | Observed |
+|---|---|
+| Did the edit of `command` survive Desktop running? | **Yes**, for the whole 14 minutes |
+| Did it survive Desktop quitting? | **Yes**: the entry read back after the quit was the `B-edited` command |
+| Did a running Desktop pick up the edit? | **No.** Desktop kept the command it started with, and the dummy never ran with marker `B`. |
+| Does a preference change make Desktop write its old copy back? | **Not measured.** No preference was changed. |
+| After the dummy was removed, was the config identical to the backup, excluding `preferences`? | **Yes.** No preference key changed, and the mode stayed `0600`. |
+| Byte-identical? | **No:** 4636 → 4637 bytes, with identical values. The coordinating session's helper re-serialised the JSON when it removed the dummy. |
+
+The backup was deleted after the comparison, and no probe process was left.
+
+**Evidence for a spec-review minor.** The one-byte difference comes from re-serialising the whole file with
+identical values. It is evidence for the spec review's minor, "whole-file JSON re-serialisation", and for its
+Global Constraint: detect the indent, keep the trailing newline and key order, and use `ensure_ascii=False`. Even
+then, the first repair of a file can change its bytes without changing a value. That is not a failure, since Task
+2's read-back compares parsed values.
+
+**Branch triggered (D4).**
+- **The plan's rule** is "if the edit survives: D4's recommendation becomes (a), for him to confirm".
+- **The edit survived a running Desktop and a quit,** but not the case D4 is about. A preference change, or another
+  write Desktop makes while running, could still write its old copy back, and that case is unmeasured.
+- **Decision.** This is the coordinating session's ruling, and so the AI's, made under P1 (safety):
+  - **D4 keeps its safe default (b),** `WRITE_DESKTOP_WHILE_RUNNING = False`.
+  - **D4's question to the CINO says what was and was not shown.** An external edit survived 14 minutes of Desktop
+    running and its quit. Desktop keeps using its old command until restarted. Whether a preference change, or any
+    other Desktop write, overwrites the edit was not measured.
+- **What would settle it:** the same run with one preference changed while Desktop runs.
+
 ## Go-aheads (Step 2)
 
 The CINO answered *"Both, now (Recommended)"* on 2026-11-13, covering M2 and M5.
 
-- **M2, with M3's Desktop part, in one session.** Approved, and being run with him by another session; not recorded
-  here yet. It touches the real Claude Desktop config,
+- **M2, with M3's Desktop part, in one session.** Approved, run with him by the coordinating session, and recorded
+  above. No preference was changed, so the last step below did not happen. It touches the real Claude Desktop config,
   `~/Library/Application Support/Claude/claude_desktop_config.json`:
   - **A backup** beside the config, `claude_desktop_config.json.bak-<14 digits>`, at the same mode. It holds the
     config's secrets.
