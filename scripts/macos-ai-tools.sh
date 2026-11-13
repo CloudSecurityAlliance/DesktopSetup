@@ -32,7 +32,7 @@
 
 set -euo pipefail
 
-SCRIPT_VERSION="2026-11-13T03:55Z"
+SCRIPT_VERSION="2026-11-13T04:08Z"
 
 # ── CSA plugin marketplaces ─────────────────────────────────────────
 # Plugin marketplaces to register with Claude Code. Each entry is an
@@ -402,12 +402,21 @@ csa_lsof_release() {
 }
 
 # Ctrl-C (or a TERM) inside the 5 s window: stop lsof, remove its file, put the previous traps
-# back, and act on the signal. With no trap before, the shell exits 130 (INT) or 143 (TERM), so
-# the installer's EXIT trap (csa_on_exit) reports it stopped early. With one, its action is run.
+# back, and act on the signal: run the previous trap's action if there was one, or exit 130 (INT)
+# or 143 (TERM). Either way lsof is stopped and the file is gone.
+#
+# That exit reaches the EXIT trap (csa_on_exit, which then says "stopped early") only when this
+# runs in the installer's own shell. main() runs it inside $(...), through check_running_tools:
+# there the exit is the subshell's, the installer dies of the same signal itself, and csa_on_exit
+# runs once, sees status 0, and prints nothing - as it does on a Ctrl-C during any $(...) in this
+# script (measured, bash 3.2).
 #
 # Not by raising the signal again: on bash 3.2 a signal raised inside its own trap never reached
-# a trap put back there (measured). Where check_running_tools runs this, inside $(...), the
-# installer itself got the same Ctrl-C and stops at once; this only cleans up (measured).
+# a trap put back there (measured).
+#
+# The window's traps replace whatever was there, a caller's `trap '' INT` included. A Ctrl-C that
+# caller meant to ignore still stops lsof here, and the check returns 1 (no answer); the empty
+# action then runs, so the run carries on, and `trap '' INT` is put back (measured).
 csa_lsof_trap_action() { csa_lsof_action="$2"; }
 csa_lsof_interrupted() {
   local prev status=130 csa_lsof_action=""
@@ -440,6 +449,7 @@ running_ai_clients() {
   phome="$(cd "$HOME" 2>/dev/null && pwd -P)" || phome="$HOME"
   csa_lsof_prev_int="$(trap -p INT)"
   csa_lsof_prev_term="$(trap -p TERM)"
+  # For these 5 s only, and over a caller's `trap '' INT` too (see csa_lsof_interrupted).
   trap 'csa_lsof_interrupted INT' INT
   trap 'csa_lsof_interrupted TERM' TERM
   if ! csa_lsof_out="$(mktemp "${TMPDIR:-/tmp}/csa-lsof.XXXXXX")"; then
