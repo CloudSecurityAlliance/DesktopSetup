@@ -45,6 +45,7 @@ import sys
 import tempfile
 import time
 import traceback
+import unicodedata
 from pathlib import Path
 
 sys.dont_write_bytecode = True
@@ -81,11 +82,14 @@ WINDOWS = "not audited: Windows support is #184 (Task 1W)"
 
 # C0 and C1 controls, the Unicode line and paragraph separators, the bidi controls, and lone
 # surrogates: anything that could break a line or reorder what a person reads.
-# Written as code points, never as the characters: see no_invisible_characters_in_source.
-_UNSAFE = ((0x00, 0x1F), (0x7F, 0x9F), (0x061C, 0x061C), (0x200E, 0x200F), (0x2028, 0x2029),
-           (0x202A, 0x202E), (0x2066, 0x2069), (0xD800, 0xDFFF))
-CONTROL = re.compile("[" + "".join(re.escape(chr(a)) + "-" + re.escape(chr(b))
-                                   for a, b in _UNSAFE) + "]")
+# What may never reach a person's screen or the plan file raw, by Unicode category: every
+# control (Cc), format characters (Cf: bidi, zero-width, BOM, tags), line and paragraph
+# separators (Zl, Zp), lone surrogates (Cs) and private use (Co).
+UNSAFE_CATEGORIES = ("Cc", "Cf", "Zl", "Zp", "Cs", "Co")
+
+
+def unsafe_in(text):
+    return sorted({hex(ord(c)) for c in text if unicodedata.category(c) in UNSAFE_CATEGORIES})
 
 INTERPRETER_KEYS = ("PYTHONPATH", "PYTHONHOME", "PYTHONSTARTUP", "PYTHONUSERBASE",
                     "PYTHONEXECUTABLE", "VIRTUAL_ENV", "CONDA_PREFIX", "UV_PROJECT_ENVIRONMENT")
@@ -1060,31 +1064,121 @@ def lone_surrogate_is_malformed():
         w.desktop({"csa-zendesk": reg(gone, ["--flag\ud800"])})
         w.codex([{"name": "csa-zendesk", "transport": {"type": "stdio", "command": gone,
                                                         "env": {"K\ud800": "v"}}}])
-        w.out.write_text("stale\n")
-        r = w.run(keep_out=True)
+        r = w.run()
         r.ok()
         for client in ("Gemini", "Claude Desktop", "Codex"):
-            expect((r.client_status(client) or "").startswith("not audited: "),
-                   f"{client}: {r.client_status(client)!r}")
+            # A malformed entry, said so - not the per-client backstop's "this audit failed".
+            status = r.client_status(client) or ""
+            expect(status.startswith("not audited: ") and "unexpected shape" in status,
+                   f"{client}: {status!r}")
         expect(r.f("csa-zendesk")["action"] == "re-point", "Claude Code was not audited")
         expect(not r.findings("csa-skilljar"), "a project path no file system can hold was audited")
 
 
 @case
-def stale_plan_removed_on_failure():
-    # "nothing was written" must be true of --out: a plan file from an earlier run is not left
-    # standing beside a run that failed, where it could pass for this run's.
+def failure_removes_only_its_own_plan():
+    # A run that fails after creating its plan file removes that file: "nothing was written"
+    # is true of --out (A4).
     with world() as w:
         mod = load_module()
 
         def boom(*a, **k):
             raise RuntimeError("deliberate")
 
-        mod.render = boom
-        w.out.write_text("stale\n")
+        mod.show = boom
+        w.claude(user={"csa-zendesk": reg(w.tmp / "gone" / "csa-zendesk-mcp")})
+        r = w.run_inproc(mod)
+        expect(r.rc == 2, f"exit {r.rc}")
+        expect(not w.out.exists(), "the plan file this run created survived its failure")
+
+
+@case
+def existing_out_left_untouched():
+    # --out must be a new file. An existing one - an earlier plan, or anything else - is
+    # refused before the audit and left byte-identical, also when argparse fails first; this
+    # never opens a file to learn whose it is, and never removes one it did not create.
+    with world() as w:
+        w.claude(user={"csa-zendesk": reg(w.tmp / "gone" / "csa-zendesk-mcp")})
+        w.out.write_text('{"tool": "csa-mcp-registrations", "earlier": true}\n')
+        before = w.out.read_bytes()
+        r = w.run(keep_out=True)
+        expect(r.rc == 2, f"exit {r.rc}")
+        expect("already exists" in r.stderr, f"stderr: {r.stderr!r}")
+        expect(not r.rows, f"rows printed for a refused run: {r.rows}")
+        expect(w.out.read_bytes() == before, "the existing file changed")
+        r = w.run("--no-such-flag", keep_out=True)
+        expect(r.rc == 2 and w.out.read_bytes() == before, f"argparse error: exit {r.rc}")
+        w.out.unlink()
+        r = w.run("--no-such-flag")
+        expect(r.rc == 2 and not w.out.exists(), "an argparse error created --out")
+
+
+@case
+def out_never_replaced_even_after_the_check():
+    # The race: --out is new when it is checked, and exists when the plan is written. The write
+    # is a no-clobber link, so it fails rather than replace what appeared.
+    with world() as w:
+        mod = load_module()
+        mod.out_refusal = lambda path, ctx: None
+        w.claude(user={"csa-zendesk": reg(w.tmp / "gone" / "csa-zendesk-mcp")})
+        w.out.write_text("appeared after the check\n")
         r = w.run_inproc(mod, keep_out=True)
         expect(r.rc == 2, f"exit {r.rc}")
-        expect(not w.out.exists(), "a stale plan file survived a failed run")
+        expect(w.out.read_text() == "appeared after the check\n", "the file that appeared was replaced")
+        expect(not [n for n in os.listdir(w.out.parent) if n != "plan.json"], "a temp file was left")
+
+
+@case
+def out_refuses_client_configs():
+    # A config holding secrets must never be overwritten by a plan, nor removed by a failed
+    # run (review of e62c775: `--out ~/.claude.json` replaced it). Refused by realpath, so a
+    # linked directory does not hide it, and even where that config does not exist yet.
+    with world() as w:
+        cc = w.claude(user={"csa-zendesk": reg(w.tmp / "gone" / "csa-zendesk-mcp")})
+        desktop = w.desktop({})
+        codex = w.codex([])
+        (w.home / ".gemini").mkdir()
+        w.stub("gemini", "exit 0")
+        gemini = w.home / ".gemini" / "settings.json"        # absent: Gemini has no config yet
+        (w.tmp / "gemini-link").symlink_to(w.home / ".gemini")
+        alt = w.tmp / "alt-claude"
+        alt.mkdir()
+        cases = [(cc, True), (desktop, True), (codex, True), (gemini, False),
+                 (w.tmp / "gemini-link" / "settings.json", False)]
+        for path, existed in cases:
+            before = path.read_bytes() if existed else None
+            r = w.run("--out", str(path))
+            expect(r.rc == 2, f"--out {path}: exit {r.rc}")
+            if existed:
+                expect(path.read_bytes() == before, f"--out {path}: the config changed")
+            else:
+                expect(not os.path.lexists(path), f"--out {path}: a config was created")
+        w.extra_env["CLAUDE_CONFIG_DIR"] = str(alt)        # the config Claude Code would read
+        r = w.run("--out", str(alt / ".claude.json"))
+        expect(r.rc == 2 and not (alt / ".claude.json").exists(), f"CLAUDE_CONFIG_DIR: exit {r.rc}")
+        expect("Claude Code" in r.stderr, f"stderr: {r.stderr!r}")
+
+
+@case
+def transport_type_is_text_or_malformed():
+    # A `type` UTF-8 cannot encode makes that client's entry malformed; any other unexpected
+    # `type` is recorded as "unknown", so the config's own text never reaches the plan file.
+    with world() as w:
+        gone = str(w.tmp / "gone" / "csa-zendesk-mcp")
+        w.claude(user={"csa-zendesk": reg(gone)})
+        w.desktop({"csa-zendesk": {"type": "x" + chr(0xD800), "url": "https://example.invalid"}})
+        w.gemini({"csa-zendesk": {"type": "sse" + chr(0x202E) + chr(0x2028),
+                                  "url": "https://example.invalid"}})
+        w.codex([{"name": "csa-zendesk", "transport": {"type": "y" + chr(0xD800), "url": "u"}}])
+        r = w.run()
+        r.ok()
+        for client in ("Claude Desktop", "Codex"):
+            expect((r.client_status(client) or "").startswith("not audited: "),
+                   f"{client}: {r.client_status(client)!r}")
+        f = r.f("csa-zendesk", "Gemini")
+        expect(f["transport"] == "unknown", f"Gemini transport {f['transport']!r}")
+        expect(r.f("csa-zendesk")["action"] == "re-point", "Claude Code was not audited")
+        expect(all(b < 0x80 for b in w.out.read_bytes()), "the plan file holds raw non-ASCII")
 
 
 @case
@@ -1104,12 +1198,18 @@ def system_links_are_not_config_links():
 @case
 def clean_replaces_separators_and_bidi():
     mod = load_module()
-    hostile = "a" + chr(10) + "b" + chr(9) + "c" + "".join(
-        chr(cp) + ch for cp, ch in ((0x85, "d"), (0x2028, "e"), (0x2029, "f"), (0x202E, "g"),
-                                    (0x2066, "h"), (0x200F, "i"), (0x061C, "j"), (0xD800, "k")))
+    # Controls (LF, TAB, CR, NEL), separators, bidi, a lone surrogate, the zero-width set the
+    # review of e62c775 found passing (ZWSP, ZWJ, word joiner, invisible times, soft hyphen,
+    # Mongolian vowel separator, interlinear annotation anchor, a tag character), private use
+    # and the BOM. Every one is spelled as a code point.
+    points = (0x0A, 0x09, 0x0D, 0x85, 0x2028, 0x2029, 0x202E, 0x2066, 0x200F, 0x061C, 0xD800,
+              0x200B, 0x200D, 0x2060, 0x2061, 0x00AD, 0x180E, 0xFFF9, 0xE0001, 0xE000, 0xFEFF)
+    hostile = "a" + "".join(chr(cp) + "a" for cp in points)
     out = mod.clean(hostile)
-    expect(not CONTROL.search(out), f"left in: {out!r}")
-    expect(out == "a?b?c?d?e?f?g?h?i?j?k", f"cleaned to {out!r}")
+    expect(not unsafe_in(out), f"left in: {unsafe_in(out)}")
+    expect(out == "a" + "?a" * len(points), f"cleaned to {out!r}")
+    expect(mod.clean("caf" + chr(0xE9) + " ~/x y") == "caf" + chr(0xE9) + " ~/x y",
+           "ordinary text was changed")
 
 
 @case
@@ -1139,7 +1239,8 @@ def client_failure_contained():
 @case
 def control_chars_cannot_forge_rows():
     with world() as w:
-        proj = w.home / "evil\nrow\tFORGED-PROJECT"
+        # A bidi override too: the plan file must record the path exactly, but as an escape.
+        proj = w.home / ("evil\nrow\tFORGED-PROJECT" + chr(0x202E))
         proj.mkdir()
         gone_proj = w.home / "gone\nrow\tFORGED-LOG"
         key = "K\nrow\tFORGED-KEY"
@@ -1154,9 +1255,14 @@ def control_chars_cannot_forge_rows():
             expect(not line.split("\t", 1)[1].startswith("FORGED"), f"a forged line: {line!r}")
         for f in r.plan["findings"]:
             for field in ("reason", "todo"):
-                expect(not CONTROL.search(f[field] or ""), f"{field} holds a control character")
-            expect(not any(CONTROL.search(x) for x in f["warnings"]), "a warning does")
+                text = f[field] or ""
+                expect(not unsafe_in(text), f"{field} holds {unsafe_in(text)}")
+            expect(not any(unsafe_in(x) for x in f["warnings"]), "a warning does")
         expect(len(r.rows_with("FORGED-PROJECT")) >= 1, "the project's row is missing")
+        raw = w.out.read_bytes()
+        expect(all(b < 0x80 for b in raw), "the plan file holds raw non-ASCII; it escapes all")
+        expect(r.findings("csa-zendesk", scope="local")[0]["project"] == str(proj),
+               "the project path was not recorded exactly")
 
 
 @case
@@ -1634,13 +1740,17 @@ def no_invisible_characters_in_source():
     # A bidi control or a line separator written literally into source shows a reader
     # something other than what runs ("Trojan Source"), and a literal U+2028 once shifted this
     # file's own line arithmetic. Both files spell such characters as code points.
-    unsafe = set(range(0x00, 0x20)) - {0x09, 0x0A}
-    unsafe |= set(range(0x7F, 0xA0)) | {0x061C, 0x200E, 0x200F, 0x2028, 0x2029, 0xFEFF}
-    unsafe |= set(range(0x202A, 0x202F)) | set(range(0x2066, 0x206A))
+    # Read as bytes, so a CR is seen rather than translated, and judged by category, so the
+    # zero-width characters a list of code points missed are caught too. Tab and newline are
+    # the only controls source may hold.
     for path in (SCRIPT, Path(__file__).resolve()):
-        text = path.read_text(encoding="utf-8")
+        try:
+            text = path.read_bytes().decode("utf-8")
+        except UnicodeDecodeError as e:
+            raise Failed(f"{path.name}: not UTF-8 at byte {e.start}")
         found = sorted({(n, hex(ord(c))) for n, line in enumerate(text.split("\n"), 1)
-                        for c in line if ord(c) in unsafe})
+                        for c in line if c != "\t"
+                        and unicodedata.category(c) in UNSAFE_CATEGORIES})
         expect(not found, f"{path.name}: invisible characters at {found[:5]}")
 
 
@@ -1697,19 +1807,36 @@ MUTATIONS = [
     ("control_chars_cannot_forge_rows", "show key names uncleaned",
      "return sep.join(clean(k) for k in keys)", "return sep.join(keys)"),
     ("stdout_closed_writes_no_plan", "leave the plan file when the plan was not shown",
-     "        discard(args.out)\n        say(\"the plan", "        say(\"the plan"),
-    ("stale_plan_removed_on_failure", "leave an earlier plan file standing after a failure",
-     "        discard(args.out)\n        if not isinstance(e, Exception):",
-     "        if not isinstance(e, Exception):"),
+     "        discard(args.out, created[-1] if created else None)\n        del created[:]\n",
+     "        del created[:]\n"),
+    ("failure_removes_only_its_own_plan", "leave this run's plan file after a failure",
+     "        discard(args.out, created[-1] if created else None)\n        if not isinstance(",
+     "        if not isinstance("),
     ("lone_surrogate_is_malformed", "accept a string UTF-8 cannot encode",
      '        value.encode("utf-8")\n', "        pass\n"),
     ("deep_nesting_is_not_audited", "let a RecursionError past the JSON reader",
      '    except RecursionError:\n        return None, f"{what} is nested too deeply to read"\n', ""),
     ("no_invisible_characters_in_source", "write a line separator into the source literally",
      "# A newline or a tab in a project path", "# A newline" + chr(0x2028) + "or a tab in a project path"),
-    ("clean_replaces_separators_and_bidi", "clean only the C0 and C1 controls",
-     "(0x061C, 0x061C), (0x200E, 0x200F),\n                 (0x2028, 0x2029), (0x202A, 0x202E), "
-     "(0x2066, 0x2069), (0xD800, 0xDFFF))", ")"),
+    ("no_invisible_characters_in_source", "write a zero-width space into the source literally",
+     "# A newline or a tab in a project path", "# A newline" + chr(0x200B) + " or a tab in a project path"),
+    ("no_invisible_characters_in_source", "end a source line with CR LF",
+     "# A newline or a tab in a project path", "# A newline or a tab in a project path" + chr(13)),
+    ("clean_replaces_separators_and_bidi", "clean only the controls",
+     'UNSAFE_CATEGORIES = ("Cc", "Cf", "Zl", "Zp", "Cs", "Co")', 'UNSAFE_CATEGORIES = ("Cc",)'),
+    ("transport_type_is_text_or_malformed", "accept a `type` UTF-8 cannot encode",
+     "    if value is not None and not _text(value):\n        raise ShapeError(what)\n", ""),
+    ("transport_type_is_text_or_malformed", "record the config's own `type` text",
+     'return default if kind is None else (kind if kind in TRANSPORTS else "unknown")',
+     "return default if kind is None else kind"),
+    ("control_chars_cannot_forge_rows", "write the plan file's non-ASCII raw",
+     "indent=2, ensure_ascii=True)", "indent=2, ensure_ascii=False)"),
+    ("existing_out_left_untouched", "write over an existing --out",
+     "    if os.path.lexists(path):\n        return (f\"--out", "    if False:\n        return (f\"--out"),
+    ("out_refuses_client_configs", "allow --out to be a client's config path",
+     "        if real == os.path.realpath(config_path(client, ctx)):", "        if False:"),
+    ("out_never_replaced_even_after_the_check", "replace whatever appeared at --out",
+     "        os.link(tmp, path)", "        os.replace(tmp, path)"),
     ("plan_file_has_no_values", "record args in the plan file",
      '"env_keys": sorted(f.reg.env),', '"args": f.reg.args, "env_keys": sorted(f.reg.env),'),
     ("internal_error_exits_2", "print the exception's message",
