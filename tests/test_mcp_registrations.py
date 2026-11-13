@@ -40,6 +40,7 @@ import io
 import json
 import os
 import re
+import secrets
 import signal
 import stat
 import subprocess
@@ -2761,8 +2762,51 @@ SIGNAL_POINTS = [
     (signal.SIGTERM, "written", 143, b"stopped by a signal"),
     (signal.SIGHUP, "backed-up", 129, b"stopped by a signal"),
     (signal.SIGTERM, "restoring", 143, b"stopped by a signal"),  # mid-restore of a failed read-back
+    (signal.SIGHUP, "swapped", 129, b"stopped by a signal"),     # just after the replace
     (signal.SIGINT, "written", 130, b"stopped by an interrupt"),
 ]
+
+
+def send_self(sig):
+    """A real signal to this process - only while apply's own handler is in place, so a test
+    of a broken handler fails its check instead of killing the test run."""
+    if signal.getsignal(sig) not in (signal.SIG_DFL, signal.SIG_IGN, signal.default_int_handler, None):
+        os.kill(os.getpid(), sig)
+
+
+class OsWith(object):
+    """`os`, with some of its functions replaced: for a module under test, as mod.os."""
+
+    def __init__(self, **replaced):
+        self.replaced = replaced
+
+    def __getattr__(self, name):
+        return self.replaced.get(name) or getattr(os, name)
+
+
+STOPS = (signal.SIGTERM, signal.SIGHUP, signal.SIGINT)
+
+
+def apply_stopped(w, mod):
+    """apply in process, to its end or to the SystemExit a stop signal raises: (exit, result,
+    the stop signals apply left held). Once stopped, apply holds them to the process's end; a
+    test run goes on, so it drops any still pending (SIG_IGN discards a pending signal),
+    unblocks them, and puts its own handlers back."""
+    saved = {s: signal.getsignal(s) for s in STOPS}
+    try:
+        try:
+            a = w.apply_inproc(mod)
+            rc = a.rc
+        except SystemExit as e:
+            a, rc = None, e.code
+        held = set(signal.pthread_sigmask(signal.SIG_BLOCK, [])) & set(STOPS)
+    finally:
+        for s in STOPS:
+            signal.signal(s, signal.SIG_IGN)
+        signal.pthread_sigmask(signal.SIG_UNBLOCK, STOPS)
+        for s, h in saved.items():
+            signal.signal(s, h if h is not None else signal.SIG_DFL)
+    return rc, a, held
 
 
 @case
@@ -2805,6 +2849,12 @@ def signal_mid_write_leaves_nothing():
                 # The restore did not finish: the backup is the good copy, and stays.
                 expect(len(left) == 1 and left[0].startswith(".claude.json.bak-"),
                        f"{where}: left behind: {left}")
+            elif point == "swapped":
+                # The replace happened: the config is repaired, and its backup is kept.
+                expect(len(left) == 1 and left[0].startswith(".claude.json.bak-"),
+                       f"{where}: left behind: {left}")
+                expect(entry_of(cfg, "csa-zendesk")["command"] == std_bin(w, "csa-zendesk"),
+                       f"{where}: not repaired")
             else:
                 expect(not left, f"{where}: left behind: {left}")
                 expect(state(cfg) == before, f"{where}: the config changed")
@@ -2816,11 +2866,65 @@ def signal_mid_write_leaves_nothing():
         w.std("csa-zendesk")
         w.claude(user={"csa-zendesk": reg(gone(w, "csa-zendesk"))})
         w.run().ok()
-        sigs = (signal.SIGTERM, signal.SIGHUP)
+        sigs = (signal.SIGTERM, signal.SIGHUP, signal.SIGINT)
         before = [signal.getsignal(s) for s in sigs]
         w.apply_inproc(mod).ok()
         after = [signal.getsignal(s) for s in sigs]
         expect(after == before, f"handlers not restored: {after} != {before}")
+    for sig, status in ((signal.SIGTERM, 143), (signal.SIGINT, 130)):
+        with world() as w:
+            # A second stop signal during the clean-up the first started: ignored, so the
+            # clean-up runs to its end (review of 79aa251: TERM+TERM and INT+INT left the
+            # unused backup). Both are real signals, sent to this process.
+            mod = load_module()
+            w.std("csa-zendesk")
+            cfg = w.claude(user={"csa-zendesk": reg(gone(w, "csa-zendesk"), env={"K": SECRET_A})})
+            w.run().ok()
+            before = state(cfg)
+            real_unlink = mod.unlink_quietly
+            sent = []
+
+            def second(path):
+                if not sent:
+                    sent.append(sig)
+                    send_self(sig)
+                real_unlink(path)
+
+            mod.unlink_quietly = second
+            mod.TEST_HOOK = lambda point, path: send_self(sig) if point == "backed-up" else None
+            rc, _, after = apply_stopped(w, mod)
+            left = sorted(n for n in os.listdir(w.home) if n not in (".claude.json", ".local"))
+            expect(sent, f"{sig.name}: the clean-up was never reached")
+            expect(rc == status, f"{sig.name}: exit {rc}")
+            expect(not left, f"{sig.name}+{sig.name}: left behind: {left}")
+            expect(state(cfg) == before, f"{sig.name}: the config changed")
+            # And once stopped, the stop signals stay held to the process's end: Python's own
+            # shutdown gives the handlers back to SIG_DFL, and a second signal then killed the
+            # exit after "stopped" was printed (-15) or raised a traceback (review of 79aa251).
+            expect(after >= set(STOPS), f"{sig.name}: not held after a stop: {sorted(after)}")
+    with world() as w:
+        # Two different stop signals already on their way together (HUP, then TERM): the
+        # first stops apply, the second lands during its clean-up and is ignored.
+        mod = load_module()
+        w.std("csa-zendesk")
+        cfg = w.claude(user={"csa-zendesk": reg(gone(w, "csa-zendesk"), env={"K": SECRET_A})})
+        w.run().ok()
+        before = state(cfg)
+        both = {signal.SIGHUP, signal.SIGTERM}
+
+        def together(point, path):
+            if point == "backed-up":
+                signal.pthread_sigmask(signal.SIG_BLOCK, both)
+                send_self(signal.SIGHUP)
+                send_self(signal.SIGTERM)
+                signal.pthread_sigmask(signal.SIG_UNBLOCK, both)
+
+        mod.TEST_HOOK = together
+        rc, _, after = apply_stopped(w, mod)
+        left = sorted(n for n in os.listdir(w.home) if n not in (".claude.json", ".local"))
+        expect(rc == 129, f"HUP+TERM: exit {rc}")
+        expect(not left, f"HUP+TERM together: left behind: {left}")
+        expect(state(cfg) == before, "HUP+TERM: the config changed")
     with world() as w:
         # A signal the caller ignores (nohup ignores SIGHUP) stays ignored while apply runs.
         mod = load_module()
@@ -2901,6 +3005,24 @@ def stale_temp_files_swept():
         os.utime(stale, (time.time() - 3600,) * 2)
         w.apply_inproc(mod).ok()
         expect(stale.exists(), "another user's file was removed")
+    with world() as w:
+        # A run this one may not signal (EPERM: another user's process) may be alive: kept.
+        mod = load_module()
+        pid = ended_pid()
+
+        def kill(target, sig):
+            if target == pid:
+                raise PermissionError(1, "Operation not permitted")
+            return os.kill(target, sig)
+
+        mod.os = OsWith(kill=kill)
+        w.claude(user={})
+        w.run().ok()
+        stale = w.home / f".csa-registrations-{pid}-ab12cd_9"
+        stale.write_text("x")
+        os.utime(stale, (time.time() - 3600,) * 2)
+        w.apply_inproc(mod).ok()
+        expect(stale.exists(), "a file whose run could not be signalled was removed")
     with world() as w:
         # A config directory that is a link (A10) is not swept: nothing of this tool's is
         # written there, and the link's target is somebody's dotfiles.
@@ -3197,6 +3319,138 @@ def lock_taken_over_is_left():
 
 
 @case
+def lock_never_removed_without_proof():
+    # The rule: this run removes Claude Code's lock only when it can prove it made it - the
+    # identity it recorded with the mkdir. An exception on the way, a signal included, must
+    # never remove a lock that is somebody else's (review of 79aa251: one removed Claude Code's
+    # held lock, deterministically with an interrupt raised from os.mkdir).
+    for raised in (KeyboardInterrupt(), SystemExit(143)):
+        with world() as w:
+            mod = load_module()
+            w.std("csa-zendesk")
+            w.claude(user={"csa-zendesk": reg(gone(w, "csa-zendesk"))})
+            w.run().ok()
+            lock = w.home / ".claude.json.lock"
+            lock.mkdir()  # Claude Code holds it
+            held = os.lstat(lock).st_ino
+
+            def mkdir(path, *a, **k):
+                raise raised
+
+            mod.os = OsWith(mkdir=mkdir)
+            rc, _, after = apply_stopped(w, mod)
+            what = type(raised).__name__
+            expect(rc in (130, 143), f"{what}: exit {rc}")
+            expect(lock.is_dir() and os.lstat(lock).st_ino == held,
+                   f"{what} from os.mkdir removed the lock somebody else holds")
+    with world() as w:
+        # A real signal between this run's mkdir and the record of it: held until the record
+        # exists, so the lock - this run's - is then removed, not left for every later run.
+        mod = load_module()
+        w.std("csa-zendesk")
+        cfg = w.claude(user={"csa-zendesk": reg(gone(w, "csa-zendesk"))})
+        w.run().ok()
+        real_identity = mod.dir_identity
+        sent = []
+
+        def identity_then_signal(path):
+            if not sent and str(path).endswith(".lock"):
+                sent.append(path)
+                send_self(signal.SIGTERM)
+            return real_identity(path)
+
+        mod.dir_identity = identity_then_signal
+        before = state(cfg)
+        rc, _, after = apply_stopped(w, mod)
+        expect(sent, "the mkdir was never reached")
+        expect(rc == 143, f"exit {rc}")
+        expect(not (w.home / ".claude.json.lock").exists(), "this run's own lock was left")
+        expect(state(cfg) == before, "the config changed")
+
+
+@case
+def temp_files_are_this_runs_alone():
+    # A temp file is created 0600 with O_EXCL under this run's own pid, and only names this
+    # run created are ever removed: never one somebody else holds (review of 79aa251).
+    taken = "aaaaaaaa"
+
+    class FirstNameTaken(object):
+        """`secrets`, whose first eight choices spell the name another process holds."""
+
+        def __init__(self):
+            self.chars = iter(taken)
+
+        def choice(self, alphabet):
+            return next(self.chars, None) or secrets.choice(alphabet)
+
+    def names_after_a_taken_one(mod):
+        mod.secrets = FirstNameTaken()
+
+    for signalled in (False, True):
+        with world() as w:
+            mod = load_module()
+            names_after_a_taken_one(mod)
+            w.std("csa-zendesk")
+            cfg = w.claude(user={"csa-zendesk": reg(gone(w, "csa-zendesk"), env={"K": SECRET_A})})
+            w.run().ok()
+            planted = w.home / f".csa-registrations-{os.getpid()}-{taken}"
+            planted.write_text("somebody else's\n")
+            seen = {}
+
+            def hook(point, path):
+                if point == "temp-made":
+                    seen["name"] = os.path.basename(path)
+                    seen["mode"] = stat.S_IMODE(os.stat(path).st_mode)
+                if point == "written" and signalled:
+                    send_self(signal.SIGTERM)
+
+            mod.TEST_HOOK = hook
+            before = state(cfg)
+            rc, _, after = apply_stopped(w, mod)
+            how = "signalled" if signalled else "plain"
+            expect(planted.exists() and planted.read_text() == "somebody else's\n",
+                   f"{how}: a file this run did not create was written or removed")
+            expect(seen.get("mode") == 0o600, f"{how}: the temp was {oct(seen.get('mode', 0))} "
+                                              "at its creation")
+            expect(f"-{os.getpid()}-" in seen.get("name", ""), f"{how}: not this run's pid: {seen}")
+            ours = [n for n in os.listdir(w.home) if n.startswith(".csa-registrations-")
+                    and n != planted.name]
+            expect(not ours, f"{how}: this run's temp file was left: {ours}")
+            if signalled:
+                expect(rc == 143 and state(cfg) == before, f"{how}: exit {rc}, or the config changed")
+            else:
+                expect(entry_of(cfg, "csa-zendesk")["command"] == std_bin(w, "csa-zendesk"),
+                       f"{how}: not repaired")
+    for kind in ("temp", "backup"):
+        with world() as w:
+            # A real signal between a create and its record: held until the record exists, so
+            # the file is removed, not left holding the config's secrets (or empty).
+            mod = load_module()
+            w.std("csa-zendesk")
+            cfg = w.claude(user={"csa-zendesk": reg(gone(w, "csa-zendesk"), env={"K": SECRET_A})})
+            w.run().ok()
+            sent = []
+
+            def open_then_signal(path, *a, **k):
+                fd = os.open(path, *a, **k)
+                mine = (os.path.basename(str(path)).startswith(".csa-registrations-")
+                        if kind == "temp" else ".bak-" in str(path))
+                if mine and not sent:
+                    sent.append(path)
+                    send_self(signal.SIGTERM)
+                return fd
+
+            mod.os = OsWith(open=open_then_signal)
+            before = state(cfg)
+            rc, _, after = apply_stopped(w, mod)
+            left = sorted(n for n in os.listdir(w.home) if n not in (".claude.json", ".local"))
+            expect(sent, f"{kind}: the create was never reached")
+            expect(rc == 143, f"{kind}: exit {rc}")
+            expect(not left, f"{kind}: left behind: {left}")
+            expect(state(cfg) == before, f"{kind}: the config changed")
+
+
+@case
 def approval_binds_config_path():
     # The same registration, with the same fingerprint, in another file (another
     # CLAUDE_CONFIG_DIR) is not the one the plan showed.
@@ -3427,7 +3681,7 @@ MUTATIONS = [
      "        running = (desktop_running(ctx, fresh=True)\n", "        running = (False\n"),
     # ── apply: the guards Task 2 added, each broken on purpose (ADR-005) ──
     ("claude_lock_honoured", "write without taking Claude Code's lock",
-     "                os.mkdir(self.lock, 0o700)\n", ""),
+     "                        os.mkdir(self.lock, 0o700)\n", "                        pass\n"),
     ("claude_lock_honoured", "break a lock still held after the wait",
      "                    raise Locked(self.lock)\n",
      "                    os.rmdir(self.lock)\n                    continue\n"),
@@ -3494,7 +3748,7 @@ MUTATIONS = [
     ("lock_taken_over_is_left", "write without checking the lock is still this run's",
      "        if not self.ours():\n            return R_LOCK_LOST", "        if False:\n            return R_LOCK_LOST"),
     ("lock_taken_over_is_left", "remove the lock without checking it is this run's",
-     "    def __exit__(self, *exc):\n        if self.ours():", "    def __exit__(self, *exc):\n        if True:"),
+     "    def release(self):\n        if self.ours():", "    def release(self):\n        if True:"),
     ("claude_lock_honoured", "drop the advice for a crashed process's lock",
      "T_LOCKED + T_LOCKED_STALE.format(lock=tilde(e.lock))", "T_LOCKED"),
     ("approval_binds_config_path", "drop the config from the approval",
@@ -3509,18 +3763,8 @@ MUTATIONS = [
      "why = e.strerror if isinstance(e, OSError) and e.strerror else describe_error(e)",
      "why = repr(e)"),
     # ── apply: the review of b417a67 ──
-    ("signal_mid_write_leaves_nothing", "leave the lock when a signal lands before __enter__ returns",
-     "                try:\n                    os.rmdir(self.lock)\n                except OSError:\n"
-     "                    pass\n                raise", "                raise"),
-    ("signal_mid_write_leaves_nothing", "learn the temp's name only once it exists",
-     "        made.append(name)\n        try:\n"
-     '            fd = os.open(name, os.O_WRONLY | os.O_CREAT | os.O_EXCL\n'
-     '                         | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_CLOEXEC", 0), 0o600)\n'
-     '            hook("temp-made", name)\n',
-     "        try:\n"
-     '            fd = os.open(name, os.O_WRONLY | os.O_CREAT | os.O_EXCL\n'
-     '                         | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_CLOEXEC", 0), 0o600)\n'
-     '            hook("temp-made", name)\n            made.append(name)\n'),
+    ("signal_mid_write_leaves_nothing", "leave this run's lock when __enter__ is stopped",
+     "            self.release()\n            raise\n", "            raise\n"),
     ("signal_mid_write_leaves_nothing", "leave the temp when a signal lands mid-restore",
      "        for n in made:\n            unlink_quietly(n)\n        if isinstance(e, OSError):",
      "        if isinstance(e, OSError):"),
@@ -3546,6 +3790,40 @@ MUTATIONS = [
      "st.st_mode, st.st_nlink\n", "st.st_mode\n"),
     ("confinement_check_refuses_a_damaged_entry", "drop the in-memory confinement check",
      "        if not only_command_changed(old, new, c):", "        if False:"),
+    # ── apply: the review of 79aa251 ──
+    ("lock_never_removed_without_proof", "remove the lock on an exception, without proof",
+     "            # __exit__ will not run: remove the lock here, but only one this run recorded.\n"
+     "            self.release()\n",
+     "            os.rmdir(self.lock)\n"),
+    ("lock_never_removed_without_proof", "let a signal land between the mkdir and its record",
+     "                with signals_held():  # the mkdir and its record, with nothing between them\n",
+     "                if True:\n"),
+    ("temp_files_are_this_runs_alone", "create the temp without O_EXCL",
+     "os.O_WRONLY | os.O_CREAT | os.O_EXCL\n", "os.O_WRONLY | os.O_CREAT\n"),
+    ("temp_files_are_this_runs_alone", "create the temp 0666, for the umask to cut down",
+     'getattr(os, "O_CLOEXEC", 0), 0o600)', 'getattr(os, "O_CLOEXEC", 0), 0o666)'),
+    ("temp_files_are_this_runs_alone", "record a name somebody else holds",
+     "                continue  # not this run's: not recorded, so never removed\n",
+     "                made.append(name)\n                continue\n"),
+    ("temp_files_are_this_runs_alone", "name the temp with the parent's pid",
+     "TMP_PREFIX, os.getpid(),", "TMP_PREFIX, os.getppid(),"),
+    ("temp_files_are_this_runs_alone", "let a signal land between the temp's create and its record",
+     "        with signals_held():\n            try:\n                fd = os.open(name,",
+     "        if True:\n            try:\n                fd = os.open(name,"),
+    ("temp_files_are_this_runs_alone", "let a signal land between the backup's create and its record",
+     "    with signals_held():\n        fd = os.open(backup,", "    if True:\n        fd = os.open(backup,"),
+    ("stale_temp_files_swept", "take EPERM to mean the run is gone",
+     "    except PermissionError:\n        return True", "    except PermissionError:\n        return False"),
+    ("signal_mid_write_leaves_nothing", "let a second stop signal cut the clean-up short",
+     "        if stopping:\n            return  # one stop is enough",
+     "        if False:\n            return  # one stop is enough"),
+    ("signal_mid_write_leaves_nothing", "leave the stop signals unheld after a stop",
+     "            mask(signal.SIG_BLOCK, {getattr(signal, n) for n in STOP_SIGNALS if hasattr(signal, n)})",
+     "            pass"),
+    ("signal_mid_write_leaves_nothing", "leave SIGINT out of the signals held and handled",
+     'STOP_SIGNALS = ("SIGTERM", "SIGHUP", "SIGINT")', 'STOP_SIGNALS = ("SIGTERM", "SIGHUP")'),
+    ("signal_mid_write_leaves_nothing", "remove the backup of a config already replaced",
+     "        if any(os.path.lexists(n) for n in made):", "        if True:"),
 ]
 
 

@@ -34,9 +34,11 @@ was read, keeps the file's mode, refuses a config with a second name (a hard lin
 back what it wrote, restoring the backup if that differs. Backups are `<file>.bak-<14 digits>`,
 pruned to three, as csa-claude-connectors.py names and prunes them; each holds the same secrets
 as its file, at its mode. SIGTERM, SIGHUP and an interrupt stop apply through its clean-ups,
-with one line on stderr. Each apply removes this tool's own temp files that a run stopped
-mid-write left: older than itself, and only when the run that made one (its pid is in the name)
-is gone, so two applies at once never take each other's file.
+with one line on stderr; a second one while stopping is ignored. A clean-up removes only what
+this run provably made: each create and its record happen with those signals held, so a lock
+or a file somebody else holds is never removed. Each apply removes this tool's own temp files
+that a run stopped mid-write left: older than itself, and only when the run that made one (its
+pid is in the name) is gone, so two applies at once never take each other's file.
 
 Re-serialising a JSON config keeps every value, the key order, the indent width (tabs too), the
 trailing newline or its absence, and CRLF. What it can change is spelling only: the whitespace
@@ -88,7 +90,7 @@ import tempfile
 import time
 import unicodedata
 
-SCRIPT_VERSION = "2026-11-13T15:37Z"
+SCRIPT_VERSION = "2026-11-13T16:36Z"
 
 # ── The plan's decisions (D1-D5). Each is pinned by one test; an answer changes the constant. ──
 
@@ -1446,11 +1448,36 @@ def dir_identity(path):
     return st.st_dev, st.st_ino, st.st_mtime_ns
 
 
+# SIGTERM and SIGHUP stop apply (exits_on_signals); SIGINT is an interrupt.
+STOP_SIGNALS = ("SIGTERM", "SIGHUP", "SIGINT")
+
+
+@contextlib.contextmanager
+def signals_held():
+    """Hold, not lose, the stop signals and SIGINT for the length of the block: one that
+    arrives is delivered as the block ends. Around a create and the record of what it created,
+    so no signal can land between them: afterwards either the record exists, or nothing was
+    created, and clean-up acts on the record alone - never on a guess (reviews of b417a67 and
+    79aa251: a guess removed Claude Code's held lock, and could remove another's file). Python
+    runs signal handlers in the main thread only, and apply runs no other thread."""
+    mask = getattr(signal, "pthread_sigmask", None)
+    sigs = {getattr(signal, n) for n in STOP_SIGNALS if hasattr(signal, n)}
+    if mask is None or not sigs:  # Windows: no signal masks (#184)
+        yield
+        return
+    old = mask(signal.SIG_BLOCK, sigs)
+    try:
+        yield
+    finally:
+        mask(signal.SIG_SETMASK, old)
+
+
 class ClaudeLock(object):
     """Claude Code's own lock on its config (M1): mkdir `<config>.lock`, wait a bounded time
     for one that is held, never break it. What was created is recorded, so `check` can tell
-    the write it is still this run's and held briefly, and the release removes only this run's
-    lock: held past Claude Code's stale limit, the lock may have been taken over by then."""
+    the write it is still this run's and held briefly, and the lock is removed only on that
+    proof: held past Claude Code's stale limit, it may have been taken over by then, and a
+    failed mkdir is somebody else's lock."""
 
     def __init__(self, path):
         self.lock = path + ".lock"
@@ -1459,26 +1486,26 @@ class ClaudeLock(object):
 
     def __enter__(self):
         deadline = time.monotonic() + CLAUDE_LOCK_WAIT
-        while True:
-            try:
-                os.mkdir(self.lock, 0o700)
-                hook("locked", self.lock)
-                self.taken = time.time()
-                self.mine = dir_identity(self.lock)
-                return self
-            except FileExistsError:
+        try:
+            while True:
+                with signals_held():  # the mkdir and its record, with nothing between them
+                    try:
+                        os.mkdir(self.lock, 0o700)
+                    except FileExistsError:
+                        pass
+                    else:
+                        self.taken = time.time()
+                        self.mine = dir_identity(self.lock)
+                if self.mine is not None:
+                    hook("locked", self.lock)
+                    return self
                 if time.monotonic() >= deadline:
                     raise Locked(self.lock)
                 time.sleep(LOCK_POLL)
-            except BaseException:
-                # This mkdir found no lock there, so one there now is this run's: a signal
-                # between the mkdir and the return, where __exit__ will never run, would
-                # otherwise leave it for every later run to wait on (review of b417a67).
-                try:
-                    os.rmdir(self.lock)
-                except OSError:
-                    pass
-                raise
+        except BaseException:
+            # __exit__ will not run: remove the lock here, but only one this run recorded.
+            self.release()
+            raise
 
     def ours(self):
         return self.mine is not None and dir_identity(self.lock) == self.mine
@@ -1491,12 +1518,15 @@ class ClaudeLock(object):
             return R_LOCK_LOST
         return None
 
-    def __exit__(self, *exc):
+    def release(self):
         if self.ours():
             try:
                 os.rmdir(self.lock)
             except OSError:
                 pass
+
+    def __exit__(self, *exc):
+        self.release()
         return False
 
 
@@ -1551,13 +1581,14 @@ def backup_stamp():
 
 def make_backup(path, stamp, mode, kept):
     """`<path>.bak-<stamp>`, a copy2 of the file, at its mode and never looser. The name is
-    claimed with O_EXCL first, so nothing already there, a link included, is written through.
-    It goes into `kept` once claimed and before a byte is copied: a signal can at worst leave
-    an empty file there, which the prune bounds, and never one holding the config's secrets."""
+    claimed with O_EXCL first, so nothing already there, a link included, is written through,
+    and goes into `kept` in the same signal-held step: a name in `kept` is one this run made,
+    and every one this run made is in `kept` (signals_held)."""
     backup = f"{path}.bak-{stamp}"
-    fd = os.open(backup, os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0),
-                 0o600)
-    kept.append(backup)
+    with signals_held():
+        fd = os.open(backup, os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0),
+                     0o600)
+        kept.append(backup)
     try:
         os.close(fd)
         shutil.copy2(path, backup)
@@ -1570,22 +1601,24 @@ def make_backup(path, stamp, mode, kept):
 
 
 def new_temp(directory, made):
-    """Create one of this tool's temp files in `directory`, 0600, and return its descriptor:
-    what mkstemp does, except that the name goes into `made` BEFORE the file exists. Whoever
-    handles a failure at any later point - a signal inside this call, or between two statements
-    after it - can then name the file and remove it (review of b417a67: a signal straight after
-    mkstemp left one). The pid in the name lets sweep_temps leave a live run's file alone."""
+    """Create one of this tool's temp files in `directory`, 0600 from its creation, and return
+    its descriptor: what mkstemp does, except that the O_EXCL create and the name's entry in
+    `made` are one signal-held step (signals_held). So a name in `made` is one this run created,
+    never one somebody else holds, and every one it created is there for whoever handles a
+    failure - a signal included - to remove (reviews of b417a67 and 79aa251). The pid in the
+    name lets sweep_temps leave a live run's file alone."""
     for _ in range(100):
         name = os.path.join(directory, "%s%d-%s" % (
             TMP_PREFIX, os.getpid(), "".join(secrets.choice(TMP_CHARS) for _ in range(8))))
-        made.append(name)
-        try:
-            fd = os.open(name, os.O_WRONLY | os.O_CREAT | os.O_EXCL
-                         | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_CLOEXEC", 0), 0o600)
-            hook("temp-made", name)
-            return fd
-        except FileExistsError:
-            made.remove(name)  # not this run's: never removed
+        with signals_held():
+            try:
+                fd = os.open(name, os.O_WRONLY | os.O_CREAT | os.O_EXCL
+                             | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_CLOEXEC", 0), 0o600)
+            except FileExistsError:
+                continue  # not this run's: not recorded, so never removed
+            made.append(name)
+        hook("temp-made", name)
+        return fd
     raise OSError(0, "no free name for a temporary file")
 
 
@@ -1640,6 +1673,7 @@ def replace_file(path, data, before, stamp, verify, lock):
             unlink_quietly(backup)
             return "refused", why
         os.replace(tmp, path)                              # 8
+        hook("swapped", path)
     except BaseException:
         # Before the replace the temp file is still there: it goes, and so does a backup made
         # for it. After the replace its name is gone, and the backup is the copy of what was
@@ -2057,17 +2091,32 @@ def edit_codex(path, changes, ctx, stamp):
 
 # ── apply ────────────────────────────────────────────────────────────────────────────────────
 
-STOP_SIGNALS = ("SIGTERM", "SIGHUP")
-
-
 @contextlib.contextmanager
 def exits_on_signals():
-    """While apply runs, SIGTERM and SIGHUP raise SystemExit instead of ending the process
-    where it stands, so every clean-up on the way out runs: the temp file holding a config's
-    secrets is removed, an unused backup with it, and Claude Code's lock is released (review of
-    d39f719: both were left). A signal between two statements can still leave a temp file
-    behind, which the next apply sweeps (sweep_temps)."""
+    """While apply runs, SIGTERM and SIGHUP raise SystemExit, and SIGINT KeyboardInterrupt,
+    instead of ending the process where it stands, so every clean-up on the way out runs: the
+    temp file holding a config's secrets is removed, an unused backup with it, and Claude Code's
+    lock is released (review of d39f719: both were left). Once stopping, the stop signals are
+    held to the end, and one already on its way is ignored, so a second one can neither cut the
+    clean-up short nor kill the exit (review of 79aa251: HUP+TERM and INT+INT left the unused
+    backup). A run killed outright (SIGKILL) can still leave a temp file, which the next apply
+    sweeps (sweep_temps). Run in process, a caller that goes on after a stop must unblock the
+    stop signals itself, as the tests do."""
+    stopping = []
+
     def stop(signum, frame):
+        if stopping:
+            return  # one stop is enough; the clean-up it started runs to its end
+        stopping.append(signum)
+        # Held from here to the process's end: a later one waits, pending, and dies with it.
+        # Ignoring alone was not enough: Python's own shutdown gives every handler back to
+        # SIG_DFL, and a second signal then killed the exit after "stopped" was printed (-15)
+        # or raised a traceback (-2): the review of 79aa251, two signals in a row.
+        mask = getattr(signal, "pthread_sigmask", None)
+        if mask is not None:
+            mask(signal.SIG_BLOCK, {getattr(signal, n) for n in STOP_SIGNALS if hasattr(signal, n)})
+        if signum == getattr(signal, "SIGINT", None):
+            raise KeyboardInterrupt()
         raise SystemExit(128 + signum)
 
     saved = {}
@@ -2083,6 +2132,8 @@ def exits_on_signals():
     try:
         yield
     finally:
+        # The caller's handlers, back on every exit. After a stop the stop signals are still
+        # held (stop), so none reaches them before the process ends.
         for sig, old in saved.items():
             signal.signal(sig, old if old is not None else signal.SIG_DFL)
 
