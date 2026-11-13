@@ -625,9 +625,11 @@ Worth knowing individually:
   token, so a trailing comment or "zoom in" is reported (its docstring says how to respond).
   Adding Office on Windows in #69 updated three of six copies. `--rev 1115b64` reports every
   copy, including the "install Office from your Microsoft 365 portal" line, and `--rev 36e76b4`
-  reports the macOS copies #78 removed. **Windows' dev set is only partly a list:** Wrangler
-  (npm) and `Show-Summary`'s version lines sit outside `$DevWingetApps` by #73's design, and two
-  `ALLOWED` lines record that.
+  reports the macOS copies #78 removed. **Windows' dev set is only partly a list.** Wrangler
+  (npm) and `Show-Summary`'s version lines sit outside `$DevWingetApps` by #73's design. The two
+  Windows `ALLOWED` lines are both `Show-Summary`'s: its VS Code winget Id and its AWS CLI line.
+  Nothing records Wrangler. It passes only because `Install-NpmPackage` is not a listed install
+  call, so deleting the Windows Wrangler install also passes.
 - **`check-plan-covers-steps.py`** — every step `main()` runs must be named in the plan the user
   agreed to, across all six entry points. It imports `EQUIV` from `check-parity.py` so the two
   cannot disagree about what counts as a counterpart. `--rev <ref>` audits a historical commit;
