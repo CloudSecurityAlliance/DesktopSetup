@@ -90,7 +90,7 @@ import tempfile
 import time
 import unicodedata
 
-SCRIPT_VERSION = "2026-11-13T16:36Z"
+SCRIPT_VERSION = "2026-11-13T17:18Z"
 
 # ── The plan's decisions (D1-D5). Each is pinned by one test; an answer changes the constant. ──
 
@@ -1459,7 +1459,12 @@ def signals_held():
     so no signal can land between them: afterwards either the record exists, or nothing was
     created, and clean-up acts on the record alone - never on a guess (reviews of b417a67 and
     79aa251: a guess removed Claude Code's held lock, and could remove another's file). Python
-    runs signal handlers in the main thread only, and apply runs no other thread."""
+    runs signal handlers in the main thread only, and apply runs no other thread. The block puts
+    back the mask it found, so a signal the caller held stays held.
+
+    The cost: a create that hangs (a stalled disk or network volume) ignores Ctrl-C, SIGTERM and
+    SIGHUP until it returns. SIGQUIT (Ctrl-backslash) and SIGKILL still end it, and leave at
+    most what exits_on_signals says a run killed outright leaves."""
     mask = getattr(signal, "pthread_sigmask", None)
     sigs = {getattr(signal, n) for n in STOP_SIGNALS if hasattr(signal, n)}
     if mask is None or not sigs:  # Windows: no signal masks (#184)
@@ -2099,9 +2104,16 @@ def exits_on_signals():
     lock is released (review of d39f719: both were left). Once stopping, the stop signals are
     held to the end, and one already on its way is ignored, so a second one can neither cut the
     clean-up short nor kill the exit (review of 79aa251: HUP+TERM and INT+INT left the unused
-    backup). A run killed outright (SIGKILL) can still leave a temp file, which the next apply
-    sweeps (sweep_temps). Run in process, a caller that goes on after a stop must unblock the
-    stop signals itself, as the tests do."""
+    backup). Run in process, a caller that goes on after a stop must unblock the stop signals
+    itself, as the tests do.
+
+    The cost of holding them: a clean-up that hangs after a stop (a stalled disk or network
+    volume), like one of the three creates signals_held covers, ignores Ctrl-C, SIGTERM and
+    SIGHUP until it returns. SIGQUIT (Ctrl-backslash) and SIGKILL still end the run. A run ended
+    that way, or killed outright at any point, leaves at most: a temp file holding a config's
+    secrets, at its mode, which the next apply sweeps (sweep_temps); an unused backup, which
+    the prune bounds; and Claude Code's lock, whose to-do names it and says to remove it when
+    Claude Code is not running."""
     stopping = []
 
     def stop(signum, frame):
