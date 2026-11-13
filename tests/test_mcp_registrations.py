@@ -75,7 +75,9 @@ R_NOT_EXEC = "its command is not executable"
 R_PY_GONE = "its Python no longer exists"
 R_PY_BROKEN = "its Python does not run"
 R_MODULE = "its args run a module this does not recognise"
-R_DESKTOP_PATH = "not checked: Claude Desktop's PATH is not measured yet"
+# Reworded from the plan's "...is not measured yet", which M3 made untrue (P2, 2026-11-13).
+R_DESKTOP_PATH = ("not checked: Claude Desktop's PATH differs from machine to machine, so a "
+                  "bare command name can't be resolved here")
 W_CELLAR = ("it runs from a venv built on a Homebrew Cellar Python, which the next brew "
             "upgrade deletes")
 WINDOWS = "not audited: Windows support is #184 (Task 1W)"
@@ -692,7 +694,8 @@ def unknown_module_left():
 def desktop_bare_name_unmeasured_left():
     with world() as w:
         mod = load_module()
-        expect(mod.DESKTOP_PATH is None, "Desktop's PATH is not measured yet (M2/M3)")
+        expect(mod.DESKTOP_PATH is None,
+               "M3's one-Mac Desktop PATH is not applied (AI ruling 2026-11-13, P1)")
         w.desktop({"csa-google-workspace": reg("csa-google-workspace-mcp"),
                    "csa-zendesk": reg("csa-zendesk-mcp", env={"K": SECRET_A})})
         r = w.run()
