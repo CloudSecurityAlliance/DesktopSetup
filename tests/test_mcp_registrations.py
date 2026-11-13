@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
 """scripts/csa-mcp-registrations.py `plan`: it finds every CSA MCP registration in Claude Code,
 Claude Desktop, Codex and Gemini, says what is wrong with each, and writes nothing but its own
-plan file (#179, plans/2026-11-12-registration-repair.md Task 1).
+plan file (#179, plans/2026-11-12-registration-repair.md Task 1). And `apply` (Task 2): it
+re-points only a dead registration that plan showed and that is unchanged since, changing only
+its command, through Claude Code's own lock, with no backup left by a write it abandons.
 
 What matters most about an auditor that will later drive a repair is what it refuses to
 claim: a dead standard binary is never a re-point aimed at itself; a launcher form, an
@@ -24,9 +26,9 @@ Windows import the shipping file with importlib and run its `main()` in process 
     python3 tests/test_mcp_registrations.py --only NAME   # one case
     python3 tests/test_mcp_registrations.py --self-test   # each planned mutation must be caught
 
-`--self-test` is Task 1 Step 4 kept runnable: each mutation the plan names is applied to a copy
-of the script, and the case named for it must then FAIL. A case that passes a broken script is
-not testing anything.
+`--self-test` is Task 1 Step 4 and Task 2 Step 4 kept runnable: each mutation the plan names,
+and one for each guard apply added, is applied to a copy of the script, and the case named for
+it must then FAIL. A case that passes a broken script is not testing anything.
 """
 from __future__ import annotations
 
@@ -219,6 +221,7 @@ class World(object):
         self.log.write_text("")
         self.out = self.tmp / "out" / "plan.json"
         self.out.parent.mkdir()
+        self.ledger = self.tmp / "todo.tsv"
         self.extra_env = {}
         self.unset = set()
 
@@ -284,6 +287,43 @@ class World(object):
             os.environ.update(saved)
         return Result(rc, out.getvalue(), err.getvalue(), self)
 
+    def apply_argv(self, approved, args):
+        argv = ["apply", "--system-applications", str(self.apps)]
+        if approved == "plan":
+            argv += ["--approved", str(self.out)]
+        elif approved is not None:
+            argv += ["--approved", str(approved)]
+        return argv + list(args)
+
+    def apply_env(self, ledger):
+        env = self.env()
+        if ledger:
+            env["CSA_TODO_FILE"] = str(self.ledger)
+        return env
+
+    def apply(self, *args, approved="plan", ledger=True):
+        """`apply --approved <the plan file>`, as the entry scripts will run it. umask 022, so a
+        file created with plain open() would show as 0644."""
+        cmd = [sys.executable, "-I", str(SCRIPT)] + self.apply_argv(approved, args)
+        r = subprocess.run(cmd, env=self.apply_env(ledger), cwd=str(self.tmp),
+                           capture_output=True, text=True, timeout=300, umask=0o022)
+        return Applied(r.returncode, r.stdout, r.stderr, self)
+
+    def apply_inproc(self, mod, *args, approved="plan", ledger=True):
+        saved = dict(os.environ)
+        old_umask = os.umask(0o022)
+        out, err = io.StringIO(), io.StringIO()
+        try:
+            os.environ.clear()
+            os.environ.update(self.apply_env(ledger))
+            with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+                rc = mod.main(self.apply_argv(approved, args))
+        finally:
+            os.umask(old_umask)
+            os.environ.clear()
+            os.environ.update(saved)
+        return Applied(rc, out.getvalue(), err.getvalue(), self)
+
     # ── stubs ──────────────────────────────────────────────────────────────────────────────
     def stub(self, name, body):
         return write_exec(self.stubs / name,
@@ -343,7 +383,7 @@ class World(object):
             if projects is not None:
                 data["projects"] = projects
             raw = json.dumps(data, indent=2)
-        path.write_text(raw)
+        path.write_text(raw, encoding="utf-8")
         path.chmod(0o600)
         return path
 
@@ -355,7 +395,7 @@ class World(object):
             path.parent.mkdir(parents=True, exist_ok=True)
             if raw is None:
                 raw = json.dumps({"mcpServers": servers or {}, "preferences": {"x": 1}}, indent=2)
-            path.write_text(raw)
+            path.write_text(raw, encoding="utf-8")
             path.chmod(0o600)
         return path
 
@@ -367,7 +407,7 @@ class World(object):
             path.parent.mkdir(parents=True, exist_ok=True)
             if raw is None:
                 raw = json.dumps({"mcpServers": servers or {}, "theme": "x"}, indent=2)
-            path.write_text(raw)
+            path.write_text(raw, encoding="utf-8")
         return path
 
     def codex(self, listing=None, rc=0, err="", config=True, raw=None):
@@ -384,6 +424,128 @@ class World(object):
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_text("# fixture\n")
         return path
+
+    def codex_toml(self, servers=None, raw=None, listing=None, tamper=None):
+        """A real-shaped Codex config.toml, and a `codex` stub that answers `mcp list --json`
+        and `mcp get <name> --json` with each entry's command and args read from that file, as
+        Codex reads its config. `tamper` names a server whose other fields the stub reports
+        changed once its command no longer matches the original: a read-back mismatch."""
+        path = self.home / ".codex" / "config.toml"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        lines = ['model = "gpt-5"', 'approval_policy = "on-request"', "",
+                 '[projects."/somewhere"]', 'trust_level = "trusted"', ""]
+        entries = []
+        for name, s in (servers or {}).items():
+            env = s.get("env") or {}
+            lines.append(f"[mcp_servers.{name}]")
+            lines.append(f"command = {json.dumps(s['command'])}")
+            if "args" in s:
+                lines.append(f"args = {json.dumps(s['args'])}")
+            lines += ["startup_timeout_sec = 30", "enabled = true", 'env_vars = ["HOME"]']
+            if env:
+                lines += ["", f"[mcp_servers.{name}.env]"]
+                lines += [f"{k} = {json.dumps(v)}" for k, v in env.items()]
+            lines.append("")
+            entries.append({"name": name, "enabled": True, "disabled_reason": None,
+                            "startup_timeout_sec": 30, "tool_timeout_sec": None,
+                            "auth_status": None,
+                            "transport": {"type": "stdio", "command": s["command"],
+                                          "args": s.get("args", []), "env": env or None,
+                                          "env_vars": ["HOME"], "cwd": None}})
+        lines += ["[tui]", 'theme = "dark"', ""]
+        path.write_text(raw if raw is not None else "\n".join(lines))
+        path.chmod(0o600)
+        listing = listing if listing is not None else entries
+        scenario = self.tmp / "codex-scenario.json"
+        scenario.write_text(json.dumps({
+            "list": listing, "tamper": tamper,
+            "original": {e["name"]: e["transport"]["command"] for e in listing}}))
+        stub = self.tmp / "codex_stub.py"
+        stub.write_text(CODEX_STUB)
+        write_exec(self.stubs / "codex",
+                   f'#!/bin/sh\nexec "{sys.executable}" -I "{stub}" "{self.log}" "{scenario}" "$@"\n')
+        return path
+
+
+# The Codex stub for apply's cases. Codex reads its own config.toml; this reads the command and
+# the args of each [mcp_servers.<name>] table from it, so an edit of the file shows in `mcp get`.
+CODEX_STUB = r'''
+import json, os, re, sys
+log, scenario, argv = sys.argv[1], sys.argv[2], sys.argv[3:]
+with open(log, "a") as f:
+    f.write("codex " + " ".join(argv) + "\n")
+    f.write("codex-cwd %s %d\n" % (os.getcwd(), len(os.listdir("."))))
+scen = json.load(open(scenario))
+home = os.environ.get("CODEX_HOME") or os.path.join(os.environ["HOME"], ".codex")
+cfg = os.path.join(home, "config.toml")
+text = open(cfg).read() if os.path.exists(cfg) else ""
+
+def table(name):
+    lines = text.split("\n")
+    for i, line in enumerate(lines):
+        if line.strip() in ("[mcp_servers.%s]" % name, '[mcp_servers."%s"]' % name):
+            region = []
+            for nxt in lines[i + 1:]:
+                if nxt.lstrip().startswith("["):
+                    break
+                region.append(nxt)
+            return "\n".join(region)
+    return None
+
+def entry(e):
+    e = json.loads(json.dumps(e))
+    region = table(e["name"])
+    if region is not None:
+        m = re.search(r'^\s*command\s*=\s*"((?:[^"\\]|\\.)*)"', region, re.M)
+        if m:
+            e["transport"]["command"] = json.loads('"' + m.group(1) + '"')
+        m = re.search(r'^\s*args\s*=\s*(\[.*?\])', region, re.M | re.S)
+        if m:
+            e["transport"]["args"] = json.loads(re.sub(r",\s*\]$", "]", m.group(1)))
+    name = e["name"]
+    if scen.get("tamper") == name and e["transport"]["command"] != scen["original"][name]:
+        e["startup_timeout_sec"] = 999
+    return e
+
+if argv[:3] == ["mcp", "list", "--json"]:
+    print(json.dumps([entry(e) for e in scen["list"]]))
+    sys.exit(0)
+if argv[:2] == ["mcp", "get"] and argv[-1:] == ["--json"]:
+    for e in scen["list"]:
+        if e["name"] == argv[2]:
+            print(json.dumps(entry(e)))
+            sys.exit(0)
+    sys.exit(1)
+sys.exit(2)
+'''
+
+
+class Applied(object):
+    """What `apply` printed, and the to-do ledger it wrote."""
+
+    def __init__(self, rc, stdout, stderr, world):
+        self.rc = rc
+        self.stdout = stdout
+        self.stderr = stderr
+        lines = [ln.split("\t", 1) for ln in stdout.splitlines() if "\t" in ln]
+        self.kinds = [k for k, _ in lines]
+        self.oks = [t for k, t in lines if k == "ok"]
+        self.warns = [t for k, t in lines if k == "warn"]
+        self.infos = [t for k, t in lines if k == "info"]
+        self.ledger_text = world.ledger.read_text() if world.ledger.exists() else ""
+        self.todos = [tuple(ln.split("\t")) for ln in self.ledger_text.splitlines()]
+
+    def ok(self):
+        expect(self.rc == 0, f"apply exited {self.rc}: {self.stderr.strip()[-400:]}")
+
+    def has_todo(self, order, title):
+        return (str(order), title, "-", "-") in self.todos
+
+    def todo_titles(self, order=None):
+        return [t[1] for t in self.todos if order is None or t[0] == str(order)]
+
+    def warned(self, text):
+        return [w for w in self.warns if text in w]
 
 
 @contextlib.contextmanager
@@ -784,6 +946,15 @@ def desktop_running_skipped_with_quit_todo():
         expect(f["action"] == "leave", f"action {f['action']}")
         expect(f["todo"] == "Quit Claude Desktop and run again", f"to-do {f['todo']!r}")
         expect(r.rows_with(want), f"no row says {want!r}: {r.rows}")
+        # apply, with Desktop still running: not written, and the quit to-do is at order 10.
+        w.std("csa-zendesk")
+        cfg = w.home / "Library" / "Application Support" / "Claude" / "claude_desktop_config.json"
+        before = cfg.read_bytes()
+        a = w.apply()
+        a.ok()
+        expect(cfg.read_bytes() == before, "Desktop's config was written while it ran")
+        expect(a.has_todo(10, "Quit Claude Desktop and run again"), f"ledger: {a.todos}")
+        expect(not a.oks, f"apply reported a re-point: {a.oks}")
     with world() as w:
         # The same under ~/Applications.
         w.ps(str(w.home / "Applications/Claude.app/Contents/MacOS/Claude"))
@@ -861,6 +1032,14 @@ def dead_local_scope_todo_names_rebuild_or_remove():
                      "CSA_ZD_ALLOWLIST_WRITE"):
             expect(part in todo, f"to-do lacks {part!r}: {todo!r}")
         expect(SECRET_A not in r.stdout + (r.plan_text or ""), "the setting's value was printed")
+        # apply leaves it, and the to-do reaches the ledger at the installer's own order.
+        cfg = w.home / ".claude.json"
+        before = cfg.read_bytes()
+        a = w.apply()
+        a.ok()
+        expect(cfg.read_bytes() == before, "apply changed a dead local-scope entry under D2 (d)")
+        expect(a.has_todo(40, todo), f"the to-do is not in the ledger at 40: {a.todos}")
+        expect(not a.oks, f"apply reported a re-point: {a.oks}")
 
 
 @case
@@ -956,6 +1135,33 @@ def symlinked_config_refused():
         expect(f["action"] == "leave", f"action {f['action']}")
         expect(r.rows_with(want), f"no row says {want!r}: {r.rows}")
         expect(snapshot(w.home, real.parent) == before, "the link or its target changed")
+        a = w.apply()
+        a.ok()
+        expect(snapshot(w.home, real.parent) == before, "apply changed the link or its target")
+    with world() as w:
+        # The config becomes a link after apply has audited it, just before the write: the
+        # write itself refuses it, not only the audit (A10).
+        mod = load_module()
+        w.std("csa-zendesk")
+        cfg = w.claude(user={"csa-zendesk": reg(w.tmp / "gone" / "csa-zendesk-mcp")})
+        w.run().ok()
+        dots = w.tmp / "dotfiles"
+        dots.mkdir()
+        real = dots / "claude.json"
+
+        def relink(point, path):
+            if point == "edit" and not os.path.islink(path):
+                os.replace(path, real)
+                os.symlink(real, path)
+
+        mod.TEST_HOOK = relink
+        a = w.apply_inproc(mod)
+        a.ok()
+        expect(os.path.islink(cfg) and os.readlink(cfg) == str(real), "the link was replaced")
+        got = json.loads(real.read_text())["mcpServers"]["csa-zendesk"]["command"]
+        expect(got == str(w.tmp / "gone" / "csa-zendesk-mcp"), f"written through the link: {got}")
+        expect(a.warned("its config is a link to"), f"no warning: {a.warns}")
+        expect(not a.oks, f"apply reported a re-point: {a.oks}")
 
 
 @case
@@ -1784,6 +1990,746 @@ def windows_not_audited():
 
 
 # ═════════════════════════════════════════════════════════════════════════════════════════════
+# apply (Task 2): re-point an approved dead registration in place, changing only its command
+# ═════════════════════════════════════════════════════════════════════════════════════════════
+
+# Verbatim from the plan, Task 2.
+R_UNAPPROVED = "found after you agreed to the plan; not changed — run again"
+R_NO_STANDARD = "its standard binary is not installed yet"
+R_CHANGED = "changed while this ran; not written — run again"
+R_CODEX_LAYOUT = "its Codex entry is laid out in a way this cannot edit safely; left as it is"
+T_QUIT_DESKTOP = "Quit Claude Desktop and run again"
+# M1's to-do, verbatim; the to-do also names the lock's path.
+T_LOCKED = "Claude Code's config is locked; close Claude Code and run again"
+
+
+def std_bin(w, name):
+    return str(w.home / ".local" / "bin" / SPEC[name][0])
+
+
+def gone(w, name):
+    return str(w.tmp / "gone" / SPEC[name][0])
+
+
+def desktop_cfg(w):
+    return w.home / "Library" / "Application Support" / "Claude" / "claude_desktop_config.json"
+
+
+def backups(path):
+    path = Path(path)
+    return sorted(n for n in os.listdir(path.parent) if n.startswith(path.name + ".bak-"))
+
+
+def state(path):
+    """A file's identity, timestamp and bytes: what an untouched file keeps."""
+    st = os.lstat(path)
+    return st.st_ino, st.st_mtime_ns, Path(path).read_bytes()
+
+
+def entry_of(path, name, project=None):
+    data = json.loads(Path(path).read_text())
+    holder = data["projects"][project] if project else data
+    return holder["mcpServers"][name]
+
+
+def four_dead(w):
+    """A dead registration with secret settings in each client, each re-pointable."""
+    for name in ("csa-zendesk", "csa-skilljar", "csa-google-workspace"):
+        w.std(name)
+    w.stub("claude", "exit 0")
+    w.claude(user={"csa-zendesk": reg(gone(w, "csa-zendesk"),
+                                      env={"CSA_ZD_ALLOWLIST_WRITE": SECRET_A})})
+    w.desktop({"csa-skilljar": reg(gone(w, "csa-skilljar"),
+                                   env={"CSA_SKILLJAR_V1_API_KEY": SECRET_B,
+                                        "CSA_SKILLJAR_V2_CLIENT_SECRET": SECRET_C})})
+    w.gemini({"csa-google-workspace": reg(gone(w, "csa-google-workspace"),
+                                          env={"CSA_GW_CAPABILITIES": SECRET_A}, trust=True)})
+    w.codex_toml({"csa-zendesk": {"command": gone(w, "csa-zendesk"),
+                                  "env": {"CSA_ZD_ALLOWLIST_WRITE": SECRET_B}}})
+
+
+@case
+def dead_user_scope_repointed_env_kept():
+    with world() as w:
+        w.std("csa-zendesk")
+        w.std("csa-skilljar")
+        env = {"CSA_ZD_ALLOWLIST_WRITE": SECRET_A, "CSA_ZD_ALLOWLIST_READ": SECRET_B}
+        cfg = w.claude(user={
+            "csa-zendesk": reg(gone(w, "csa-zendesk"), env=env, timeout=30, alwaysAllow=["x"]),
+            # The pinned interpreter form: args become [].
+            "csa-skilljar": reg(w.tmp / "gone" / "python3", ["-m", "csa_skilljar.mcp.cli"],
+                                env={"CSA_SKILLJAR_PROFILE": "p"}),
+        })
+        before = json.loads(cfg.read_text())
+        w.run().ok()
+        a = w.apply()
+        a.ok()
+        after = json.loads(cfg.read_text())
+        for name, args in (("csa-zendesk", []), ("csa-skilljar", [])):
+            old, new = before["mcpServers"][name], after["mcpServers"][name]
+            expect(new["command"] == std_bin(w, name), f"{name}: command {new['command']!r}")
+            expect(new["args"] == args, f"{name}: args {new['args']!r}")
+            expect(list(new) == list(old), f"{name}: keys {list(new)} != {list(old)}")
+            expect(new["env"] == old["env"] and type(new["env"]) is dict,
+                   f"{name}: env changed: {sorted(new['env'])}")
+            for k in old:
+                if k not in ("command", "args"):
+                    expect(new[k] == old[k], f"{name}: {k} changed")
+        expect({k: v for k, v in after.items() if k != "mcpServers"}
+               == {k: v for k, v in before.items() if k != "mcpServers"},
+               "a field outside mcpServers changed")
+        want = ("csa-zendesk re-pointed in Claude Code (user scope) at "
+                "~/.local/bin/csa-zendesk-mcp; its 2 settings kept")
+        expect(any(o.startswith(want) for o in a.oks), f"no ok line {want!r}: {a.oks}")
+        expect(all("sessions started" in o for o in a.oks if "Claude Code" in o),
+               f"the ok line claims more than M1 shows (a running session keeps its command): {a.oks}")
+        expect(stat.S_IMODE(os.stat(cfg).st_mode) == 0o600, "the config's mode changed")
+
+
+@case
+def local_scope_repaired_when_repoint():
+    with world() as w:
+        mod = load_module()
+        mod.LOCAL_SCOPE_ACTION = "repoint"
+        w.std("csa-zendesk")
+        proj = w.home / "GitHub" / "csa-zendesk"
+        script = w.checkout("csa-zendesk", python=w.gone_python, home=w.gone_home, where=proj)
+        user = reg(w.home / ".local/bin/csa-zendesk-mcp")
+        cfg = w.claude(user={"csa-zendesk": user}, projects={str(proj): {"mcpServers": {
+            "csa-zendesk": reg(script, env={"CSA_ZD_ALLOWLIST_WRITE": SECRET_A})}}})
+        w.run_inproc(mod).ok()
+        a = w.apply_inproc(mod)
+        a.ok()
+        got = entry_of(cfg, "csa-zendesk", str(proj))
+        expect(got["command"] == std_bin(w, "csa-zendesk"), f"local entry: {got['command']!r}")
+        expect(got["env"] == {"CSA_ZD_ALLOWLIST_WRITE": SECRET_A}, "the local entry's env changed")
+        expect(entry_of(cfg, "csa-zendesk") == user, "the user entry changed")
+        expect(any("local scope" in o for o in a.oks), f"ok lines: {a.oks}")
+
+
+@case
+def working_elsewhere_byte_identical():
+    with world() as w:
+        script = w.checkout("csa-zendesk")
+        cfg = w.claude(user={"csa-zendesk": reg(script, env={"CSA_ZD_ALLOWLIST_WRITE": SECRET_A})})
+        before = state(cfg)
+        r = w.run()
+        r.ok()
+        a = w.apply()
+        a.ok()
+        expect(state(cfg) == before, "a working registration elsewhere was rewritten")
+        expect(backups(cfg) == [], f"a backup was made: {backups(cfg)}")
+        expect(a.has_todo(40, r.f("csa-zendesk")["todo"]), f"D1's to-do is not in the ledger: {a.todos}")
+    with world() as w:
+        # In a file that is rewritten for another entry, it keeps every value.
+        w.std("csa-skilljar")
+        script = w.checkout("csa-zendesk")
+        kept = reg(script, env={"CSA_ZD_ALLOWLIST_WRITE": SECRET_A})
+        cfg = w.claude(user={"csa-zendesk": kept,
+                             "csa-skilljar": reg(gone(w, "csa-skilljar"))})
+        w.run().ok()
+        w.apply().ok()
+        expect(entry_of(cfg, "csa-skilljar")["command"] == std_bin(w, "csa-skilljar"), "not re-pointed")
+        expect(entry_of(cfg, "csa-zendesk") == kept, "the working entry changed")
+
+
+@case
+def desktop_mode_0600_kept():
+    with world() as w:
+        w.std("csa-skilljar")
+        w.std("csa-zendesk")
+        cfg = w.desktop({"csa-skilljar": reg(gone(w, "csa-skilljar"),
+                                             env={"CSA_SKILLJAR_V1_API_KEY": SECRET_A})})
+        gem = w.gemini({"csa-zendesk": reg(gone(w, "csa-zendesk"))})
+        gem.chmod(0o644)
+        w.run().ok()
+        a = w.apply()
+        a.ok()
+        expect(entry_of(cfg, "csa-skilljar")["command"] == std_bin(w, "csa-skilljar"), "not re-pointed")
+        for path, mode in ((cfg, 0o600), (gem, 0o644)):
+            got = stat.S_IMODE(os.stat(path).st_mode)
+            expect(got == mode, f"{path.name}: mode {oct(got)}, was {oct(mode)}")
+            for b in backups(path):
+                got = stat.S_IMODE(os.stat(path.parent / b).st_mode)
+                expect(got == mode, f"{b}: mode {oct(got)}, its file is {oct(mode)}")
+            expect(len(backups(path)) == 1, f"{path.name}: backups {backups(path)}")
+
+
+@case
+def backup_same_mode_and_pruned_to_3():
+    with world() as w:
+        w.std("csa-zendesk")
+        cfg = w.claude(user={"csa-zendesk": reg(gone(w, "csa-zendesk"), env={"K": SECRET_A})})
+        original = cfg.read_bytes()
+        old = [f".claude.json.bak-2020010100000{i}" for i in (1, 2, 3)]
+        for name in old:
+            (w.home / name).write_text("{}")
+            (w.home / name).chmod(0o600)
+        w.run().ok()
+        w.apply().ok()
+        got = backups(cfg)
+        new = [b for b in got if b not in old]
+        expect(len(new) == 1, f"one new backup expected: {got}")
+        expect(sorted(got) == sorted(new + old[1:]), f"pruned to the wrong three: {got}")
+        expect((w.home / new[0]).read_bytes() == original, "the backup is not the file it replaced")
+        mode = stat.S_IMODE(os.stat(w.home / new[0]).st_mode)
+        expect(mode == 0o600, f"backup mode {oct(mode)}")
+
+
+@case
+def prune_spares_other_backup_names():
+    with world() as w:
+        w.std("csa-zendesk")
+        cfg = w.claude(user={"csa-zendesk": reg(gone(w, "csa-zendesk"))})
+        others = [".claude.json.bak", ".claude.json.backup", ".claude.json.bak-2020",
+                  ".claude.json.bak-20200101000000.old", ".claude.json.bak-202001010000001",
+                  ".claude.json.20260929-pre-fix.bak", "other.json.bak-20200101000000"]
+        for i, name in enumerate(others + [f".claude.json.bak-2020010100000{n}" for n in range(4)]):
+            (w.home / name).write_text(f"{i}")
+        before = {n: (w.home / n).read_bytes() for n in others}
+        w.run().ok()
+        w.apply().ok()
+        for n in others:
+            expect((w.home / n).exists() and (w.home / n).read_bytes() == before[n],
+                   f"{n} was pruned or changed")
+        mine = [b for b in backups(cfg) if re.search(r"\.bak-\d{14}$", b)]
+        expect(len(mine) == 3, f"the prune kept {len(mine)} of its own: {mine}")
+
+
+@case
+def json_format_preserved():
+    with world() as w:
+        w.std("csa-zendesk")
+        # 4-space indent, no trailing newline, keys out of order, raw and escaped non-ASCII, a
+        # lone surrogate (valid JSON, and JS writes it escaped), and an exponent number.
+        raw = ('{\n    "zeta": "caf\u00e9 \\u2615",\n    "lone": "\\ud800",\n'
+               '    "mcpServers": {\n        "csa-zendesk": {\n'
+               f'            "command": "{gone(w, "csa-zendesk")}",\n'
+               '            "env": {}\n        }\n    },\n    "alpha": [],\n    "n": 1.5e3\n}')
+        cfg = w.claude(raw=raw)
+        w.gemini(raw='{\n\t"mcpServers": {\n\t\t"csa-zendesk": {\n\t\t\t"command": "%s"\n\t\t}\n'
+                     '\t}\n}\n' % gone(w, "csa-zendesk"))
+        w.run().ok()
+        a = w.apply()
+        a.ok()
+        text = cfg.read_text(encoding="utf-8")
+        expect(entry_of(cfg, "csa-zendesk")["command"] == std_bin(w, "csa-zendesk"), "not re-pointed")
+        expect(text.split("\n")[1].startswith('    "zeta"'), f"indent lost: {text[:40]!r}")
+        expect(not text.endswith("\n"), "a trailing newline was added")
+        expect(list(json.loads(text)) == ["zeta", "lone", "mcpServers", "alpha", "n"],
+               "key order changed")
+        expect("caf\u00e9" in text, "non-ASCII was escaped (ensure_ascii)")
+        expect('"\\ud800"' in text, "a lone surrogate was not written back escaped")
+        before, after = json.loads(raw), json.loads(text)
+        after["mcpServers"]["csa-zendesk"]["command"] = before["mcpServers"]["csa-zendesk"]["command"]
+        expect(after == before, "a value changed")
+        gem = (w.home / ".gemini" / "settings.json").read_text()
+        expect(gem.split("\n")[1].startswith('\t"mcpServers"') and gem.endswith("}\n"),
+               f"tab indent or trailing newline lost: {gem!r}")
+
+
+@case
+def codex_line_edit_keeps_other_fields():
+    with world() as w:
+        w.std("csa-zendesk")
+        cfg = w.codex_toml({"csa-zendesk": {"command": gone(w, "csa-zendesk"),
+                                            "env": {"CSA_ZD_ALLOWLIST_WRITE": SECRET_A}}})
+        before = cfg.read_text().split("\n")
+        w.run().ok()
+        a = w.apply()
+        a.ok()
+        after = cfg.read_text().split("\n")
+        changed = [(b, c) for b, c in zip(before, after) if b != c]
+        expect(len(before) == len(after) and len(changed) == 1,
+               f"more than the command line changed: {changed}")
+        expect(changed[0][1] == f'command = "{std_bin(w, "csa-zendesk")}"', f"{changed}")
+        for line in ("startup_timeout_sec = 30", "enabled = true", 'env_vars = ["HOME"]'):
+            expect(line in after, f"{line!r} lost")
+        expect(stat.S_IMODE(os.stat(cfg).st_mode) == 0o600, "the mode changed")
+        expect(any(o.startswith("csa-zendesk re-pointed in Codex") for o in a.oks), f"{a.oks}")
+    with world() as w:
+        # The interpreter form: args become [] on its own line, and nothing else changes.
+        w.std("csa-zendesk")
+        cfg = w.codex_toml({"csa-zendesk": {"command": str(w.tmp / "gone" / "python3"),
+                                            "args": ["-m", "csa_zendesk.server"]}})
+        before = cfg.read_text().split("\n")
+        w.run().ok()
+        w.apply().ok()
+        after = cfg.read_text().split("\n")
+        changed = [c for b, c in zip(before, after) if b != c]
+        expect(changed == [f'command = "{std_bin(w, "csa-zendesk")}"', "args = []"],
+               f"changed lines: {changed}")
+
+
+@case
+def codex_quoted_table_header():
+    with world() as w:
+        w.std("csa-zendesk")
+        listing = [{"name": "csa-zendesk", "transport": {"type": "stdio",
+                                                          "command": gone(w, "csa-zendesk")}}]
+        raw = ('[mcp_servers."csa-zendesk"]\n'
+               f'command = "{gone(w, "csa-zendesk")}"  # set by hand\n'
+               "startup_timeout_sec = 30\n")
+        cfg = w.codex_toml(raw=raw, listing=listing)
+        w.run().ok()
+        a = w.apply()
+        a.ok()
+        want = (f'[mcp_servers."csa-zendesk"]\ncommand = "{std_bin(w, "csa-zendesk")}"  # set by hand\n'
+                "startup_timeout_sec = 30\n")
+        expect(cfg.read_text() == want, f"got {cfg.read_text()!r}")
+
+
+@case
+def codex_multiline_args_refused():
+    with world() as w:
+        w.std("csa-zendesk")
+        py = str(w.tmp / "gone" / "python3")
+        listing = [{"name": "csa-zendesk", "transport": {
+            "type": "stdio", "command": py, "args": ["-m", "csa_zendesk.server"]}}]
+        raw = (f'[mcp_servers.csa-zendesk]\ncommand = "{py}"\n'
+               'args = [\n  "-m",\n  "csa_zendesk.server",\n]\n')
+        cfg = w.codex_toml(raw=raw, listing=listing)
+        before = state(cfg)
+        w.run().ok()
+        a = w.apply()
+        a.ok()
+        expect(state(cfg) == before, "a multi-line args array was edited")
+        expect(a.warned(R_CODEX_LAYOUT), f"no warning: {a.warns}")
+        expect(any(R_CODEX_LAYOUT in t for t in a.todo_titles(40)), f"ledger: {a.todos}")
+        expect(backups(cfg) == [], "a backup was made for a refused edit")
+
+
+@case
+def codex_readback_mismatch_restores():
+    with world() as w:
+        w.std("csa-zendesk")
+        cfg = w.codex_toml({"csa-zendesk": {"command": gone(w, "csa-zendesk")}},
+                           tamper="csa-zendesk")
+        original = cfg.read_bytes()
+        w.run().ok()
+        a = w.apply()
+        a.ok()
+        expect(cfg.read_bytes() == original, "a read-back mismatch did not restore the backup")
+        expect(stat.S_IMODE(os.stat(cfg).st_mode) == 0o600, "the restore changed the mode")
+        expect(a.warned("restored"), f"no warning: {a.warns}")
+        expect(not a.oks, f"an ok line for a restored edit: {a.oks}")
+
+
+@case
+def gemini_extra_fields_kept():
+    with world() as w:
+        w.std("csa-zendesk")
+        old = reg(gone(w, "csa-zendesk"), env={"K": SECRET_A}, trust=True,
+                  includeTools=["get_ticket"], excludeTools=["x"], timeout=5000, cwd="/tmp")
+        cfg = w.gemini({"csa-zendesk": old})
+        w.run().ok()
+        a = w.apply()
+        a.ok()
+        got = entry_of(cfg, "csa-zendesk")
+        expect(got["command"] == std_bin(w, "csa-zendesk"), "not re-pointed")
+        expect({k: v for k, v in got.items() if k != "command"}
+               == {k: v for k, v in old.items() if k != "command"}, f"got {got}")
+        expect(a.has_todo(10, "Restart Gemini"), f"ledger: {a.todos}")
+
+
+@case
+def unapproved_finding_not_repaired():
+    with world() as w:
+        # Found after the plan: not in it at all.
+        w.std("csa-zendesk")
+        cfg = w.claude(user={})
+        w.run().ok()
+        cfg = w.claude(user={"csa-zendesk": reg(gone(w, "csa-zendesk"))})
+        before = state(cfg)
+        a = w.apply()
+        a.ok()
+        expect(state(cfg) == before, "a finding the plan did not show was written")
+        expect(a.warned(R_UNAPPROVED), f"no warning: {a.warns}")
+    with world() as w:
+        # In the plan, but left there (Desktop was running); now it could be re-pointed.
+        w.std("csa-zendesk")
+        w.ps("/Applications/Claude.app/Contents/MacOS/Claude")
+        cfg = w.desktop({"csa-zendesk": reg(gone(w, "csa-zendesk"))})
+        r = w.run()
+        r.ok()
+        expect(r.f("csa-zendesk", "Claude Desktop")["action"] == "leave", "fixture: not left")
+        w.ps()
+        before = state(cfg)
+        a = w.apply()
+        a.ok()
+        expect(state(cfg) == before, "a finding the plan left was re-pointed")
+        expect(a.warns and not a.oks, f"warns {a.warns}, oks {a.oks}")
+
+
+@case
+def changed_since_plan_not_written():
+    with world() as w:
+        w.std("csa-zendesk")
+        w.claude(user={"csa-zendesk": reg(gone(w, "csa-zendesk"))})
+        w.run().ok()
+        cfg = w.claude(user={"csa-zendesk": reg(w.tmp / "elsewhere" / "csa-zendesk-mcp")})
+        before = state(cfg)
+        a = w.apply()
+        a.ok()
+        expect(state(cfg) == before, "a registration that changed since the plan was written")
+        expect(a.warned(R_UNAPPROVED), f"no warning: {a.warns}")
+
+
+@case
+def unreadable_plan_file_applies_nothing():
+    with world() as w:
+        w.std("csa-zendesk")
+        cfg = w.claude(user={"csa-zendesk": reg(gone(w, "csa-zendesk"))})
+        before = state(cfg)
+        bad = w.tmp / "bad.json"
+        a_dir = w.tmp / "a-dir"
+        a_dir.mkdir()
+        for content, path in (("{not json", bad), ("", bad), ('{"tool": "other", "findings": []}', bad),
+                              ('{"tool": "csa-mcp-registrations", "findings": {}}', bad),
+                              (None, w.tmp / "missing.json"), (None, a_dir)):
+            if content is not None:
+                path.write_text(content)
+            a = w.apply(approved=path)
+            a.ok()
+            expect(state(cfg) == before, f"{content!r}: the config was written")
+            expect(a.warned("could not be read"), f"{content!r}: no warning: {a.warns}")
+            expect(not a.oks, f"{content!r}: {a.oks}")
+
+
+@case
+def concurrent_change_aborts_write():
+    with world() as w:
+        mod = load_module()
+        w.std("csa-zendesk")
+        cfg = w.claude(user={"csa-zendesk": reg(gone(w, "csa-zendesk"))})
+        w.run().ok()
+        moved = {}
+
+        def touch(point, path):
+            if point == "written" and not moved:
+                moved[path] = True
+                Path(path).write_text(Path(path).read_text() + " ")
+
+        mod.TEST_HOOK = touch
+        a = w.apply_inproc(mod)
+        a.ok()
+        expect(moved, "the hook did not run")
+        expect(entry_of(cfg, "csa-zendesk")["command"] == gone(w, "csa-zendesk"),
+               "written over a change made after the read")
+        expect(a.warned(R_CHANGED), f"no warning: {a.warns}")
+        expect(sorted(os.listdir(w.home)) == sorted([".claude.json", ".local"]),
+               f"a temp file or backup was left: {sorted(os.listdir(w.home))}")
+    with world() as w:
+        # The entry's settings change between the audit and the read: the in-write fingerprint.
+        mod = load_module()
+        w.std("csa-zendesk")
+        cfg = w.claude(user={"csa-zendesk": reg(gone(w, "csa-zendesk"), env={"A": "1"})})
+        w.run().ok()
+
+        def rekey(point, path):
+            if point == "edit":
+                w.claude(user={"csa-zendesk": reg(gone(w, "csa-zendesk"), env={"B": "1"})})
+
+        mod.TEST_HOOK = rekey
+        a = w.apply_inproc(mod)
+        a.ok()
+        expect(entry_of(cfg, "csa-zendesk")["command"] == gone(w, "csa-zendesk"),
+               "written although its settings changed after the audit")
+        expect(a.warned(R_CHANGED), f"no warning: {a.warns}")
+    with world() as w:
+        # Its mode is tightened after the read: the replace would have loosened it again.
+        mod = load_module()
+        w.std("csa-zendesk")
+        cfg = w.claude(user={"csa-zendesk": reg(gone(w, "csa-zendesk"))})
+        w.run().ok()
+        mod.TEST_HOOK = lambda point, path: os.chmod(path, 0o400) if point == "written" else None
+        a = w.apply_inproc(mod)
+        a.ok()
+        expect(stat.S_IMODE(os.stat(cfg).st_mode) == 0o400, "a mode tightened meanwhile was undone")
+        expect(a.warned(R_CHANGED), f"no warning: {a.warns}")
+
+
+@case
+def abandoned_write_leaves_no_backup():
+    for point in ("written", "backed-up"):  # an abort at step 5, then at step 7
+        with world() as w:
+            mod = load_module()
+            w.std("csa-zendesk")
+            cfg = w.claude(user={"csa-zendesk": reg(gone(w, "csa-zendesk"))})
+            for i in (1, 2, 3, 4):  # one more than the prune keeps: no prune may run either
+                (w.home / f".claude.json.bak-2020010100000{i}").write_text("{}")
+            w.run().ok()
+            before = backups(cfg)
+
+            def touch(at, path, point=point):
+                if at == point:
+                    Path(path).write_text(Path(path).read_text() + " ")
+
+            mod.TEST_HOOK = touch
+            a = w.apply_inproc(mod)
+            a.ok()
+            expect(a.warned(R_CHANGED), f"{point}: no warning: {a.warns}")
+            expect(backups(cfg) == before, f"{point}: backups {backups(cfg)}, were {before}")
+            stray = [n for n in os.listdir(w.home) if n.startswith(".csa-registrations-")]
+            expect(not stray, f"{point}: temp file left: {stray}")
+
+
+@case
+def readback_mismatch_restores():
+    with world() as w:
+        mod = load_module()
+        w.std("csa-zendesk")
+        cfg = w.claude(user={"csa-zendesk": reg(gone(w, "csa-zendesk"), env={"K": SECRET_A})})
+        for i in (1, 2, 3):
+            (w.home / f".claude.json.bak-2020010100000{i}").write_text("{}")
+        original = cfg.read_bytes()
+        w.run().ok()
+
+        def spoil(point, path):
+            if point == "replaced":
+                data = json.loads(Path(path).read_text())
+                data["mcpServers"]["csa-zendesk"]["command"] = "/somewhere/else"
+                with open(path, "r+") as f:  # in place: the file this run wrote, now wrong
+                    f.write(json.dumps(data, indent=2))
+                    f.truncate()
+
+        mod.TEST_HOOK = spoil
+        a = w.apply_inproc(mod)
+        a.ok()
+        expect(cfg.read_bytes() == original, "a read-back mismatch did not restore the backup")
+        expect(stat.S_IMODE(os.stat(cfg).st_mode) == 0o600, "the restore changed the mode")
+        expect(a.warned("restored"), f"no warning: {a.warns}")
+        expect(len(backups(cfg)) == 4, f"pruned after a failed read-back: {backups(cfg)}")
+
+
+@case
+def claude_lock_honoured():
+    # M1: Claude Code takes `<config>.lock`, a directory, for each write, and waits for one
+    # someone else holds. apply takes it the same way, waits a bounded time, and never breaks it.
+    with world() as w:
+        mod = load_module()
+        mod.CLAUDE_LOCK_WAIT = 0.5
+        w.std("csa-zendesk")
+        cfg = w.claude(user={"csa-zendesk": reg(gone(w, "csa-zendesk"))})
+        gem = w.gemini({"csa-zendesk": reg(gone(w, "csa-zendesk"))})
+        lock = w.home / ".claude.json.lock"
+        lock.mkdir()
+        w.run().ok()
+        before = state(cfg)
+        a = w.apply_inproc(mod)
+        a.ok()
+        expect(state(cfg) == before, "written while Claude Code's lock was held")
+        expect(lock.is_dir(), "the lock someone else held was removed")
+        titles = [t for t in a.todo_titles(10) if t.startswith(T_LOCKED)]
+        expect(titles and "~/.claude.json.lock" in titles[0], f"ledger: {a.todos}")
+        expect(entry_of(gem, "csa-zendesk")["command"] == std_bin(w, "csa-zendesk"),
+               "a locked Claude Code config stopped the other clients' repairs")
+    with world() as w:
+        # Released while apply waits: it then writes, holding the lock across the write.
+        mod = load_module()
+        mod.CLAUDE_LOCK_WAIT = 20
+        w.std("csa-zendesk")
+        ccdir = w.tmp / "ccdir"
+        cfg = w.claude(user={"csa-zendesk": reg(gone(w, "csa-zendesk"))}, at=ccdir / ".claude.json")
+        w.extra_env["CLAUDE_CONFIG_DIR"] = str(ccdir)
+        lock = ccdir / ".claude.json.lock"
+        lock.mkdir()
+        w.run().ok()
+        held = []
+        mod.TEST_HOOK = lambda point, path: held.append((point, lock.is_dir()))
+        import threading
+        timer = threading.Timer(0.4, lambda: os.rmdir(lock))
+        timer.start()
+        try:
+            a = w.apply_inproc(mod)
+        finally:
+            timer.cancel()
+        a.ok()
+        expect(entry_of(cfg, "csa-zendesk")["command"] == std_bin(w, "csa-zendesk"),
+               f"not written after the lock was released: {a.warns}")
+        during = [h for p, h in held if p in ("read", "written", "backed-up", "replaced")]
+        expect(during and all(during), f"the lock was not held across the write: {held}")
+        expect(not lock.exists(), "apply left its lock behind")
+
+
+@case
+def standard_binary_missing_no_repoint():
+    with world() as w:
+        cfg = w.claude(user={"csa-zendesk": reg(gone(w, "csa-zendesk"))})
+        w.run().ok()
+        before = state(cfg)
+        a = w.apply()
+        a.ok()
+        expect(state(cfg) == before, "re-pointed at a standard binary that is not there")
+        expect(a.warned(R_NO_STANDARD), f"no warning: {a.warns}")
+        expect(any(R_NO_STANDARD in t for t in a.todo_titles(40)), f"ledger: {a.todos}")
+    with world() as w:
+        # There, but its Python is gone: not installed in any sense that runs.
+        w.std("csa-zendesk", python=w.gone_python, home=w.gone_home)
+        cfg = w.claude(user={"csa-zendesk": reg(gone(w, "csa-zendesk"))})
+        w.run().ok()
+        before = state(cfg)
+        a = w.apply()
+        a.ok()
+        expect(state(cfg) == before, "re-pointed at a dead standard binary")
+        expect(a.warned(R_NO_STANDARD), f"no warning: {a.warns}")
+
+
+@case
+def desktop_started_after_plan_skipped():
+    with world() as w:
+        # Started between the plan and apply.
+        w.std("csa-zendesk")
+        cfg = w.desktop({"csa-zendesk": reg(gone(w, "csa-zendesk"))})
+        r = w.run()
+        r.ok()
+        expect(r.f("csa-zendesk", "Claude Desktop")["action"] == "re-point", "fixture")
+        w.ps("/Applications/Claude.app/Contents/MacOS/Claude")
+        before = state(cfg)
+        a = w.apply()
+        a.ok()
+        expect(state(cfg) == before, "written after Desktop started")
+        expect(a.has_todo(10, T_QUIT_DESKTOP), f"ledger: {a.todos}")
+        expect(a.warned("Claude Desktop is running"), f"no warning: {a.warns}")
+    with world() as w:
+        # Started during apply, after its audit and before the write: `ps` answers "not
+        # running" twice (the plan, then apply's audit) and "running" from then on.
+        w.std("csa-zendesk")
+        cfg = w.desktop({"csa-zendesk": reg(gone(w, "csa-zendesk"))})
+        count = w.tmp / "ps.count"
+        w.stub("ps", f'n=$(cat "{count}" 2>/dev/null || echo 0); n=$((n+1)); echo "$n" > "{count}"\n'
+                     'if [ "$n" -ge 3 ]; then echo /Applications/Claude.app/Contents/MacOS/Claude; fi\n'
+                     "exit 0")
+        r = w.run()
+        r.ok()
+        expect(r.f("csa-zendesk", "Claude Desktop")["action"] == "re-point", "fixture")
+        before = state(cfg)
+        a = w.apply()
+        a.ok()
+        expect(state(cfg) == before, "written although Desktop started during apply")
+        expect(a.has_todo(10, T_QUIT_DESKTOP), f"ledger: {a.todos}")
+
+
+@case
+def secret_values_never_emitted():
+    with world() as w:
+        four_dead(w)
+        r = w.run()
+        r.ok()
+        a = w.apply()
+        a.ok()
+        expect(len(a.oks) == 4, f"expected four re-points: {a.oks} / {a.warns}")
+        for s in SECRETS:
+            for where, text in (("plan stdout", r.stdout), ("plan stderr", r.stderr),
+                                ("plan file", r.plan_text), ("apply stdout", a.stdout),
+                                ("apply stderr", a.stderr), ("ledger", a.ledger_text),
+                                ("stub log", w.log.read_text())):
+                expect(s not in text, f"a secret value reached the {where}")
+        configs = (w.home / ".claude.json", desktop_cfg(w), w.home / ".gemini" / "settings.json",
+                   w.home / ".codex" / "config.toml")
+        text = "".join(p.read_text() for p in configs)
+        for s in SECRETS:
+            expect(s in text, "a secret value was not carried into the repaired config")
+
+
+@case
+def no_client_cli_writes():
+    with world() as w:
+        four_dead(w)
+        w.run().ok()
+        w.log.write_text("")
+        a = w.apply()
+        a.ok()
+        expect(len(a.oks) == 4, f"expected four re-points: {a.oks} / {a.warns}")
+        calls = [ln for ln in w.stub_log() if not ln.startswith(("codex-cwd ", "ps "))]
+        allowed = re.compile(r"^codex mcp (list --json|get csa-[a-z-]+ --json)$")
+        bad = [ln for ln in calls if not allowed.match(ln)]
+        expect(not bad, f"client calls other than `codex mcp list|get --json`: {bad}")
+        expect(any(ln.startswith("codex mcp get ") for ln in calls), "Codex was not read back")
+        log = w.log.read_text()
+        expect(not any(s in log for s in SECRETS), "a value reached a client's argv")
+        cwds = [ln.split()[1:] for ln in w.stub_log() if ln.startswith("codex-cwd ")]
+        expect(cwds and all(n == "0" and c != str(w.tmp) and not os.path.exists(c)
+                            for c, n in cwds),
+               f"a client call ran outside a fresh empty directory: {cwds}")
+
+
+@case
+def todo_per_client_restart():
+    with world() as w:
+        four_dead(w)
+        w.run().ok()
+        a = w.apply()
+        a.ok()
+        for client in ("Claude Code", "Claude Desktop", "Codex", "Gemini"):
+            title = f"Restart {client}"
+            expect(a.todos.count(("10", title, "-", "-")) == 1, f"{title}: ledger {a.todos}")
+        expect(not a.infos, f"info lines with a ledger: {a.infos}")
+
+
+@case
+def todo_printed_without_ledger():
+    with world() as w:
+        four_dead(w)
+        w.run().ok()
+        a = w.apply(ledger=False)
+        a.ok()
+        for client in ("Claude Code", "Claude Desktop", "Codex", "Gemini"):
+            expect(f"Restart {client}" in a.infos, f"no info line for {client}: {a.infos}")
+        expect(not w.ledger.exists(), "a ledger was written though none was set")
+
+
+@case
+def second_run_noop():
+    with world() as w:
+        four_dead(w)
+        w.run().ok()
+        w.apply().ok()
+        configs = (w.home / ".claude.json", desktop_cfg(w), w.home / ".gemini" / "settings.json",
+                   w.home / ".codex" / "config.toml")
+        before = {p: state(p) for p in configs}
+        listing = {p: sorted(os.listdir(p.parent)) for p in configs}
+        r = w.run()
+        r.ok()
+        expect(all(f["action"] == "none" for f in r.plan["findings"]),
+               f"a second plan proposes work: {[(f['client'], f['action']) for f in r.plan['findings']]}")
+        a = w.apply()
+        a.ok()
+        expect(not a.oks and not a.warns, f"a second apply did something: {a.oks} {a.warns}")
+        for p in configs:
+            expect(state(p) == before[p], f"{p.name} changed on the second run")
+            expect(sorted(os.listdir(p.parent)) == listing[p], f"{p.parent}: a new file")
+
+
+@case
+def backup_rule_matches_connectors():
+    # A13: one backup name and one prune for both tools, so one cap bounds the copies.
+    mod = load_module()
+    spec = importlib.util.spec_from_file_location(
+        "connectors", ROOT / "scripts" / "csa-claude-connectors.py")
+    conn = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(conn)
+    expect(mod.BACKUP_RE.pattern == conn.BACKUP_RE.pattern, f"{mod.BACKUP_RE.pattern!r}")
+    expect(mod.BACKUPS_KEPT == conn.BACKUPS_KEPT == 3, f"kept {mod.BACKUPS_KEPT}")
+
+
+@case
+def apply_by_hand_replans_and_applies():
+    # Without --approved, a person running it by hand sees the plan and it is applied, as
+    # csa-claude-connectors.py --apply does.
+    with world() as w:
+        w.std("csa-zendesk")
+        cfg = w.claude(user={"csa-zendesk": reg(gone(w, "csa-zendesk"), env={"K": SECRET_A})})
+        a = w.apply(approved=None, ledger=False)
+        a.ok()
+        rows = [ln for ln in a.stdout.splitlines() if ln.startswith("row\t")]
+        expect(any("will be re-pointed" in r for r in rows), f"the plan was not shown: {rows}")
+        expect(entry_of(cfg, "csa-zendesk")["command"] == std_bin(w, "csa-zendesk"), "not applied")
+        expect(a.kinds.index("row") < a.kinds.index("ok"), "the plan was not shown first")
+        expect(SECRET_A not in a.stdout + a.stderr, "a value was printed")
+
+
+# ═════════════════════════════════════════════════════════════════════════════════════════════
 # The file itself
 # ═════════════════════════════════════════════════════════════════════════════════════════════
 
@@ -1925,6 +2871,58 @@ MUTATIONS = [
      'codex_home = os.path.join(ctx.home, ".codex")'),
     ("codex_timeout_kills_its_group", "kill only the child on a timeout, not its group",
      "os.killpg(p.pid, signal.SIGKILL)", "p.kill()"),
+    # ── apply: Task 2 Step 4, the plan's six ──
+    ("changed_since_plan_not_written", "drop the fingerprint from the approval",
+     "    return (client, scope, project, name, fingerprint)",
+     "    return (client, scope, project, name)"),
+    ("desktop_mode_0600_kept", "write the temp file with plain open(), at the umask's mode",
+     "    fd, tmp = tempfile.mkstemp(dir=os.path.dirname(path), prefix=TMP_PREFIX)\n    try:\n"
+     '        with os.fdopen(fd, "wb") as fh:\n            os.fchmod(fh.fileno(), mode)\n',
+     '    tmp = os.path.join(os.path.dirname(path), TMP_PREFIX + "plain")\n    try:\n'
+     '        with open(tmp, "wb") as fh:\n'),
+    ("dead_user_scope_repointed_env_kept", "copy env through str()",
+     "        else:\n            new[key] = value\n    return new\n",
+     '        else:\n            new[key] = str(value) if key == "env" else value\n    return new\n'),
+    ("symlinked_config_refused", "resolve the link and write its target",
+     "    if linked_config(path):  # A10, again: it may have become a link since the audit\n",
+     "    path = os.path.realpath(path)\n    if False:\n"),
+    ("abandoned_write_leaves_no_backup", "back up before the stat check",
+     "        if moved(path, before):                            # 5\n            return abandon(tmp)\n"
+     "        backup = make_backup(path, stamp, mode)            # 6\n",
+     "        backup = make_backup(path, stamp, mode)            # 6\n"
+     "        if moved(path, before):                            # 5\n            return abandon(tmp)\n"),
+    ("desktop_started_after_plan_skipped", "drop the apply-time Desktop re-check",
+     "        running = (desktop_running(ctx, fresh=True)\n", "        running = (False\n"),
+    # ── apply: the guards Task 2 added, each broken on purpose (ADR-005) ──
+    ("claude_lock_honoured", "write without taking Claude Code's lock",
+     "            os.mkdir(lock, 0o700)\n            break\n", "            break\n"),
+    ("claude_lock_honoured", "break a lock still held after the wait",
+     "                raise Locked(lock)\n", "                os.rmdir(lock)\n                continue\n"),
+    ("concurrent_change_aborts_write", "skip the fingerprint check made under the lock",
+     'if reg.transport != "stdio" or reg.fingerprint() != c.fingerprint:',
+     'if reg.transport != "stdio":'),
+    ("concurrent_change_aborts_write", "compare only the file type, not its permissions",
+     "st.st_size, st.st_mode\n", "st.st_size, stat.S_IFMT(st.st_mode)\n"),
+    ("abandoned_write_leaves_no_backup", "keep the backup when the file moves after it is made",
+     "            return abandon(tmp, backup)\n", "            return abandon(tmp)\n"),
+    ("readback_mismatch_restores", "skip the read-back",
+     "    if not verify():                                       # 9\n", "    if False:\n"),
+    ("codex_readback_mismatch_restores", "skip Codex's read-back",
+     "        return all(same(codex_get(c.reg.name, ctx), want, ordered=False) for c, want in kept)\n",
+     "        return True\n"),
+    ("prune_spares_other_backup_names", "prune every name that starts `.bak-`",
+     r'BACKUP_RE = re.compile(r"\.bak-\d{14}$")', r'BACKUP_RE = re.compile(r"\.bak-")'),
+    ("standard_binary_missing_no_repoint", "re-point without checking the standard binary",
+     "        elif standard_dead(change.command, SERVERS[f.reg.name], ctx):\n", "        elif False:\n"),
+    ("unapproved_finding_not_repaired", "act on a finding the plan showed as left",
+     "        elif key not in repoint:\n", "        elif key not in every:\n"),
+    ("json_format_preserved", "always indent by 2", "indent=json_indent(like),", "indent=2,"),
+    ("json_format_preserved", "always end with a newline",
+     '    if like.endswith("\\n"):\n        text += "\\n"\n', '    text += "\\n"\n'),
+    ("json_format_preserved", "escape all non-ASCII",
+     "ensure_ascii=False, allow_nan=False", "ensure_ascii=True, allow_nan=False"),
+    ("json_format_preserved", "write a lone surrogate raw",
+     '    text = LONE_SURROGATE.sub(lambda m: "\\\\u%04x" % ord(m.group()), text)\n', ""),
 ]
 
 
