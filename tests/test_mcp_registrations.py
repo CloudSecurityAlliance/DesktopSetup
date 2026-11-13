@@ -79,7 +79,13 @@ W_CELLAR = ("it runs from a venv built on a Homebrew Cellar Python, which the ne
             "upgrade deletes")
 WINDOWS = "not audited: Windows support is #184 (Task 1W)"
 
-CONTROL = re.compile(r"[\x00-\x1f\x7f-\x9f]")
+# C0 and C1 controls, the Unicode line and paragraph separators, the bidi controls, and lone
+# surrogates: anything that could break a line or reorder what a person reads.
+# Written as code points, never as the characters: see no_invisible_characters_in_source.
+_UNSAFE = ((0x00, 0x1F), (0x7F, 0x9F), (0x061C, 0x061C), (0x200E, 0x200F), (0x2028, 0x2029),
+           (0x202A, 0x202E), (0x2066, 0x2069), (0xD800, 0xDFFF))
+CONTROL = re.compile("[" + "".join(re.escape(chr(a)) + "-" + re.escape(chr(b))
+                                   for a, b in _UNSAFE) + "]")
 
 INTERPRETER_KEYS = ("PYTHONPATH", "PYTHONHOME", "PYTHONSTARTUP", "PYTHONUSERBASE",
                     "PYTHONEXECUTABLE", "VIRTUAL_ENV", "CONDA_PREFIX", "UV_PROJECT_ENVIRONMENT")
@@ -109,8 +115,9 @@ def load_module():
 
 
 def script_line(number):
-    """Line `number` of the script under test, or "" when it has no such line."""
-    lines = SCRIPT.read_text(encoding="utf-8").splitlines()
+    """Line `number` of the script under test, or "" when it has no such line. Split on "\\n"
+    as Python counts lines: splitlines() also splits on U+2028 and friends."""
+    lines = SCRIPT.read_text(encoding="utf-8").split("\n")
     n = int(number)
     return lines[n - 1] if 0 < n <= len(lines) else ""
 
@@ -155,7 +162,10 @@ class Result(object):
         self.plan_text = None
         if world.out.exists():
             self.plan_text = world.out.read_text(encoding="utf-8")
-            self.plan = json.loads(self.plan_text)
+            try:
+                self.plan = json.loads(self.plan_text)
+            except ValueError:
+                self.plan = None  # e.g. a stale file a failed run left standing
 
     def ok(self):
         expect(self.rc == 0, f"plan exited {self.rc}: {self.stderr.strip()[-400:]}")
@@ -242,8 +252,8 @@ class World(object):
             e.pop(k, None)
         return e
 
-    def run(self, *args, cwd=None):
-        if self.out.exists():
+    def run(self, *args, cwd=None, keep_out=False):
+        if self.out.exists() and not keep_out:
             self.out.unlink()
         cmd = [sys.executable, "-I", str(SCRIPT), "plan", "--out", str(self.out),
                "--system-applications", str(self.apps), *args]
@@ -251,9 +261,9 @@ class World(object):
                            capture_output=True, text=True, timeout=180)
         return Result(r.returncode, r.stdout, r.stderr, self)
 
-    def run_inproc(self, mod, *args):
+    def run_inproc(self, mod, *args, keep_out=False):
         """main() in this process, so a test can change a module constant first."""
-        if self.out.exists():
+        if self.out.exists() and not keep_out:
             self.out.unlink()
         saved = dict(os.environ)
         out, err = io.StringIO(), io.StringIO()
@@ -998,12 +1008,108 @@ def hostile_input_contained():
         w.codex(raw='{"csa-zendesk": ' + "[" * 100000 + "]" * 100000 + "}")
         r = w.run()
         r.ok()
+        for client in ("Gemini", "Codex"):
+            expect((r.client_status(client) or "").startswith("not audited: "),
+                   f"{client}: {r.client_status(client)!r}")
+        # Whether 100,000-deep JSON parses depends on the build: uv's 3.14.10 and Apple's 3.9
+        # raise RecursionError, Homebrew's 3.14.10 parses it. Either is right here; what is
+        # pinned is that it never takes the other clients down. The classification of a
+        # RecursionError is pinned, on every build, by deep_nesting_is_not_audited.
+        desktop = r.client_status("Claude Desktop") or ""
+        expect(desktop == "ok" or "nested too deeply" in desktop, f"Desktop: {desktop!r}")
+        expect(r.f("csa-zendesk")["action"] == "re-point", "Claude Code was not audited")
+
+
+class _DeepJson(object):
+    """json, except that every parse is too deep: the RecursionError some builds raise at
+    100,000 levels and others do not, forced so the case runs the same on all of them."""
+    dumps = staticmethod(json.dumps)
+
+    @staticmethod
+    def loads(*a, **k):
+        raise RecursionError("maximum recursion depth exceeded while decoding a JSON array")
+
+
+@case
+def deep_nesting_is_not_audited():
+    mod = load_module()
+    mod.json = _DeepJson
+    try:
+        data, why = mod.parse_json("[]", "its config")
+    except RecursionError:
+        raise Failed("a RecursionError escaped the JSON reader")
+    expect(data is None and why == "its config is nested too deeply to read", f"{data}/{why!r}")
+    with world() as w:
+        w.claude(user={"csa-zendesk": reg(w.tmp / "gone" / "csa-zendesk-mcp")})
+        r = w.run_inproc(mod)
+        r.ok()
+        status = r.client_status("Claude Code") or ""
+        expect(status == "not audited: its config is nested too deeply to read", f"{status!r}")
+
+
+@case
+def lone_surrogate_is_malformed():
+    # JSON can carry a lone surrogate (`"\ud800"`), which no UTF-8 encoder accepts. In a
+    # command, an arg or an env key it is a malformed entry of that client, not a crash of all
+    # four: the fingerprint and the plan file both encode to UTF-8.
+    with world() as w:
+        gone = str(w.tmp / "gone" / "csa-zendesk-mcp")
+        w.claude(user={"csa-zendesk": reg(gone)},
+                 projects={"/p\ud800": {"mcpServers": {"csa-skilljar": reg(gone)}}})
+        w.gemini({"csa-zendesk": reg("/x\ud800")})
+        w.desktop({"csa-zendesk": reg(gone, ["--flag\ud800"])})
+        w.codex([{"name": "csa-zendesk", "transport": {"type": "stdio", "command": gone,
+                                                        "env": {"K\ud800": "v"}}}])
+        w.out.write_text("stale\n")
+        r = w.run(keep_out=True)
+        r.ok()
         for client in ("Gemini", "Claude Desktop", "Codex"):
             expect((r.client_status(client) or "").startswith("not audited: "),
                    f"{client}: {r.client_status(client)!r}")
-        expect("nested too deeply" in (r.client_status("Claude Desktop") or ""),
-               f"Desktop: {r.client_status('Claude Desktop')!r}")
         expect(r.f("csa-zendesk")["action"] == "re-point", "Claude Code was not audited")
+        expect(not r.findings("csa-skilljar"), "a project path no file system can hold was audited")
+
+
+@case
+def stale_plan_removed_on_failure():
+    # "nothing was written" must be true of --out: a plan file from an earlier run is not left
+    # standing beside a run that failed, where it could pass for this run's.
+    with world() as w:
+        mod = load_module()
+
+        def boom(*a, **k):
+            raise RuntimeError("deliberate")
+
+        mod.render = boom
+        w.out.write_text("stale\n")
+        r = w.run_inproc(mod, keep_out=True)
+        expect(r.rc == 2, f"exit {r.rc}")
+        expect(not w.out.exists(), "a stale plan file survived a failed run")
+
+
+@case
+def system_links_are_not_config_links():
+    # /tmp and /var are links on macOS (to /private/...). A config directly in one belongs to
+    # the machine's layout, not to a dotfiles repository, so it is not "a link" (A10).
+    mod = load_module()
+    for path in ("/tmp/.claude.json", "/var/.claude.json"):
+        expect(mod.linked_config(path) is False, f"{path} reads as linked")
+    with tempfile.TemporaryDirectory(prefix="csa-reg-link-") as t:
+        real = Path(t) / "real.json"
+        real.write_text("{}")
+        (Path(t) / "link.json").symlink_to(real)
+        expect(mod.linked_config(str(Path(t) / "link.json")) is True, "a linked file is not linked")
+
+
+@case
+def clean_replaces_separators_and_bidi():
+    mod = load_module()
+    hostile = "a" + chr(10) + "b" + chr(9) + "c" + "".join(
+        chr(cp) + ch for cp, ch in ((0x85, "d"), (0x2028, "e"), (0x2029, "f"), (0x202E, "g"),
+                                    (0x2066, "h"), (0x200F, "i"), (0x061C, "j"), (0xD800, "k")))
+    out = mod.clean(hostile)
+    expect(not CONTROL.search(out), f"left in: {out!r}")
+    expect(out == "a?b?c?d?e?f?g?h?i?j?k", f"cleaned to {out!r}")
 
 
 @case
@@ -1076,7 +1182,7 @@ def stdout_closed_writes_no_plan():
 @case
 def bom_has_its_own_reason():
     with world() as w:
-        w.claude(raw="﻿" + json.dumps({"mcpServers": {}}))
+        w.claude(raw=chr(0xFEFF) + json.dumps({"mcpServers": {}}))
         r = w.run()
         r.ok()
         status = r.client_status("Claude Code") or ""
@@ -1524,6 +1630,21 @@ def py39_syntax():
 
 
 @case
+def no_invisible_characters_in_source():
+    # A bidi control or a line separator written literally into source shows a reader
+    # something other than what runs ("Trojan Source"), and a literal U+2028 once shifted this
+    # file's own line arithmetic. Both files spell such characters as code points.
+    unsafe = set(range(0x00, 0x20)) - {0x09, 0x0A}
+    unsafe |= set(range(0x7F, 0xA0)) | {0x061C, 0x200E, 0x200F, 0x2028, 0x2029, 0xFEFF}
+    unsafe |= set(range(0x202A, 0x202F)) | set(range(0x2066, 0x206A))
+    for path in (SCRIPT, Path(__file__).resolve()):
+        text = path.read_text(encoding="utf-8")
+        found = sorted({(n, hex(ord(c))) for n, line in enumerate(text.split("\n"), 1)
+                        for c in line if ord(c) in unsafe})
+        expect(not found, f"{path.name}: invisible characters at {found[:5]}")
+
+
+@case
 def servers_table_matches_spec():
     mod = load_module()
     got = {k: (v.entry, v.module) for k, v in mod.SERVERS.items()}
@@ -1576,8 +1697,19 @@ MUTATIONS = [
     ("control_chars_cannot_forge_rows", "show key names uncleaned",
      "return sep.join(clean(k) for k in keys)", "return sep.join(keys)"),
     ("stdout_closed_writes_no_plan", "leave the plan file when the plan was not shown",
-     "        if args.out and os.path.exists(args.out):\n            os.unlink(args.out)\n"
-     "        say(", "        say("),
+     "        discard(args.out)\n        say(\"the plan", "        say(\"the plan"),
+    ("stale_plan_removed_on_failure", "leave an earlier plan file standing after a failure",
+     "        discard(args.out)\n        if not isinstance(e, Exception):",
+     "        if not isinstance(e, Exception):"),
+    ("lone_surrogate_is_malformed", "accept a string UTF-8 cannot encode",
+     '        value.encode("utf-8")\n', "        pass\n"),
+    ("deep_nesting_is_not_audited", "let a RecursionError past the JSON reader",
+     '    except RecursionError:\n        return None, f"{what} is nested too deeply to read"\n', ""),
+    ("no_invisible_characters_in_source", "write a line separator into the source literally",
+     "# A newline or a tab in a project path", "# A newline" + chr(0x2028) + "or a tab in a project path"),
+    ("clean_replaces_separators_and_bidi", "clean only the C0 and C1 controls",
+     "(0x061C, 0x061C), (0x200E, 0x200F),\n                 (0x2028, 0x2029), (0x202A, 0x202E), "
+     "(0x2066, 0x2069), (0xD800, 0xDFFF))", ")"),
     ("plan_file_has_no_values", "record args in the plan file",
      '"env_keys": sorted(f.reg.env),', '"args": f.reg.args, "env_keys": sorted(f.reg.env),'),
     ("internal_error_exits_2", "print the exception's message",

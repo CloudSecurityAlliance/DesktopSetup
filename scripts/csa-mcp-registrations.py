@@ -52,7 +52,7 @@ import subprocess
 import sys
 import tempfile
 
-SCRIPT_VERSION = "2026-11-13T00:15Z"
+SCRIPT_VERSION = "2026-11-13T02:40Z"
 
 # ── The plan's decisions (D1-D5). Each is pinned by one test; an answer changes the constant. ──
 
@@ -199,8 +199,16 @@ def home_dir():
 
 # A newline or a tab in a project path or an env key name would let a config forge a
 # `row<TAB>` line of its own, so every piece of a config that reaches a row, a to-do or a log
-# line passes through clean(): label(), tilde() and keys_text(). They are shown as `?`.
-CONTROL_RE = re.compile(r"[\x00-\x1f\x7f-\x9f]")
+# line passes through clean(): label(), tilde() and keys_text(). They are shown as `?`. Besides
+# the C0 and C1 controls: the Unicode line and paragraph separators (U+2028, U+2029), the bidi
+# marks and controls, which can reorder what a person reads (U+061C, U+200E, U+200F,
+# U+202A-U+202E, U+2066-U+2069), and lone surrogates, which no UTF-8 encoder accepts.
+# Built from code points, so this file holds none of them literally: a bidi control in
+# source is the hazard itself ("Trojan Source"), and a test refuses one in this file.
+UNSAFE_RANGES = ((0x00, 0x1F), (0x7F, 0x9F), (0x061C, 0x061C), (0x200E, 0x200F),
+                 (0x2028, 0x2029), (0x202A, 0x202E), (0x2066, 0x2069), (0xD800, 0xDFFF))
+CONTROL_RE = re.compile("[" + "".join(re.escape(chr(a)) + "-" + re.escape(chr(b))
+                                      for a, b in UNSAFE_RANGES) + "]")
 
 
 def clean(text):
@@ -228,11 +236,22 @@ def linked_config(path):
     repository read as a plain file, and a repair would have written into that repository. The
     anchor is the home directory for a config under it, else the directory that holds the
     config's own directory (a CLAUDE_CONFIG_DIR elsewhere). Links above the anchor, such as a
-    home directory on another volume, belong to the machine, not to the config.
+    home directory on another volume, belong to the machine, not to the config - and so does a
+    top-level directory: macOS's /tmp and /var are links to /private/..., so for a config
+    directly in one, the anchor is that directory itself.
+
+    The limit, kept: outside HOME, a link ABOVE the config's own directory (its grandparent or
+    higher) is not detected. Such a path is the machine's layout or the person's explicit
+    CLAUDE_CONFIG_DIR / CODEX_HOME, not a dotfile linked in.
     """
     path = os.path.abspath(path)
     home = os.path.abspath(home_dir()).rstrip("/")
-    anchor = home if home and path.startswith(home + "/") else os.path.dirname(os.path.dirname(path))
+    if home and path.startswith(home + "/"):
+        anchor = home
+    else:
+        anchor = os.path.dirname(os.path.dirname(path))
+        if os.path.dirname(anchor) == anchor:  # the root: the config's directory is top-level
+            anchor = os.path.dirname(path)
     expected = os.path.join(os.path.realpath(anchor), os.path.relpath(path, anchor))
     return os.path.realpath(path) != expected
 
@@ -325,9 +344,17 @@ class Registration(object):
 
 
 def _text(value):
-    """A string a client could pass to exec: no client can run one holding a NUL, and the path
-    calls below raise on one, so it is a malformed entry, not a dead one."""
-    return isinstance(value, str) and "\x00" not in value
+    """A string a client could pass to exec. No client can run one holding a NUL, or a lone
+    surrogate (JSON's `"\\ud800"`), which no UTF-8 encoder accepts; the path calls, the
+    fingerprint and the plan file would all raise on one. So it is a malformed entry of that
+    client, not a dead one, and not a failure of the whole audit."""
+    if not isinstance(value, str) or "\x00" in value:
+        return False
+    try:
+        value.encode("utf-8")
+    except UnicodeEncodeError:
+        return False
+    return True
 
 
 def _strings(value, what):
@@ -1010,6 +1037,15 @@ def write_private(path, text):
         raise
 
 
+def discard(path):
+    """Remove --out, if there is one: what a failed run leaves must not pass for a plan."""
+    if path and os.path.lexists(path):
+        try:
+            os.unlink(path)
+        except OSError:
+            pass
+
+
 class OutputLost(Exception):
     """The plan could not be shown, so no plan file may stand for it."""
 
@@ -1055,14 +1091,9 @@ def plan(args):
         show(lines)
     except OutputLost:
         # Nobody saw this plan, so nothing may later act on it as the one agreed to (A4).
-        if args.out and os.path.exists(args.out):
-            os.unlink(args.out)
+        discard(args.out)
         say("the plan could not be printed; nothing was written")
         return 2
-    except BaseException:
-        if args.out and os.path.exists(args.out):
-            os.unlink(args.out)
-        raise
     return 0
 
 
@@ -1082,7 +1113,12 @@ def main(argv=None):
         return 2
     try:
         return plan(args)
-    except Exception as e:
+    except BaseException as e:
+        # "Nothing was written" holds for --out too: a plan file from an earlier run is removed,
+        # so it cannot stand beside this failed run and pass for its plan (A4).
+        discard(args.out)
+        if not isinstance(e, Exception):
+            raise
         say(f"internal error ({describe_error(e)}); nothing was written")
         return 2
 
