@@ -2743,6 +2743,9 @@ spec.loader.exec_module(mod)
 point, marker = sys.argv[2], sys.argv[3]
 
 def hold(at, path):
+    if at == "replaced" and point == "restoring":
+        with open(path, "w") as f:  # the read-back then fails, and the backup is restored
+            f.write("{}\n")
     if at == point:
         open(marker, "w").close()
         time.sleep(60)
@@ -2751,12 +2754,23 @@ mod.TEST_HOOK = hold
 sys.exit(mod.main(sys.argv[4:]))
 '''
 
+# (signal, the point it lands at, exit status, what stderr says)
+SIGNAL_POINTS = [
+    (signal.SIGTERM, "locked", 143, b"stopped by a signal"),     # between the mkdir and its return
+    (signal.SIGHUP, "temp-made", 129, b"stopped by a signal"),   # straight after the temp's open
+    (signal.SIGTERM, "written", 143, b"stopped by a signal"),
+    (signal.SIGHUP, "backed-up", 129, b"stopped by a signal"),
+    (signal.SIGTERM, "restoring", 143, b"stopped by a signal"),  # mid-restore of a failed read-back
+    (signal.SIGINT, "written", 130, b"stopped by an interrupt"),
+]
+
 
 @case
 def signal_mid_write_leaves_nothing():
-    # SIGTERM or SIGHUP mid-write: no temp copy of the config (it holds the settings' values),
-    # no backup made for a write that did not happen, and Claude Code's lock released.
-    for sig, point in ((signal.SIGTERM, "written"), (signal.SIGHUP, "backed-up")):
+    # A signal anywhere in a write: no temp copy of the config (it holds the settings' values),
+    # no backup made for a write that did not happen, Claude Code's lock released, one line on
+    # stderr and no traceback (reviews of d39f719 and b417a67).
+    for sig, point, status, said in SIGNAL_POINTS:
         with world() as w:
             w.std("csa-zendesk")
             cfg = w.claude(user={"csa-zendesk": reg(gone(w, "csa-zendesk"), env={"K": SECRET_A})})
@@ -2765,14 +2779,14 @@ def signal_mid_write_leaves_nothing():
             driver = w.tmp / "driver.py"
             driver.write_text(SIGNAL_DRIVER)
             marker = w.tmp / "at-point"
-            # Both signals at their defaults in the child, whatever the runner ignores: apply
+            # Each signal at its default in the child, whatever the runner ignores: apply
             # leaves a signal its caller ignores ignored (nohup), which is not this case.
             p = subprocess.Popen([sys.executable, "-I", str(driver), str(SCRIPT), point,
                                   str(marker)] + w.apply_argv("plan", []),
                                  env=w.apply_env(False), cwd=str(w.tmp),
                                  stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                                 preexec_fn=lambda: [signal.signal(s, signal.SIG_DFL)
-                                                     for s in (signal.SIGTERM, signal.SIGHUP)])
+                                 preexec_fn=lambda: [signal.signal(s, signal.SIG_DFL) for s in
+                                                     (signal.SIGTERM, signal.SIGHUP, signal.SIGINT)])
             try:
                 deadline = time.time() + 120
                 while not marker.exists() and p.poll() is None and time.time() < deadline:
@@ -2784,11 +2798,29 @@ def signal_mid_write_leaves_nothing():
                 if p.poll() is None:
                     p.kill()
                     p.communicate()
-            expect(p.returncode == 128 + sig, f"{sig.name}: exit {p.returncode}: {err[-300:]!r}")
+            where = f"{sig.name} at {point}"
+            expect(p.returncode == status, f"{where}: exit {p.returncode}: {err[-300:]!r}")
             left = sorted(n for n in os.listdir(w.home) if n not in (".claude.json", ".local"))
-            expect(not left, f"{sig.name} at {point}: left behind: {left}")
-            expect(state(cfg) == before, f"{sig.name}: the config changed")
-            expect(b"stopped by a signal" in err, f"{sig.name}: stderr {err[-300:]!r}")
+            if point == "restoring":
+                # The restore did not finish: the backup is the good copy, and stays.
+                expect(len(left) == 1 and left[0].startswith(".claude.json.bak-"),
+                       f"{where}: left behind: {left}")
+            else:
+                expect(not left, f"{where}: left behind: {left}")
+                expect(state(cfg) == before, f"{where}: the config changed")
+            expect(said in err and b"Traceback" not in err, f"{where}: stderr {err[-300:]!r}")
+            expect(SECRET_A.encode() not in err, f"{where}: a value reached stderr")
+    with world() as w:
+        # The handlers apply sets are the caller's again once it returns.
+        mod = load_module()
+        w.std("csa-zendesk")
+        w.claude(user={"csa-zendesk": reg(gone(w, "csa-zendesk"))})
+        w.run().ok()
+        sigs = (signal.SIGTERM, signal.SIGHUP)
+        before = [signal.getsignal(s) for s in sigs]
+        w.apply_inproc(mod).ok()
+        after = [signal.getsignal(s) for s in sigs]
+        expect(after == before, f"handlers not restored: {after} != {before}")
     with world() as w:
         # A signal the caller ignores (nohup ignores SIGHUP) stays ignored while apply runs.
         mod = load_module()
@@ -2801,6 +2833,13 @@ def signal_mid_write_leaves_nothing():
         expect(during == signal.SIG_IGN, f"an ignored SIGHUP was made to stop apply: {during}")
 
 
+def ended_pid():
+    """The pid of a process that has exited and been reaped."""
+    p = subprocess.Popen(["/bin/sh", "-c", "exit 0"])
+    p.wait()
+    return p.pid
+
+
 @case
 def stale_temp_files_swept():
     # A temp file a stopped run left holds a config's secrets. The next apply removes this
@@ -2811,30 +2850,71 @@ def stale_temp_files_swept():
         w.desktop({})
         w.run().ok()
         old, future = time.time() - 3600, time.time() + 3600
+        dead = ended_pid()
+        live = os.getpid()  # this test: a run still going
         desktop_dir = desktop_cfg(w).parent
-        stale = [w.home / ".csa-registrations-ab12cd_9", desktop_dir / ".csa-registrations-0z9y8x7w"]
-        kept = [w.home / ".csa-registrations-keep.txt", w.home / ".csa-registrations-ABCDEFGH",
-                w.home / ".csa-registrations-short", w.home / "csa-registrations-ab12cd_9",
-                w.tmp / ".csa-registrations-elsewhe"]
+        stale = [w.home / f".csa-registrations-{dead}-ab12cd_9",
+                 desktop_dir / f".csa-registrations-{dead}-0z9y8x7w"]
+        kept = [w.home / f".csa-registrations-{live}-ab12cd_9",       # its run is alive
+                w.home / f".csa-registrations-{dead}-ab12cd_8\n",      # `$` would match this
+                w.home / f".csa-registrations-{dead}-keep.txt",
+                w.home / f".csa-registrations-{dead}-ABCDEFGH",
+                w.home / ".csa-registrations-ab12cd_9",                # no pid
+                w.home / f"csa-registrations-{dead}-ab12cd_9",
+                w.tmp / f".csa-registrations-{dead}-elsewher"]          # not a config's directory
         for p in stale + kept:
             p.write_text(SECRET_A)
             os.utime(p, (old, old))
-        newer = w.home / ".csa-registrations-zz99zz99"  # changed after the run began
+        newer = w.home / f".csa-registrations-{dead}-zz99zz99"  # changed after the run began
         newer.write_text("x")
         os.utime(newer, (future, future))
         outside = w.tmp / "outside.txt"
         outside.write_text("outside")
-        link = w.home / ".csa-registrations-lnk00000"
+        link = w.home / f".csa-registrations-{dead}-lnk00000"
         link.symlink_to(outside)
         os.utime(link, (old, old), follow_symlinks=False)
         a = w.apply()
         a.ok()
         for p in stale:
-            expect(not os.path.lexists(p), f"{p.name}: a stale temp file was left")
+            expect(not os.path.lexists(p), f"{p.name!r}: a stale temp file was left")
         for p in kept + [newer, link]:
-            expect(os.path.lexists(p), f"{p.name}: removed, though it is not a stale temp file")
+            expect(os.path.lexists(p), f"{p.name!r}: removed, though it is not a stale temp file")
         expect(outside.read_text() == "outside", "a link's target was touched")
         expect(any("stopped mid-write" in i for i in a.infos), f"not said: {a.infos}")
+    with world() as w:
+        # Another user's file is never removed: here every file reads as someone else's.
+        mod = load_module()
+
+        class OtherUser(object):
+            def __getattr__(self, name):
+                return getattr(os, name)
+
+            @staticmethod
+            def getuid():
+                return os.getuid() + 1
+
+        mod.os = OtherUser()
+        w.claude(user={})
+        w.run().ok()
+        stale = w.home / f".csa-registrations-{ended_pid()}-ab12cd_9"
+        stale.write_text("x")
+        os.utime(stale, (time.time() - 3600,) * 2)
+        w.apply_inproc(mod).ok()
+        expect(stale.exists(), "another user's file was removed")
+    with world() as w:
+        # A config directory that is a link (A10) is not swept: nothing of this tool's is
+        # written there, and the link's target is somebody's dotfiles.
+        dots = w.tmp / "dotfiles" / "gemini"
+        dots.mkdir(parents=True)
+        (dots / "settings.json").write_text(json.dumps({"mcpServers": {}}))
+        (w.home / ".gemini").symlink_to(dots)
+        w.stub("gemini", "exit 0")
+        w.run().ok()
+        stale = dots / f".csa-registrations-{ended_pid()}-ab12cd_9"
+        stale.write_text("x")
+        os.utime(stale, (time.time() - 3600,) * 2)
+        w.apply().ok()
+        expect(stale.exists(), "a file was removed through a linked config directory")
 
 
 @case
@@ -3018,6 +3098,53 @@ def hard_linked_config_refused():
             expect(os.stat(path).st_ino == os.stat(name).st_ino, f"{path.name} was detached")
         expect(len(a.warned("hard link")) == 2, f"warns: {a.warns}")
         expect(not a.oks, f"oks: {a.oks}")
+    with world() as w:
+        # A hard link made after the read: the replace would still cut it off.
+        mod = load_module()
+        w.std("csa-zendesk")
+        cfg = w.claude(user={"csa-zendesk": reg(gone(w, "csa-zendesk"))})
+        w.run().ok()
+        other = w.tmp / "claude-other-name.json"
+        mod.TEST_HOOK = lambda point, path: os.link(path, other) if point == "written" else None
+        before = Path(cfg).read_bytes()
+        a = w.apply_inproc(mod)
+        a.ok()
+        expect(Path(cfg).read_bytes() == before, "written over a hard link made after the read")
+        expect(os.stat(cfg).st_ino == os.stat(other).st_ino, "the other name was cut off")
+        expect(a.warned(R_CHANGED), f"warns: {a.warns}")
+
+
+@case
+def confinement_check_refuses_a_damaged_entry():
+    # The entry built for the write must differ from the one read in its command (and args)
+    # only. The read-back compares with that built entry, so it cannot catch damage done in
+    # building it: this check is what does (review of b417a67).
+    def drop_env(entry, command, args):
+        return {k: (command if k == "command" else v) for k, v in entry.items() if k != "env"}
+
+    def add_key(entry, command, args):
+        return dict(entry, command=command, extra=True)
+
+    def reorder(entry, command, args):
+        return dict(reversed(list(dict(entry, command=command).items())))
+
+    def change_value(entry, command, args):
+        return dict(entry, command=command, env={"K": "other"})
+
+    for damage in (drop_env, add_key, reorder, change_value):
+        with world() as w:
+            mod = load_module()
+            mod.repointed = damage
+            w.std("csa-zendesk")
+            cfg = w.claude(user={"csa-zendesk": reg(gone(w, "csa-zendesk"), env={"K": SECRET_A})})
+            w.run().ok()
+            before = state(cfg)
+            a = w.apply_inproc(mod)
+            a.ok()
+            name = damage.__name__
+            expect(state(cfg) == before, f"{name}: the damaged entry was written")
+            expect(a.warned("could not be confined to its command"), f"{name}: {a.warns}")
+            expect(not a.oks, f"{name}: ok printed: {a.oks}")
 
 
 @case
@@ -3036,6 +3163,8 @@ def lock_held_too_long_abandons():
         a.ok()
         expect(state(cfg) == before, "written after holding the lock too long")
         expect(backups(cfg) == [], f"a backup was left: {backups(cfg)}")
+        temps = [n for n in os.listdir(w.home) if n.startswith(".csa-registrations-")]
+        expect(not temps, f"the temp copy of the config was left: {temps}")
         expect(a.warned("held Claude Code's lock for more than"), f"{a.warns}")
         expect(not (w.home / ".claude.json.lock").exists(), "its own lock was left")
 
@@ -3279,10 +3408,10 @@ MUTATIONS = [
      "    return (client, scope, project, name, fingerprint, config)",
      "    return (client, scope, project, name, config)"),
     ("desktop_mode_0600_kept", "write the temp file with plain open(), at the umask's mode",
-     "    fd, tmp = tempfile.mkstemp(dir=os.path.dirname(path), prefix=TMP_PREFIX)\n    try:\n"
-     '        with os.fdopen(fd, "wb") as fh:\n            os.fchmod(fh.fileno(), mode)\n',
-     '    tmp = os.path.join(os.path.dirname(path), TMP_PREFIX + "plain")\n    try:\n'
-     '        with open(tmp, "wb") as fh:\n'),
+     '    fd = new_temp(os.path.dirname(path), made)\n    with os.fdopen(fd, "wb") as fh:\n'
+     "        os.fchmod(fh.fileno(), mode)\n",
+     '    made.append(os.path.join(os.path.dirname(path), TMP_PREFIX + "plain"))\n'
+     '    with open(made[-1], "wb") as fh:\n'),
     ("dead_user_scope_repointed_env_kept", "copy env through str()",
      "        else:\n            new[key] = value\n    return new\n",
      '        else:\n            new[key] = str(value) if key == "env" else value\n    return new\n'),
@@ -3291,14 +3420,14 @@ MUTATIONS = [
      "    path = os.path.realpath(path)\n    if False:\n"),
     ("abandoned_write_leaves_no_backup", "back up before the stat check",
      "        if moved(path, before):                            # 5\n            return abandon(tmp)\n"
-     "        backup = make_backup(path, stamp, mode)            # 6\n",
-     "        backup = make_backup(path, stamp, mode)            # 6\n"
+     "        backup = make_backup(path, stamp, mode, kept)      # 6\n",
+     "        backup = make_backup(path, stamp, mode, kept)      # 6\n"
      "        if moved(path, before):                            # 5\n            return abandon(tmp)\n"),
     ("desktop_started_after_plan_skipped", "drop the apply-time Desktop re-check",
      "        running = (desktop_running(ctx, fresh=True)\n", "        running = (False\n"),
     # ── apply: the guards Task 2 added, each broken on purpose (ADR-005) ──
     ("claude_lock_honoured", "write without taking Claude Code's lock",
-     "                os.mkdir(self.lock, 0o700)\n                break\n", "                break\n"),
+     "                os.mkdir(self.lock, 0o700)\n", ""),
     ("claude_lock_honoured", "break a lock still held after the wait",
      "                    raise Locked(self.lock)\n",
      "                    os.rmdir(self.lock)\n                    continue\n"),
@@ -3306,7 +3435,7 @@ MUTATIONS = [
      'if reg.transport != "stdio" or reg.fingerprint() != c.fingerprint:',
      'if reg.transport != "stdio":'),
     ("concurrent_change_aborts_write", "compare only the file type, not its permissions",
-     "st.st_size, st.st_mode\n", "st.st_size, stat.S_IFMT(st.st_mode)\n"),
+     "st.st_size, st.st_mode, st.st_nlink\n", "st.st_size, stat.S_IFMT(st.st_mode), st.st_nlink\n"),
     ("abandoned_write_leaves_no_backup", "keep the backup when the file moves after it is made",
      "            return abandon(tmp, backup)\n", "            return abandon(tmp)\n"),
     ("readback_mismatch_restores", "skip the read-back",
@@ -3334,11 +3463,11 @@ MUTATIONS = [
      "        if sig is None or signal.getsignal(sig) == signal.SIG_IGN:", "        if sig is None:"),
     ("stale_temp_files_swept", "sweep nothing", "            n = sweep_temps(directory, started)",
      "            n = 0"),
-    ("stale_temp_files_swept", "sweep temp files of any age", "                and st.st_mtime < since):",
-     "                and True):"),
-    ("stale_temp_files_swept", "sweep any name with the prefix",
-     r'TMP_NAME = re.compile(r"^\.csa-registrations-[a-z0-9_]{8}$")',
-     r'TMP_NAME = re.compile(r"^\.csa-registrations-")'),
+    ("stale_temp_files_swept", "sweep temp files of any age", "and st.st_mtime < since and",
+     "and True and"),
+    ("stale_temp_files_swept", "sweep any name with the prefix and a pid",
+     r'TMP_NAME = re.compile(r"\.csa-registrations-(\d+)-[a-z0-9_]{8}")',
+     r'TMP_NAME = re.compile(r"\.csa-registrations-(\d+).*")'),
     ("stale_temp_files_swept", "sweep links too", "        if (stat.S_ISREG(st.st_mode) and",
      "        if (True and"),
     ("desktop_state_unknown_at_write_skipped", "treat 'could not tell' as not running at the write",
@@ -3374,10 +3503,49 @@ MUTATIONS = [
     ("duplicate_plan_row_resolves_to_leave", "let a re-point row win over a left one",
      "    return repoint - left, every, None", "    return repoint, every, None"),
     ("claude_lock_honoured", "never release the lock",
-     "                os.rmdir(self.lock)\n", "                os.stat(self.lock)\n"),
+     "            try:\n                os.rmdir(self.lock)\n",
+     "            try:\n                os.stat(self.lock)\n"),
     ("write_failure_says_no_value", "report a failed write by the exception's text",
      "why = e.strerror if isinstance(e, OSError) and e.strerror else describe_error(e)",
      "why = repr(e)"),
+    # ── apply: the review of b417a67 ──
+    ("signal_mid_write_leaves_nothing", "leave the lock when a signal lands before __enter__ returns",
+     "                try:\n                    os.rmdir(self.lock)\n                except OSError:\n"
+     "                    pass\n                raise", "                raise"),
+    ("signal_mid_write_leaves_nothing", "learn the temp's name only once it exists",
+     "        made.append(name)\n        try:\n"
+     '            fd = os.open(name, os.O_WRONLY | os.O_CREAT | os.O_EXCL\n'
+     '                         | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_CLOEXEC", 0), 0o600)\n'
+     '            hook("temp-made", name)\n',
+     "        try:\n"
+     '            fd = os.open(name, os.O_WRONLY | os.O_CREAT | os.O_EXCL\n'
+     '                         | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_CLOEXEC", 0), 0o600)\n'
+     '            hook("temp-made", name)\n            made.append(name)\n'),
+    ("signal_mid_write_leaves_nothing", "leave the temp when a signal lands mid-restore",
+     "        for n in made:\n            unlink_quietly(n)\n        if isinstance(e, OSError):",
+     "        if isinstance(e, OSError):"),
+    ("signal_mid_write_leaves_nothing", "let an interrupt end in a traceback",
+     "        except KeyboardInterrupt:\n", "        except ZeroDivisionError:\n"),
+    ("signal_mid_write_leaves_nothing", "leave the caller's signal handlers replaced",
+     "        for sig, old in saved.items():\n"
+     "            signal.signal(sig, old if old is not None else signal.SIG_DFL)",
+     "        pass"),
+    ("stale_temp_files_swept", "sweep a run's file while it is still running",
+     " and not run_alive(int(m.group(1)))):", "):"),
+    ("stale_temp_files_swept", "match a name by its start, not whole",
+     "TMP_NAME.fullmatch(name)", "TMP_NAME.match(name)"),
+    ("stale_temp_files_swept", "sweep another user's files",
+     "(uid is None or st.st_uid == uid)", "True"),
+    ("stale_temp_files_swept", "sweep through a linked config directory",
+     "        if directory and directory not in swept and not linked_config(config):",
+     "        if directory and directory not in swept:"),
+    ("lock_held_too_long_abandons", "leave the temp when the lock check stops the write",
+     '            unlink_quietly(tmp)\n            unlink_quietly(backup)\n            return "refused", why',
+     '            unlink_quietly(backup)\n            return "refused", why'),
+    ("hard_linked_config_refused", "ignore a hard link made after the read",
+     "st.st_mode, st.st_nlink\n", "st.st_mode\n"),
+    ("confinement_check_refuses_a_damaged_entry", "drop the in-memory confinement check",
+     "        if not only_command_changed(old, new, c):", "        if False:"),
 ]
 
 

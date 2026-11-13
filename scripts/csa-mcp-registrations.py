@@ -33,8 +33,10 @@ only the lock it made. Every write makes no backup until the file is known uncha
 was read, keeps the file's mode, refuses a config with a second name (a hard link), and reads
 back what it wrote, restoring the backup if that differs. Backups are `<file>.bak-<14 digits>`,
 pruned to three, as csa-claude-connectors.py names and prunes them; each holds the same secrets
-as its file, at its mode. SIGTERM and SIGHUP stop apply through its clean-ups, and each apply
-removes this tool's own temp files older than itself that a run stopped mid-write left.
+as its file, at its mode. SIGTERM, SIGHUP and an interrupt stop apply through its clean-ups,
+with one line on stderr. Each apply removes this tool's own temp files that a run stopped
+mid-write left: older than itself, and only when the run that made one (its pid is in the name)
+is gone, so two applies at once never take each other's file.
 
 Re-serialising a JSON config keeps every value, the key order, the indent width (tabs too), the
 trailing newline or its absence, and CRLF. What it can change is spelling only: the whitespace
@@ -76,6 +78,7 @@ import hashlib
 import json
 import os
 import re
+import secrets
 import shutil
 import signal
 import stat
@@ -85,7 +88,7 @@ import tempfile
 import time
 import unicodedata
 
-SCRIPT_VERSION = "2026-11-13T14:57Z"
+SCRIPT_VERSION = "2026-11-13T15:37Z"
 
 # ── The plan's decisions (D1-D5). Each is pinned by one test; an answer changes the constant. ──
 
@@ -1264,10 +1267,12 @@ LOCK_HOLD_MAX = 5.0
 BACKUPS_KEPT = 3
 BACKUP_RE = re.compile(r"\.bak-\d{14}$")
 TMP_PREFIX = ".csa-registrations-"
-# The names mkstemp gives this tool's temp files: the prefix and eight of its characters. A run
-# killed mid-write can leave one, holding the config's secrets; the next apply removes those
-# older than itself, and nothing else.
-TMP_NAME = re.compile(r"^\.csa-registrations-[a-z0-9_]{8}$")
+# This tool's temp files beside a config: the prefix, the pid of the run that made it, and eight
+# random characters. A run killed mid-write can leave one, holding the config's secrets; the next
+# apply removes those older than itself whose run is gone, and nothing else (sweep_temps).
+# Matched whole (fullmatch): `$` alone also matches before a name's trailing newline.
+TMP_NAME = re.compile(r"\.csa-registrations-(\d+)-[a-z0-9_]{8}")
+TMP_CHARS = "abcdefghijklmnopqrstuvwxyz0123456789_"
 
 # The tests set this to see, or move, a file between the steps of a write. Never set in a run.
 TEST_HOOK = None
@@ -1457,14 +1462,23 @@ class ClaudeLock(object):
         while True:
             try:
                 os.mkdir(self.lock, 0o700)
-                break
+                hook("locked", self.lock)
+                self.taken = time.time()
+                self.mine = dir_identity(self.lock)
+                return self
             except FileExistsError:
                 if time.monotonic() >= deadline:
                     raise Locked(self.lock)
                 time.sleep(LOCK_POLL)
-        self.taken = time.time()
-        self.mine = dir_identity(self.lock)
-        return self
+            except BaseException:
+                # This mkdir found no lock there, so one there now is this run's: a signal
+                # between the mkdir and the return, where __exit__ will never run, would
+                # otherwise leave it for every later run to wait on (review of b417a67).
+                try:
+                    os.rmdir(self.lock)
+                except OSError:
+                    pass
+                raise
 
     def ours(self):
         return self.mine is not None and dir_identity(self.lock) == self.mine
@@ -1501,8 +1515,9 @@ class NoLock(object):
 
 def identity(st):
     """What must not move between the read and the replace. The whole mode, not just the type:
-    a chmod since the read changes no mtime, and the replace would put the old mode back."""
-    return st.st_dev, st.st_ino, st.st_mtime_ns, st.st_size, st.st_mode
+    a chmod since the read changes no mtime, and the replace would put the old mode back. The
+    link count: a hard link made since the read would be cut off by the replace."""
+    return st.st_dev, st.st_ino, st.st_mtime_ns, st.st_size, st.st_mode, st.st_nlink
 
 
 def moved(path, before):
@@ -1534,14 +1549,17 @@ def backup_stamp():
     return time.strftime("%Y%m%d%H%M%S")
 
 
-def make_backup(path, stamp, mode):
+def make_backup(path, stamp, mode, kept):
     """`<path>.bak-<stamp>`, a copy2 of the file, at its mode and never looser. The name is
-    claimed with O_EXCL first, so nothing already there, a link included, is written through."""
+    claimed with O_EXCL first, so nothing already there, a link included, is written through.
+    It goes into `kept` once claimed and before a byte is copied: a signal can at worst leave
+    an empty file there, which the prune bounds, and never one holding the config's secrets."""
     backup = f"{path}.bak-{stamp}"
     fd = os.open(backup, os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0),
                  0o600)
-    os.close(fd)
+    kept.append(backup)
     try:
+        os.close(fd)
         shutil.copy2(path, backup)
         if stat.S_IMODE(os.lstat(backup).st_mode) & ~mode:
             raise OSError(0, "its backup came out more permissive than the file")
@@ -1551,19 +1569,36 @@ def make_backup(path, stamp, mode):
     return backup
 
 
-def write_temp(path, data, mode):
-    """mkstemp beside `path`, set to `mode` before a byte is written, then the bytes, fsynced."""
-    fd, tmp = tempfile.mkstemp(dir=os.path.dirname(path), prefix=TMP_PREFIX)
-    try:
-        with os.fdopen(fd, "wb") as fh:
-            os.fchmod(fh.fileno(), mode)
-            fh.write(data)
-            fh.flush()
-            os.fsync(fh.fileno())
-    except BaseException:
-        unlink_quietly(tmp)
-        raise
-    return tmp
+def new_temp(directory, made):
+    """Create one of this tool's temp files in `directory`, 0600, and return its descriptor:
+    what mkstemp does, except that the name goes into `made` BEFORE the file exists. Whoever
+    handles a failure at any later point - a signal inside this call, or between two statements
+    after it - can then name the file and remove it (review of b417a67: a signal straight after
+    mkstemp left one). The pid in the name lets sweep_temps leave a live run's file alone."""
+    for _ in range(100):
+        name = os.path.join(directory, "%s%d-%s" % (
+            TMP_PREFIX, os.getpid(), "".join(secrets.choice(TMP_CHARS) for _ in range(8))))
+        made.append(name)
+        try:
+            fd = os.open(name, os.O_WRONLY | os.O_CREAT | os.O_EXCL
+                         | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_CLOEXEC", 0), 0o600)
+            hook("temp-made", name)
+            return fd
+        except FileExistsError:
+            made.remove(name)  # not this run's: never removed
+    raise OSError(0, "no free name for a temporary file")
+
+
+def write_temp(path, data, mode, made):
+    """A temp file beside `path`, set to `mode` before a byte is written, then the bytes,
+    fsynced. Its name is in `made` from before it exists: removing it on a failure is the
+    caller's, whatever the failure and wherever it lands."""
+    fd = new_temp(os.path.dirname(path), made)
+    with os.fdopen(fd, "wb") as fh:
+        os.fchmod(fh.fileno(), mode)
+        fh.write(data)
+        fh.flush()
+        os.fsync(fh.fileno())
 
 
 def abandon(*paths):
@@ -1588,13 +1623,14 @@ def replace_file(path, data, before, stamp, verify, lock):
     write leaves no backup and prunes nothing. Only a replace that reads back as intended
     prunes (A13)."""
     mode = stat.S_IMODE(before.st_mode) & 0o777
-    tmp = write_temp(path, data, mode)                     # 4
-    backup = None
+    made, kept = [], []  # the temp's name, and the backup's, each known before it exists
     try:
+        write_temp(path, data, mode, made)                 # 4
+        tmp = made[-1]
         hook("written", path)
         if moved(path, before):                            # 5
             return abandon(tmp)
-        backup = make_backup(path, stamp, mode)            # 6
+        backup = make_backup(path, stamp, mode, kept)      # 6
         hook("backed-up", path)
         if moved(path, before):                            # 7
             return abandon(tmp, backup)
@@ -1604,12 +1640,13 @@ def replace_file(path, data, before, stamp, verify, lock):
             unlink_quietly(backup)
             return "refused", why
         os.replace(tmp, path)                              # 8
-        tmp = None
     except BaseException:
-        if tmp is not None:
-            unlink_quietly(tmp)
-            if backup is not None:
-                unlink_quietly(backup)
+        # Before the replace the temp file is still there: it goes, and so does a backup made
+        # for it. After the replace its name is gone, and the backup is the copy of what was
+        # replaced: kept.
+        if any(os.path.lexists(n) for n in made):
+            for n in made + kept:
+                unlink_quietly(n)
         raise
     hook("replaced", path)
     if not verify():                                       # 9
@@ -1619,17 +1656,21 @@ def replace_file(path, data, before, stamp, verify, lock):
 
 
 def restore(path, backup, mode):
-    """Put the backup's bytes back, atomically and at the file's mode. The backup is kept."""
-    tmp = None
+    """Put the backup's bytes back, atomically and at the file's mode. The backup is kept. A
+    failure, a signal included, removes the temp file, which holds the config's secrets."""
+    made = []
     try:
         with open(backup, "rb") as fh:
             saved = fh.read()
-        tmp = write_temp(path, saved, mode)
-        os.replace(tmp, path)
-    except OSError:
-        if tmp is not None:
-            unlink_quietly(tmp)
-        return "unrestored"
+        write_temp(path, saved, mode, made)
+        hook("restoring", path)
+        os.replace(made[-1], path)
+    except BaseException as e:
+        for n in made:
+            unlink_quietly(n)
+        if isinstance(e, OSError):
+            return "unrestored"
+        raise
     return "restored"
 
 
@@ -1645,11 +1686,31 @@ def outcome(status, change, detail):
     return refused(change, R_CHANGED)
 
 
+def run_alive(pid):
+    """Is the run that made a temp file still running? Unsure is yes: a pid another process
+    has since taken only delays a removal to a later run."""
+    if os.name == "nt":  # os.kill there ends a process; nothing calls this on Windows (#184)
+        return True
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    except (OverflowError, ValueError):
+        return False  # not a pid at all, so no run's
+    except OSError:
+        return True
+    return True
+
+
 def sweep_temps(directory, since):
-    """Remove this tool's own temp files in `directory` that are older than this run: a run
-    killed between its mkstemp and its replace leaves one, holding the config's secrets. Only
-    regular files, owned by this user, named exactly as mkstemp names them here (TMP_NAME), and
-    last changed before `since`. Never anything else. Returns how many were removed."""
+    """Remove this tool's own temp files in `directory` that a run stopped mid-write left: each
+    holds the config's secrets. Only regular files, owned by this user, named exactly as
+    new_temp names them (TMP_NAME, matched whole), changed before `since` - this run's start -
+    and whose run is no longer alive, so two applies at once never take each other's file
+    (review of b417a67: a second run deleted a first run's live temp, which then failed safe,
+    "could not be written"). Never anything else. Returns how many were removed."""
     try:
         names = os.listdir(directory)
     except OSError:
@@ -1657,7 +1718,8 @@ def sweep_temps(directory, since):
     uid = os.getuid() if hasattr(os, "getuid") else None
     removed = 0
     for name in names:
-        if not TMP_NAME.match(name):
+        m = TMP_NAME.fullmatch(name)
+        if not m:
             continue
         p = os.path.join(directory, name)
         try:
@@ -1665,7 +1727,7 @@ def sweep_temps(directory, since):
         except OSError:
             continue
         if (stat.S_ISREG(st.st_mode) and (uid is None or st.st_uid == uid)
-                and st.st_mtime < since):
+                and st.st_mtime < since and not run_alive(int(m.group(1)))):
             try:
                 os.unlink(p)
                 removed += 1
@@ -2146,6 +2208,10 @@ def main(argv=None):
         except SystemExit:
             say("stopped by a signal, with what was reported done")
             raise
+        except KeyboardInterrupt:
+            # Every clean-up has run on the way here; a traceback would add nothing.
+            say("stopped by an interrupt, with what was reported done")
+            return 130
         except OutputLost:
             say("the results could not be printed; stopped, with what was reported done")
             return 2
