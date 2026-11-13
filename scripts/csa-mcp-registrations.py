@@ -37,7 +37,8 @@ plans/reviews/2026-11-12-registration-repair-measurements.md (M0, M3, M7).
     python3 -I scripts/csa-mcp-registrations.py plan --out plan.json   # and record it
 
 Output is one `row<TAB>text` line per row of the plan, and `log<TAB>text` for what is only
-logged. Exit 0, or 2 on an internal error, in which case --out is not written.
+logged. --out must be a new file: an existing one, or the path of any client's config, is
+refused and left as it is. Exit 0, or 2 on an error, in which case no plan file is left.
 """
 import argparse
 import collections
@@ -51,8 +52,9 @@ import signal
 import subprocess
 import sys
 import tempfile
+import unicodedata
 
-SCRIPT_VERSION = "2026-11-13T02:40Z"
+SCRIPT_VERSION = "2026-11-13T03:37Z"
 
 # ── The plan's decisions (D1-D5). Each is pinned by one test; an answer changes the constant. ──
 
@@ -199,20 +201,21 @@ def home_dir():
 
 # A newline or a tab in a project path or an env key name would let a config forge a
 # `row<TAB>` line of its own, so every piece of a config that reaches a row, a to-do or a log
-# line passes through clean(): label(), tilde() and keys_text(). They are shown as `?`. Besides
-# the C0 and C1 controls: the Unicode line and paragraph separators (U+2028, U+2029), the bidi
-# marks and controls, which can reorder what a person reads (U+061C, U+200E, U+200F,
-# U+202A-U+202E, U+2066-U+2069), and lone surrogates, which no UTF-8 encoder accepts.
-# Built from code points, so this file holds none of them literally: a bidi control in
-# source is the hazard itself ("Trojan Source"), and a test refuses one in this file.
-UNSAFE_RANGES = ((0x00, 0x1F), (0x7F, 0x9F), (0x061C, 0x061C), (0x200E, 0x200F),
-                 (0x2028, 0x2029), (0x202A, 0x202E), (0x2066, 0x2069), (0xD800, 0xDFFF))
-CONTROL_RE = re.compile("[" + "".join(re.escape(chr(a)) + "-" + re.escape(chr(b))
-                                      for a, b in UNSAFE_RANGES) + "]")
+# line passes through clean(): label(), tilde() and keys_text(). By Unicode category, not by a
+# list of code points, because a list misses the next one (review of e62c775: zero-width
+# spaces and joiners, word joiner, soft hyphen, tag characters):
+#   Cc  every control, the tab and the newline included - they are what forges a row;
+#   Cf  format characters: bidi marks and controls, zero-width characters, the BOM, tags;
+#   Zl, Zp  the line and paragraph separators;
+#   Cs  lone surrogates, which no UTF-8 encoder accepts;
+#   Co  private use, whose look is whatever a font makes of it.
+# Each is shown as `?`.
+UNSAFE_CATEGORIES = ("Cc", "Cf", "Zl", "Zp", "Cs", "Co")
 
 
 def clean(text):
-    return CONTROL_RE.sub("?", str(text))
+    return "".join("?" if unicodedata.category(c) in UNSAFE_CATEGORIES else c
+                   for c in str(text))
 
 
 def keys_text(keys, sep=", "):
@@ -371,12 +374,28 @@ def _env(value, what):
     return value
 
 
+# The transports the plan file may name. A `type` the config spells otherwise is recorded as
+# "unknown": the config's own text never reaches the plan file (review of e62c775).
+TRANSPORTS = ("stdio", "http", "sse", "streamable_http", "streamable-http", "ws")
+
+
+def transport_name(kind, default):
+    return default if kind is None else (kind if kind in TRANSPORTS else "unknown")
+
+
+def entry_kind(value, what):
+    """An entry's `type`: absent, or text a client could hold. Anything else is malformed."""
+    if value is not None and not _text(value):
+        raise ShapeError(what)
+    return value
+
+
 def json_entry(client, scope, project, name, entry, config):
     """A Claude Code, Claude Desktop or Gemini entry: {command, args, env, ...}."""
     what = f"{name}'s entry"
     if not isinstance(entry, dict):
         raise ShapeError(what)
-    kind = entry.get("type")
+    kind = entry_kind(entry.get("type"), what)
     if "command" in entry and kind in (None, "stdio"):
         command = entry["command"]
         if not _text(command) or not command:
@@ -389,7 +408,7 @@ def json_entry(client, scope, project, name, entry, config):
                             other)
     if kind not in (None, "stdio") or "url" in entry or "httpUrl" in entry:
         return Registration(client, scope, project, name, config, None, [], {},
-                            str(kind or "http"), entry)
+                            transport_name(kind, "http"), entry)
     raise ShapeError(what)
 
 
@@ -436,11 +455,25 @@ def which(name, path):
 
 # ── Readers. Each returns (status, [Registration]). ──────────────────────────────────────────
 
+def config_path(client, ctx):
+    """Where each client keeps the config this reads. One function, so the readers and the
+    --out check cannot disagree about it."""
+    if client == CLAUDE_CODE:
+        cfg_dir = ctx.environ.get("CLAUDE_CONFIG_DIR")
+        return os.path.join(cfg_dir or ctx.home, ".claude.json")
+    if client == DESKTOP:
+        return os.path.join(ctx.home, "Library", "Application Support", "Claude",
+                            "claude_desktop_config.json")
+    if client == CODEX:
+        codex_home = ctx.environ.get("CODEX_HOME") or os.path.join(ctx.home, ".codex")
+        return os.path.join(codex_home, "config.toml")
+    return os.path.join(ctx.home, ".gemini", "settings.json")
+
+
 def read_claude_code(ctx):
     if on_windows():
         return WINDOWS, []
-    cfg_dir = ctx.environ.get("CLAUDE_CONFIG_DIR")
-    path = os.path.join(cfg_dir, ".claude.json") if cfg_dir else os.path.join(ctx.home, ".claude.json")
+    path = config_path(CLAUDE_CODE, ctx)
     ctx.configs[CLAUDE_CODE] = path
     if not os.path.lexists(path):
         installed = which("claude", ctx.path) or os.path.isfile(
@@ -477,8 +510,7 @@ def read_desktop(ctx):
         return WINDOWS, []
     apps = (os.path.join(ctx.system_applications, "Claude.app"),
             os.path.join(ctx.home, "Applications", "Claude.app"))
-    path = os.path.join(ctx.home, "Library", "Application Support", "Claude",
-                        "claude_desktop_config.json")
+    path = config_path(DESKTOP, ctx)
     ctx.configs[DESKTOP] = path
     if not any(os.path.isdir(a) for a in apps):
         return "not installed", []
@@ -500,7 +532,7 @@ def read_desktop(ctx):
 def read_gemini(ctx):
     if on_windows():
         return WINDOWS, []
-    path = os.path.join(ctx.home, ".gemini", "settings.json")
+    path = config_path(GEMINI, ctx)
     ctx.configs[GEMINI] = path
     if not which("gemini", ctx.path):
         return "not installed", []
@@ -553,10 +585,10 @@ def codex_entry(name, entry, config):
     transport = entry.get("transport")
     if isinstance(transport, dict):
         fields = transport
-        kind = transport.get("type")
+        kind = entry_kind(transport.get("type"), what)
     elif transport is None or isinstance(transport, str):
         fields = entry
-        kind = transport or entry.get("type")
+        kind = entry_kind(transport or entry.get("type"), what)
     else:
         raise ShapeError(what)
     if fields.get("command") is not None and kind in (None, "stdio"):
@@ -570,7 +602,8 @@ def codex_entry(name, entry, config):
         other.update({k: v for k, v in fields.items() if k not in ("command", "args", "env")})
         return Registration(CODEX, "user", None, name, config, command, args, env, "stdio", other)
     if kind not in (None, "stdio") or fields.get("url") is not None:
-        return Registration(CODEX, "user", None, name, config, None, [], {}, str(kind or "http"))
+        return Registration(CODEX, "user", None, name, config, None, [], {},
+                            transport_name(kind, "http"))
     raise ShapeError(what)
 
 
@@ -579,8 +612,7 @@ def read_codex(ctx):
     "not audited", never "no registrations"."""
     if on_windows():
         return WINDOWS, []
-    codex_home = ctx.environ.get("CODEX_HOME") or os.path.join(ctx.home, ".codex")
-    config = os.path.join(codex_home, "config.toml")
+    config = config_path(CODEX, ctx)
     ctx.configs[CODEX] = config
     exe = which("codex", ctx.path)
     if not exe:
@@ -641,6 +673,7 @@ class Finding(object):
         self.action = "none"
         self.todo = None
         self.row = None
+        self.fingerprint = None
 
     def leave(self, state, reason):
         self.state = state
@@ -954,6 +987,8 @@ def audit(ctx):
         try:
             status, regs = reader(ctx)
             found = [classify(reg, ctx) for reg in regs]
+            for f in found:  # here, so a value it cannot hash is this client's failure only
+                f.fingerprint = f.reg.fingerprint()
         except Exception as e:
             status, found = f"not audited: this audit failed on it ({describe_error(e)})", []
         clients.append((client, status))
@@ -1005,7 +1040,7 @@ def plan_document(ctx, clients, findings):
             "project": f.reg.project,
             "name": f.reg.name,
             "transport": f.reg.transport,
-            "fingerprint": f.reg.fingerprint(),
+            "fingerprint": f.fingerprint,
             "env_keys": sorted(f.reg.env),
             "token_keys": sorted(k for k in f.reg.env if k in TOKEN_PATH_KEYS),
             "config_is_link": f.reg.config_is_link,
@@ -1019,8 +1054,30 @@ def plan_document(ctx, clients, findings):
     }
 
 
-def write_private(path, text):
-    """mkstemp (0600) beside the target, fsync, then os.replace: never a torn or wider file."""
+def out_refusal(path, ctx):
+    """Why --out may not be written, or None.
+
+    --out must be a NEW file. An existing one is refused whatever it is - a client's config, a
+    plan from an earlier run, anything - and left exactly as it was: telling a plan file from a
+    secret would mean opening the file, and this never opens one it was not asked to read
+    (review of e62c775: `--out ~/.claude.json` replaced that config). The path of a config any
+    client reads is refused even before that config exists. The entry scripts always pass a
+    path in a fresh `mktemp -d` directory, so neither ever happens to them.
+    """
+    if os.path.lexists(path):
+        return (f"--out {tilde(path)} already exists; a plan is written only as a new file, so "
+                "it was left as it is")
+    real = os.path.realpath(path)
+    for client in CLIENTS:
+        if real == os.path.realpath(config_path(client, ctx)):
+            return f"--out {tilde(path)} is where {client} keeps its config; refused"
+    return None
+
+
+def create_private(path, text):
+    """Create `path` whole, at 0600, and never over anything: mkstemp beside it, fsync, then
+    os.link, which fails if the name exists by then, where os.replace would silently replace
+    whatever had appeared there since out_refusal looked. Returns the new file's identity."""
     d = os.path.dirname(os.path.abspath(path))
     fd, tmp = tempfile.mkstemp(dir=d, prefix=".csa-registrations-")
     try:
@@ -1030,20 +1087,25 @@ def write_private(path, text):
             f.write(text)
             f.flush()
             os.fsync(f.fileno())
-        os.replace(tmp, path)
-    except BaseException:
-        if os.path.exists(tmp):
+        os.link(tmp, path)
+    finally:
+        if os.path.lexists(tmp):
             os.unlink(tmp)
-        raise
+    st = os.lstat(path)
+    return st.st_dev, st.st_ino
 
 
-def discard(path):
-    """Remove --out, if there is one: what a failed run leaves must not pass for a plan."""
-    if path and os.path.lexists(path):
-        try:
+def discard(path, identity):
+    """Remove the plan file THIS run created, and only that file: when --out no longer is it
+    (somebody replaced it since), it is left. Nothing a failed run created passes for a plan."""
+    if not path or identity is None:
+        return
+    try:
+        st = os.lstat(path)
+        if (st.st_dev, st.st_ino) == identity:
             os.unlink(path)
-        except OSError:
-            pass
+    except OSError:
+        pass
 
 
 class OutputLost(Exception):
@@ -1079,19 +1141,30 @@ def show(lines):
         raise OutputLost()
 
 
-def plan(args):
+def plan(args, created):
+    """`created` receives the identity of the plan file this run makes, for main() to remove
+    it if the run then fails."""
     ctx = Context(os.environ, args.system_applications)
+    if args.out:
+        why = out_refusal(args.out, ctx)
+        if why:
+            say(why)
+            return 2
     clients, findings = audit(ctx)
     rows = render(clients, findings)
     lines = [("log", line) for line in ctx.logs] + [("row", row) for row in rows]
     if args.out:
-        text = json.dumps(plan_document(ctx, clients, findings), indent=2, ensure_ascii=False)
-        write_private(args.out, text + "\n")
+        # ensure_ascii: a project path or a key name is recorded exactly, as escapes, so no
+        # invisible or reordering character from a config is ever written raw (and a value
+        # that UTF-8 cannot encode cannot fail the write).
+        text = json.dumps(plan_document(ctx, clients, findings), indent=2, ensure_ascii=True)
+        created.append(create_private(args.out, text + "\n"))
     try:
         show(lines)
     except OutputLost:
         # Nobody saw this plan, so nothing may later act on it as the one agreed to (A4).
-        discard(args.out)
+        discard(args.out, created[-1] if created else None)
+        del created[:]
         say("the plan could not be printed; nothing was written")
         return 2
     return 0
@@ -1107,16 +1180,22 @@ def main(argv=None):
                                     "writes nothing but --out")
     p.add_argument("--out", metavar="FILE", help="record the findings (no values) for apply")
     p.add_argument("--system-applications", default="/Applications", help=argparse.SUPPRESS)
-    args = ap.parse_args(argv)
+    try:
+        args = ap.parse_args(argv)
+    except SystemExit as e:
+        # argparse has said why. Nothing was created, and whatever is at --out is not touched:
+        # this run made it no more than any other file (review of e62c775).
+        return 0 if e.code in (0, None) else 2
     if args.command != "plan":
         ap.print_usage(sys.stderr)
         return 2
+    created = []
     try:
-        return plan(args)
+        return plan(args, created)
     except BaseException as e:
-        # "Nothing was written" holds for --out too: a plan file from an earlier run is removed,
-        # so it cannot stand beside this failed run and pass for its plan (A4).
-        discard(args.out)
+        # "Nothing was written" holds for --out too: the plan file THIS run created is removed,
+        # so it cannot pass for a plan (A4). A file that was there before is never touched.
+        discard(args.out, created[-1] if created else None)
         if not isinstance(e, Exception):
             raise
         say(f"internal error ({describe_error(e)}); nothing was written")
