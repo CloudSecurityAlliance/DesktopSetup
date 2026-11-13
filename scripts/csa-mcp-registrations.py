@@ -52,7 +52,7 @@ import subprocess
 import sys
 import tempfile
 
-SCRIPT_VERSION = "2026-11-12T23:56Z"
+SCRIPT_VERSION = "2026-11-13T00:15Z"
 
 # ── The plan's decisions (D1-D5). Each is pinned by one test; an answer changes the constant. ──
 
@@ -197,12 +197,62 @@ def home_dir():
     return os.path.expanduser("~")
 
 
+# A newline or a tab in a project path or an env key name would let a config forge a
+# `row<TAB>` line of its own, so every piece of a config that reaches a row, a to-do or a log
+# line passes through clean(): label(), tilde() and keys_text(). They are shown as `?`.
+CONTROL_RE = re.compile(r"[\x00-\x1f\x7f-\x9f]")
+
+
+def clean(text):
+    return CONTROL_RE.sub("?", str(text))
+
+
+def keys_text(keys, sep=", "):
+    return sep.join(clean(k) for k in keys)
+
+
 def tilde(path):
+    """`path` with the home directory shown as `~` (either spelling of it), cleaned."""
     path = str(path)
-    home = home_dir()
-    if path == home or path.startswith(home.rstrip("/") + "/"):
-        return "~" + path[len(home.rstrip("/")):]
-    return path
+    for home in (home_dir(), os.path.realpath(home_dir())):
+        home = home.rstrip("/")
+        if home and (path == home or path.startswith(home + "/")):
+            return clean("~" + path[len(home):])
+    return clean(path)
+
+
+def linked_config(path):
+    """A10: True when the config, or any directory between it and its anchor, is a link.
+
+    `os.path.islink` sees the last component only, so a `~/.gemini` linked into a dotfiles
+    repository read as a plain file, and a repair would have written into that repository. The
+    anchor is the home directory for a config under it, else the directory that holds the
+    config's own directory (a CLAUDE_CONFIG_DIR elsewhere). Links above the anchor, such as a
+    home directory on another volume, belong to the machine, not to the config.
+    """
+    path = os.path.abspath(path)
+    home = os.path.abspath(home_dir()).rstrip("/")
+    anchor = home if home and path.startswith(home + "/") else os.path.dirname(os.path.dirname(path))
+    expected = os.path.join(os.path.realpath(anchor), os.path.relpath(path, anchor))
+    return os.path.realpath(path) != expected
+
+
+def own_line(exc):
+    """The line in THIS file nearest a failure. A stdlib frame's line number means nothing to
+    someone reading this script, so the innermost frame of this file is the one reported."""
+    me = os.path.abspath(__file__)
+    line = "?"
+    tb = exc.__traceback__
+    while tb is not None:
+        if os.path.abspath(tb.tb_frame.f_code.co_filename) == me:
+            line = tb.tb_lineno
+        tb = tb.tb_next
+    return line
+
+
+def describe_error(exc):
+    """The type and this file's line only: an exception's message can carry what it was handed."""
+    return f"{type(exc).__name__} at line {own_line(exc)}"
 
 
 def plural(n, word):
@@ -259,13 +309,13 @@ class Registration(object):
         self.env = dict(env)
         self.transport = transport
         self.other = dict(other or {})
-        self.config_is_link = os.path.islink(config)
+        self.config_is_link = linked_config(config)
 
     def label(self):
         if self.client == CLAUDE_CODE:
             where = "user scope" if self.scope == "user" else f"local scope, {tilde(self.project)}"
-            return f"{self.name} in Claude Code ({where})"
-        return f"{self.name} in {self.client}"
+            return clean(f"{self.name} in Claude Code ({where})")
+        return clean(f"{self.name} in {self.client}")
 
     def fingerprint(self):
         """sha256 of the command, the args and the SORTED KEY NAMES of the env - never a value."""
@@ -274,8 +324,14 @@ class Registration(object):
         return hashlib.sha256(blob.encode("utf-8")).hexdigest()
 
 
+def _text(value):
+    """A string a client could pass to exec: no client can run one holding a NUL, and the path
+    calls below raise on one, so it is a malformed entry, not a dead one."""
+    return isinstance(value, str) and "\x00" not in value
+
+
 def _strings(value, what):
-    if not isinstance(value, list) or not all(isinstance(a, str) for a in value):
+    if not isinstance(value, list) or not all(_text(a) for a in value):
         raise ShapeError(what)
     return value
 
@@ -283,8 +339,7 @@ def _strings(value, what):
 def _env(value, what):
     if value is None:
         return {}
-    if not isinstance(value, dict) or not all(isinstance(k, str) and isinstance(v, str)
-                                              for k, v in value.items()):
+    if not isinstance(value, dict) or not all(_text(k) and _text(v) for k, v in value.items()):
         raise ShapeError(what)
     return value
 
@@ -297,7 +352,7 @@ def json_entry(client, scope, project, name, entry, config):
     kind = entry.get("type")
     if "command" in entry and kind in (None, "stdio"):
         command = entry["command"]
-        if not isinstance(command, str) or not command:
+        if not _text(command) or not command:
             raise ShapeError(what)
         args = entry.get("args")
         args = [] if args is None else _strings(args, what)
@@ -318,16 +373,25 @@ def load_json(path, what):
             raw = f.read()
     except OSError:
         return None, f"its {what} could not be read"
+    if raw.startswith(b"\xef\xbb\xbf"):
+        return None, f"its {what} starts with a byte-order mark, which this does not read"
     try:
         text = raw.decode("utf-8")
     except UnicodeDecodeError:
         return None, f"its {what} is not UTF-8"
+    return parse_json(text, f"its {what}")
+
+
+def parse_json(text, what):
+    """(data, None) or (None, why), for a config file or a CLI's output."""
     try:
         return json.loads(text, object_pairs_hook=_unique), None
     except DuplicateKey:
-        return None, f"its {what} has a duplicate key, so which value the client uses is unclear"
+        return None, f"{what} has a duplicate key, so which value the client uses is unclear"
+    except RecursionError:
+        return None, f"{what} is nested too deeply to read"
     except ValueError:
-        return None, f"its {what} is not plain JSON (cut short, or with comments)"
+        return None, f"{what} is not plain JSON (cut short, or with comments)"
 
 
 def csa_entries(servers, what):
@@ -470,7 +534,7 @@ def codex_entry(name, entry, config):
         raise ShapeError(what)
     if fields.get("command") is not None and kind in (None, "stdio"):
         command = fields["command"]
-        if not isinstance(command, str) or not command:
+        if not _text(command) or not command:
             raise ShapeError(what)
         args = fields.get("args")
         args = [] if args is None else _strings(args, what)
@@ -506,8 +570,11 @@ def read_codex(ctx):
     if rc != 0:
         return "not audited: " + codex_failure(rc, err), []
     try:
-        data = json.loads(out.decode("utf-8"), object_pairs_hook=_unique)
-    except (ValueError, DuplicateKey, UnicodeDecodeError):
+        text = out.decode("utf-8")
+    except UnicodeDecodeError:
+        text = None
+    data, why = parse_json(text, "its output") if text is not None else (None, "not UTF-8")
+    if why:
         return "not audited: `codex mcp list --json` printed something this cannot read", []
     try:
         regs = [codex_entry(name, entry, config)
@@ -666,8 +733,13 @@ def executable_kind(path, args, server):
 
 
 def interpreter_runs(interp, ctx):
+    """Does the interpreter start and import its stdlib? `-B` because without it a fresh
+    interpreter writes a .pyc for every module the probe imports into its own stdlib (review of
+    fba8c54: 55 files), and `plan` writes nothing. PYTHONDONTWRITEBYTECODE as well, for an
+    "interpreter" that is a wrapper: `-I` makes a real Python ignore it."""
+    env = dict(ctx.environ, PYTHONDONTWRITEBYTECODE="1")
     try:
-        rc, _, _ = run_bounded([interp, "-I", "-c", PROBE], PROBE_TIMEOUT, ctx.environ,
+        rc, _, _ = run_bounded([interp, "-I", "-B", "-c", PROBE], PROBE_TIMEOUT, env,
                                capture=False)
     except (OSError, subprocess.TimeoutExpired):
         return False
@@ -734,6 +806,11 @@ def classify(reg, ctx):
     std = os.path.join(ctx.home, ".local", "bin", server.entry)
     command = expand_home(reg.command, ctx.home)
     if "/" not in command:
+        # A8: a bare name resolves on the client's own PATH, as M3 measured it. One that does
+        # not resolve there - its own `<entry>` name included - cannot start, so it is dead and
+        # re-pointed at the absolute standard binary, by design: the plan's #176 row, "a
+        # bare-name ... entry that does not resolve on [the client's] measured PATH is dead and
+        # re-pointed at the absolute binary". Where the PATH is not measured, it is left.
         path = client_path(reg.client, ctx)
         if path is None:
             return f.leave("unchecked", R_DESKTOP_PATH)
@@ -762,7 +839,7 @@ def classify(reg, ctx):
         # 3. a launcher form, or a module this does not know, is left and never launched.
         kind, detail = executable_kind(resolved, reg.args, server)
         if kind == "launcher":
-            return f.leave("launcher", R_LAUNCHER.format(base=detail))
+            return f.leave("launcher", R_LAUNCHER.format(base=clean(detail)))
         if kind == "module":
             return f.leave("unrecognised", R_MODULE)
         # 4. dead: its interpreter.
@@ -799,7 +876,7 @@ def decide(f, reg, ctx, server):
             block = f"re-point it at {target} by hand"
         else:
             keys = sorted(reg.env)
-            lose = (f"removing it drops its settings ({', '.join(keys)})" if keys
+            lose = (f"removing it drops its settings ({keys_text(keys)})" if keys
                     else "it has no settings to lose")
             block = ("rebuild that checkout's venv, or remove the local entry so your user entry "
                      f"applies there; {lose}")
@@ -809,7 +886,7 @@ def decide(f, reg, ctx, server):
         todo = f"{who}, and {block}; fix it by hand"
     elif interpreter_keys(reg.env):
         keys = interpreter_keys(reg.env)
-        block = R_KEYS.format(keys=" and ".join(keys), s="" if len(keys) == 1 else "s")
+        block = R_KEYS.format(keys=keys_text(keys, " and "), s="" if len(keys) == 1 else "s")
         todo = f"{who}, and {block}; fix it by hand"
     elif reg.config_is_link:
         block = R_LINK.format(path=tilde(os.path.realpath(reg.config)))
@@ -828,13 +905,13 @@ def decide(f, reg, ctx, server):
         return
     f.action = "re-point"
     keys = sorted(reg.env)
-    keep = f", keeping its settings ({', '.join(keys)})" if keys else ""
+    keep = f", keeping its settings ({keys_text(keys)})" if keys else ""
     f.row = f"{label}: {f.reason}; it will be re-pointed at {target}{keep}"
     if reg.client in PASSES_INHERITED_ENV:
         inherited = interpreter_keys(ctx.environ)
         if inherited:
             many = len(inherited) > 1
-            f.warnings.append(W_INHERITED.format(keys=" and ".join(inherited),
+            f.warnings.append(W_INHERITED.format(keys=keys_text(inherited, " and "),
                                                  verb="are" if many else "is", client=reg.client,
                                                  pron="them" if many else "it"))
 
@@ -842,12 +919,18 @@ def decide(f, reg, ctx, server):
 # ── The plan ───────────────────────────────────────────────────────────────────────────────────
 
 def audit(ctx):
+    """Each client is read and classified on its own: whatever one client's config holds, a
+    failure there makes THAT client "not audited" (B9), and the other three are still audited."""
     clients = []
     findings = []
     for client, reader in READERS:
-        status, regs = reader(ctx)
+        try:
+            status, regs = reader(ctx)
+            found = [classify(reg, ctx) for reg in regs]
+        except Exception as e:
+            status, found = f"not audited: this audit failed on it ({describe_error(e)})", []
         clients.append((client, status))
-        findings.extend(classify(reg, ctx) for reg in regs)
+        findings.extend(found)
     return clients, findings
 
 
@@ -872,6 +955,10 @@ def render(clients, findings):
     n = len(findings)
     m = len({f.reg.client for f in findings})
     k = sum(1 for f in findings if not f.row and not f.warnings)
+    # The plan's text is `<n> CSA registrations in <m> clients; <k> need nothing`. That template
+    # was written in the plural, and taken literally it prints "1 clients" and "1 need": the
+    # error is the plan's, so the words here agree with their numbers (the AI's decision, under
+    # P4, wording quality; the plural reads exactly as the plan's text).
     rows.append(f"{plural(n, 'CSA registration')} in {plural(m, 'client')}; "
                 f"{k} need{'s' if k == 1 else ''} nothing")
     return rows
@@ -923,17 +1010,59 @@ def write_private(path, text):
         raise
 
 
+class OutputLost(Exception):
+    """The plan could not be shown, so no plan file may stand for it."""
+
+
+def say(message):
+    """A line on stderr, when there is a stderr. print(file=None) would fall back to stdout."""
+    if sys.stderr is not None:
+        print(f"csa-mcp-registrations: {message}", file=sys.stderr)
+
+
+def show(lines):
+    """Write and flush each (kind, text), or raise OutputLost. Flushed here, not at exit: a
+    failed flush at exit is exit 120 with the plan file already written (review of fba8c54).
+    Every text is cleaned once more on the way out, whatever built it."""
+    out = sys.stdout
+    if out is None:  # started with stdout closed
+        raise OutputLost()
+    try:
+        for kind, text in lines:
+            out.write(f"{kind}\t{clean(text)}\n")
+        out.flush()
+    except (OSError, ValueError):
+        # Point fd 1 at /dev/null, so the flush the interpreter makes at exit cannot fail a
+        # second time and turn exit 2 into 120.
+        try:
+            devnull = os.open(os.devnull, os.O_WRONLY)
+            os.dup2(devnull, 1)
+            os.close(devnull)
+        except OSError:
+            pass
+        raise OutputLost()
+
+
 def plan(args):
     ctx = Context(os.environ, args.system_applications)
     clients, findings = audit(ctx)
     rows = render(clients, findings)
+    lines = [("log", line) for line in ctx.logs] + [("row", row) for row in rows]
     if args.out:
         text = json.dumps(plan_document(ctx, clients, findings), indent=2, ensure_ascii=False)
         write_private(args.out, text + "\n")
-    for line in ctx.logs:
-        print(f"log\t{line}")
-    for row in rows:
-        print(f"row\t{row}")
+    try:
+        show(lines)
+    except OutputLost:
+        # Nobody saw this plan, so nothing may later act on it as the one agreed to (A4).
+        if args.out and os.path.exists(args.out):
+            os.unlink(args.out)
+        say("the plan could not be printed; nothing was written")
+        return 2
+    except BaseException:
+        if args.out and os.path.exists(args.out):
+            os.unlink(args.out)
+        raise
     return 0
 
 
@@ -954,13 +1083,7 @@ def main(argv=None):
     try:
         return plan(args)
     except Exception as e:
-        # The type and the line only: an exception's message can carry what it was handed.
-        tb = e.__traceback__
-        while tb is not None and tb.tb_next is not None:
-            tb = tb.tb_next
-        line = tb.tb_lineno if tb is not None else "?"
-        print(f"csa-mcp-registrations: internal error ({type(e).__name__} at line {line}); "
-              "nothing was written", file=sys.stderr)
+        say(f"internal error ({describe_error(e)}); nothing was written")
         return 2
 
 
