@@ -215,6 +215,8 @@ jobs:
         run: python3 tests/test_desktop_apps.py
       - name: A running AI client is named by its image path, never its name or the installer's own ancestry (TODO H1)
         run: python3 tests/test_running_clients.py
+      - name: A Homebrew Codex CLI is migrated whether it is a cask or a formula (TODO H4)
+        run: python3 tests/test_codex_migration.py
       - name: The plan must cover what main() runs (#80)
         run: python3 tools/check-plan-covers-steps.py
 

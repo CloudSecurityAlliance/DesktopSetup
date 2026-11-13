@@ -143,6 +143,9 @@ check python3 tests/test_desktop_apps.py
 step "a running AI client is named by its image path, never its name or the installer's own ancestry"
 check python3 tests/test_running_clients.py
 
+step "a Homebrew Codex CLI is migrated whether it is a cask or a formula"
+check python3 tests/test_codex_migration.py
+
 step "the plan must cover what main() runs"
 check python3 tools/check-plan-covers-steps.py
 

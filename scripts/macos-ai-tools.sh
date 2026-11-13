@@ -597,6 +597,7 @@ csa_brew_upgrade() {
 
 claude_needs_migration=""   # "brew" or "npm" if installed wrong
 codex_needs_migration=""    # "brew" if installed via homebrew
+codex_brew_kind=""          # "cask" or "formula": which of the two Homebrew holds
 gemini_needs_migration=""   # "brew" if installed via homebrew
 copilot_needs_migration=""  # "brew" if the microsoft-365-copilot cask is installed
 path_updated=0              # set to 1 if ~/.local/bin was added to shell config
@@ -613,9 +614,17 @@ detect_migrations() {
     claude_needs_migration="npm"
   fi
 
-  # Codex: should be npm, not brew
+  # Codex: should be npm, not brew. Homebrew has shipped it both ways: a homebrew-core formula
+  # until 2025-10-17, then a cask (homebrew-core's tap_migrations.json maps "codex" to
+  # homebrew/cask). Nothing moves an installed formula's keg, so an early Homebrew install is
+  # still the formula. Measured 2026-11-12 on Homebrew 7.0.13: a codex keg in the Cellar is found
+  # by `brew list --formula codex` (exit 0) and missed by `brew list --cask codex` (exit 1).
   if has_command brew && brew list --cask codex >/dev/null 2>&1; then
     codex_needs_migration="brew"
+    codex_brew_kind="cask"
+  elif has_command brew && brew list --formula codex >/dev/null 2>&1; then
+    codex_needs_migration="brew"
+    codex_brew_kind="formula"
   fi
 
   # Gemini: should be npm, not brew
@@ -901,7 +910,7 @@ migrate_claude() {
 migrate_codex() {
   if [[ "$codex_needs_migration" == "brew" ]]; then
     info "Removing Codex CLI from Homebrew (migrating to npm)"
-    brew uninstall --cask codex || warn "brew uninstall codex failed; continuing"
+    brew uninstall "--${codex_brew_kind:-cask}" codex || warn "brew uninstall codex failed; continuing"
   fi
 }
 
