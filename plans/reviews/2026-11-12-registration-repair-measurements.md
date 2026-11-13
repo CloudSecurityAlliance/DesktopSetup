@@ -172,7 +172,8 @@ sessions started after it.
 **Method.** From the dummy's log, against the child env above. One follow-up run added fake inherited keys whose
 names look secret (`PLAN2_FAKE_TOKEN`, `PLAN2_FAKE_API_KEY`), a plain one (`PLAN2_PLAIN`), and `XDG_CONFIG_HOME` and
 `PYTHONPATH`. It also added a fake registered env, `CSA_PLAN2_FAKE_CLIENT_SECRET` and `CSA_PLAN2_PLAIN`.
-`__CF_USER_TEXT_ENCODING` appears in every record; macOS adds it to every process, the dummy's self-test included.
+`__CF_USER_TEXT_ENCODING` appears in every record, the dummy's self-test with a bare env included. That macOS adds
+it to every process is inferred from that self-test, not measured.
 
 | Client, and the path that launched the server | Env key names the server got | `PATH` | Working directory | Methods sent |
 |---|---|---|---|---|
@@ -203,8 +204,8 @@ each recorded `PATH`."**
 - **Codex:** its allowlist plus the registered env. **The allowlist is a lower bound:** only the eight keys above
   were seen to pass, and only keys in the input were tested. Codex may also pass others, such as `TZ` or `LC_*`.
 - **Gemini:** the caller's env minus secret-looking names, plus the registered env.
-- **Desktop:** recorded in M2's session. Its six keys plus the registered env, and its `PATH`, which carries an
-  extraction caveat. See "M2 and M3's Desktop part" for the branch.
+- **Desktop:** recorded in M2's session. The seven key names observed, plus the registered env, and its `PATH`,
+  which carries an extraction caveat. See "M2 and M3's Desktop part" for the branch.
 - **A12's interpreter-shaping keys can arrive from the client's own env,** not only the registration. Claude Code
   and Gemini pass an inherited `PYTHONPATH`.
 
@@ -391,10 +392,13 @@ Desktop ran for about 14 minutes between its start and its quit.
   `[CCD] Shell environment extraction failed (attempt 1), using process.env: Shell environment extraction timed out`.
   The `PATH` recorded may therefore be its fallback, `process.env`, and not what a successful login-shell extraction
   gives. One start was measured, so the successful-extraction case is not.
-- **`LC_CTYPE` is probably Python's own,** not Desktop's. No `LANG` or `LC_*` was passed, and with none Python
-  coerces the C locale and sets `LC_CTYPE` itself (PEP 538). The dummy's isolated self-test showed the same key.
-- **Desktop passes far less than the CLIs:** six keys plus macOS's own, against Claude Code's whole env (M3,
-  isolated parts).
+- **`LC_CTYPE` is probably Python's own, not Desktop's (inferred).** The server got no `LANG` and no other `LC_*`.
+  With none of them set, Python coerces the C locale and sets `LC_CTYPE` itself (PEP 538), and the dummy's isolated
+  self-test showed the same key.
+- **`__CF_USER_TEXT_ENCODING` is probably the OS's own, not Desktop's (inferred)** from the same self-test.
+- **Desktop passes far less than the CLIs.** Seven key names were observed. Five of them come from Desktop: `HOME`,
+  `LOGNAME`, `PATH`, `SHELL` and `USER`. The other two are probably the interpreter's and the OS's own, as above.
+  Claude Code passes its whole env (M3, isolated parts).
 - **This session's observation.** M5's process listing showed Desktop starting each CSA server through
   `/Applications/Claude.app/Contents/Helpers/disclaimer --pgroup -- ~/.local/bin/<entry>`, so a server's parent under
   Desktop is that helper.
@@ -403,8 +407,12 @@ Desktop ran for about 14 minutes between its start and its quit.
 from the recorded key names."**
 - **A8:** a bare-name Desktop entry resolves on the `PATH` above, which includes `~/.local/bin`. That resolution
   is labelled with the extraction caveat: it is the `PATH` Desktop passed at a start whose shell extraction timed out.
-- **Task 3:** Desktop's launch env is `HOME`, `LOGNAME`, `PATH`, `SHELL` and `USER`, with the `PATH` above, plus the
-  registration's env. `LC_CTYPE` and `__CF_USER_TEXT_ENCODING` are left to the interpreter and the OS.
+- **Task 3, a labelled approximation:** Desktop's launch env is `HOME`, `LOGNAME`, `PATH`, `SHELL` and `USER`,
+  with the `PATH` above, plus the registration's env.
+  - It leaves out two of the seven recorded names, `LC_CTYPE` and `__CF_USER_TEXT_ENCODING`, on the inference above
+    that the interpreter and the OS add them.
+  - The plan says to build the env from the recorded names, so Task 3 labels this env an approximation in
+    ENGINEERING.md, and says which two names it drops and why.
 
 ### M2
 
@@ -414,7 +422,8 @@ from the recorded key names."**
 | Did it survive Desktop quitting? | **Yes**: the entry read back after the quit was the `B-edited` command |
 | Did a running Desktop pick up the edit? | **No.** Desktop kept the command it started with, and the dummy never ran with marker `B`. |
 | Does a preference change make Desktop write its old copy back? | **Not measured.** No preference was changed. |
-| After the dummy was removed, was the config identical to the backup, excluding `preferences`? | **Yes.** No preference key changed, and the mode stayed `0600`. |
+| After the dummy was removed, was the config identical to the backup, excluding `preferences`? | **Yes**, and the mode stayed `0600`. |
+| Did any preference change? | **No.** The `preferences` objects were also compared separately, key by key, and the helper printed `changed preference keys: []`. |
 | Byte-identical? | **No:** 4636 → 4637 bytes, with identical values. The coordinating session's helper re-serialised the JSON when it removed the dummy. |
 
 The backup was deleted after the comparison, and no probe process was left.
