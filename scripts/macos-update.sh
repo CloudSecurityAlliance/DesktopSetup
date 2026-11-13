@@ -20,7 +20,7 @@
 
 set -euo pipefail
 
-SCRIPT_VERSION="2026-11-13T00:03Z"
+SCRIPT_VERSION="2026-11-13T00:33Z"
 
 # ── CSA plugin marketplaces ─────────────────────────────────────────
 # Each update run will add any entries from this list that aren't yet
@@ -437,6 +437,56 @@ snapshot() {
 
 # ── Preflight ───────────────────────────────────────────────────────
 
+# The Homebrew rows of the plan: what update_brew's `brew upgrade` is expected to change.
+#
+# How fresh that list is (TODO.md H3). `brew outdated` is one of Homebrew's auto-update commands
+# (since 4.0.7, 2023), which means two separate refreshes, measured on Homebrew 7.0.13 on
+# 2026-11-12:
+#   - the API index (homebrew/core and homebrew/cask) is downloaded again when it is older than
+#     HOMEBREW_API_AUTO_UPDATE_SECS, 450 s by default;
+#   - the git repositories, every third-party tap among them, are fetched only when the last
+#     fetch is older than HOMEBREW_AUTO_UPDATE_SECS, a day by default. A run 25 minutes after
+#     the last one refreshed the API index and left every FETCH_HEAD alone.
+# So the core and cask rows are current, but a tap's formulae can be a day behind what
+# update_brew's own `brew update` will see, and with HOMEBREW_NO_AUTO_UPDATE set neither refresh
+# happens. The plan says which applies. Taps come from `brew tap`, which makes no network call.
+# Either refresh reports on stderr, discarded here, so its report never lands in the list.
+brew_outdated_plan() {
+  local outdated_formulas outdated_casks taps
+  info "Checking Homebrew for outdated packages..."
+  echo ""
+
+  outdated_formulas=$(brew outdated --formula --verbose 2>/dev/null || true)
+  outdated_casks=$(brew outdated --cask --verbose 2>/dev/null || true)
+  # Third-party means not homebrew/: core and cask, when tapped at all, are official.
+  taps="$(brew tap 2>/dev/null | awk '!/^homebrew\//')" || taps=""
+
+  if [[ -n "${HOMEBREW_NO_AUTO_UPDATE:-}" ]]; then
+    echo "  (HOMEBREW_NO_AUTO_UPDATE is set, so this is from Homebrew's cached index; the update"
+    echo "   runs \`brew update\` first and may upgrade more than is listed here.)"
+    echo ""
+  elif [[ -n "$taps" ]]; then
+    echo "  (Formulae from ${taps//$'\n'/, } are listed as Homebrew last fetched those taps, by"
+    echo "   default once a day; the update runs \`brew update\` first and may upgrade more.)"
+    echo ""
+  fi
+
+  if [[ -n "$outdated_formulas" ]]; then
+    echo "  Homebrew formulas to upgrade:"
+    echo "$outdated_formulas" | while IFS= read -r line; do echo "    $line"; done
+  else
+    echo "  Homebrew formulas: all up to date"
+  fi
+  echo ""
+
+  if [[ -n "$outdated_casks" ]]; then
+    echo "  Homebrew casks to upgrade:"
+    echo "$outdated_casks" | while IFS= read -r line; do echo "    $line"; done
+  else
+    echo "  Homebrew casks: all up to date"
+  fi
+}
+
 preflight() {
   ensure_brew_in_path
 
@@ -446,39 +496,7 @@ preflight() {
 
   # Homebrew
   if has_command brew; then
-    info "Checking Homebrew for outdated packages..."
-    echo ""
-
-    # `brew outdated` refreshes a stale Homebrew index itself before it answers: it is one of
-    # Homebrew's auto-update commands (since 4.0.7, 2023), so this list is not read from an old
-    # cache although update_brew's `brew update` runs later. Measured 2026-11-12 on Homebrew
-    # 7.0.13, with an index two days old: the first call below fetched and refreshed it, and its
-    # update report went to stderr, never into the list. HOMEBREW_NO_AUTO_UPDATE turns that off,
-    # while update_brew's explicit `brew update` still runs - so then the plan says so.
-    local outdated_formulas outdated_casks
-    outdated_formulas=$(brew outdated --formula --verbose 2>/dev/null || true)
-    outdated_casks=$(brew outdated --cask --verbose 2>/dev/null || true)
-
-    if [[ -n "${HOMEBREW_NO_AUTO_UPDATE:-}" ]]; then
-      echo "  (HOMEBREW_NO_AUTO_UPDATE is set, so this is from Homebrew's cached index; the update"
-      echo "   runs \`brew update\` first and may upgrade more than is listed here.)"
-      echo ""
-    fi
-
-    if [[ -n "$outdated_formulas" ]]; then
-      echo "  Homebrew formulas to upgrade:"
-      echo "$outdated_formulas" | while IFS= read -r line; do echo "    $line"; done
-    else
-      echo "  Homebrew formulas: all up to date"
-    fi
-    echo ""
-
-    if [[ -n "$outdated_casks" ]]; then
-      echo "  Homebrew casks to upgrade:"
-      echo "$outdated_casks" | while IFS= read -r line; do echo "    $line"; done
-    else
-      echo "  Homebrew casks: all up to date"
-    fi
+    brew_outdated_plan
   else
     echo "  Homebrew: not installed (skipping)"
   fi

@@ -500,7 +500,7 @@ Ten scripts, five macOS/Windows pairs — each self-contained and idempotent.
 
 ### `tools/` and `tests/`
 
-Fourteen repo-specific checks and eighteen test files. **`./tools/check-all.sh` mirrors CI exactly** —
+Fourteen repo-specific checks and nineteen test files. **`./tools/check-all.sh` mirrors CI exactly** —
 run it before opening a pull request. See [`ENGINEERING.md`](ENGINEERING.md) for what it proves
 and what it does not.
 

@@ -32,7 +32,7 @@
 
 set -euo pipefail
 
-SCRIPT_VERSION="2026-11-13T00:03Z"
+SCRIPT_VERSION="2026-11-13T00:33Z"
 
 # ── CSA plugin marketplaces ─────────────────────────────────────────
 # Plugin marketplaces to register with Claude Code. Each entry is an
@@ -327,7 +327,9 @@ fi
 #     Code's updater renames its image on Windows. lsof reports the image where it is now.
 #
 # `lsof -d txt` lists each process's executable first, then what it maps (checked for a native
-# binary, an app bundle and node), in about 0.2 s for 850 processes. This user's only.
+# binary, an app bundle and node), in about 0.2 s for 850 processes. This user's only. It reports
+# the path it resolved, so Claude Code's is matched under $HOME and under $HOME resolved, in case
+# $HOME is a symlink.
 #
 # Listed: the clients that run CSA MCP servers, as on Windows. A desktop app counts by its MAIN
 # executable only, app_running's rule: on 2026-11-12 twelve processes under
@@ -355,14 +357,37 @@ csa_ancestor_pids() {
   done
 }
 
-# Prints each running client's name once, sorted.
+# Prints each running client's name once, sorted. Returns 1, printing nothing, when it could not
+# look: no lsof, or no answer from it within 5 s. Its answer always includes this shell, so an
+# answer naming no process at all is no answer.
+#
+# Bounded because it runs before the plan, and lsof can stall (on an unresponsive network mount,
+# for one). Stock macOS has no `timeout`, so lsof runs in the background, into a file, and is
+# killed after 5 s. Its exit status is not part of the answer: it can exit 1 after a full one.
 running_ai_clients() {
-  local mine txt
+  local mine phome out lsof_pid txt waited=0
   mine="$(csa_ancestor_pids | tr '\n' ' ')" || mine=""
-  # Captured whole, not piped: lsof's exit status is not part of the answer, and under pipefail
-  # a non-zero one would fail the function and throw the list away.
-  txt="$(lsof -n -P -a -d txt -u "$(id -u)" -Fpn 2>/dev/null)" || true
-  printf '%s\n' "$txt" | awk -v mine=" $mine" -v home="$HOME" '
+  phome="$(cd "$HOME" 2>/dev/null && pwd -P)" || phome="$HOME"
+  out="$(mktemp "${TMPDIR:-/tmp}/csa-lsof.XXXXXX")" || return 1
+  lsof -n -P -a -d txt -u "$(id -u)" -Fpn >"$out" 2>/dev/null &
+  lsof_pid=$!
+  while kill -0 "$lsof_pid" 2>/dev/null; do
+    if [[ $waited -ge 50 ]]; then
+      kill "$lsof_pid" 2>/dev/null || true
+      wait "$lsof_pid" 2>/dev/null || true
+      rm -f "$out"
+      return 1
+    fi
+    sleep 0.1
+    waited=$((waited + 1))
+  done
+  wait "$lsof_pid" 2>/dev/null || true
+  txt="$(cat "$out")" || txt=""
+  rm -f "$out"
+  if [[ "$txt" != p* ]] && [[ "$txt" != *$'\n'p* ]]; then
+    return 1
+  fi
+  printf '%s\n' "$txt" | awk -v mine=" $mine" -v home="$HOME" -v phome="$phome" '
     /^p/ { pid = substr($0, 2); first = 1; next }
     /^n/ && first {
       first = 0
@@ -371,6 +396,7 @@ running_ai_clients() {
       if (index(path, "/Applications/Claude.app/Contents/MacOS/") == 1)       name = "Claude Desktop"
       else if (index(path, "/Applications/ChatGPT.app/Contents/MacOS/") == 1) name = "ChatGPT Desktop"
       else if (index(path, home "/.local/share/claude/versions/") == 1)       name = "Claude Code"
+      else if (index(path, phome "/.local/share/claude/versions/") == 1)      name = "Claude Code"
       else if (index(path, "/node_modules/@openai/") && path ~ /\/codex$/)    name = "Codex CLI"
       else if (index(path, "/Caskroom/codex/") || index(path, "/Cellar/codex/")) name = "Codex CLI"
       if (name != "") found[name] = 1
@@ -380,16 +406,20 @@ running_ai_clients() {
 
 # States what is running and asks nothing, as Check-RunningTools has on Windows since #109. The
 # `Continue anyway?` that stood here fired on every run that found a familiar name, over a risk
-# macOS does not have: a running program's files can be replaced under it, and it keeps the
-# version it started with. A desktop app that has to be replaced is waited for at that moment
-# (wait_for_app_exit).
+# macOS does not have: a running program's files can be replaced under it without breaking the
+# install. What it does with them varies - a native binary keeps what it loaded, a node or Python
+# client may load some new files mid-session - so the advice is to restart afterwards. A desktop
+# app that has to be replaced is waited for at that moment (wait_for_app_exit).
 check_running_tools() {
   local running
-  running="$(running_ai_clients)" || running=""
+  if ! running="$(running_ai_clients)"; then
+    info "Could not tell which AI clients are running (lsof gave no answer) - carrying on."
+    return 0
+  fi
   if [[ -z "$running" ]]; then
     return 0
   fi
-  info "Found ${running//$'\n'/, } running - no need to close anything. Each keeps the version it started with until it is restarted."
+  info "Found ${running//$'\n'/, } running - no need to close anything. Restart them once this finishes, so they use what it installs."
 }
 
 # ── Helpers ─────────────────────────────────────────────────────────

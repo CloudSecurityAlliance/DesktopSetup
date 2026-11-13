@@ -15,11 +15,15 @@ Measured on a Mac on 2026-11-12, the name failed three ways:
 
 The fix reads each process's image path with `lsof -d txt`, excludes `$$` and its ancestors
 (walked with `ps -o ppid=`, bounded), and asks nothing - Get-RunningAiClients and
-Check-RunningTools on Windows (#109). The functions are extracted from the shipping script, not
-copied, and run against `ps` and `lsof` stubs built from a process table, so the logic runs
-anywhere bash does, Git Bash included (FRICTION-003).
+Check-RunningTools on Windows (#109). lsof is bounded at 5 s, and when it gives no answer the
+check says so instead of reporting that nothing runs. The functions are extracted from the
+shipping script, not copied, and run against `ps` and `lsof` stubs built from a process table,
+so the logic runs anywhere bash does, Git Bash included (FRICTION-003).
 
-The measured table below is the one from that Mac, with the home directory renamed.
+The measured table below is the one from that Mac, with the home directory renamed. The cases
+added at review each kill a mutation that the first version of this file let through: widening
+Claude Desktop's match to all of Claude.app, dropping the `/codex$` anchor, and dropping the
+`|| true` that keeps lsof's exit status out of the answer.
 
 A CONTROL, as ADR-005 asks: the cases are re-run against check_running_tools as it stood at
 36e76b4, with a `pgrep` stub that matches the basename of argv[0] as macOS's does. It must FAIL
@@ -85,13 +89,18 @@ OLD_CHECK_RUNNING_TOOLS = """check_running_tools() {
 # A process: (pid, ppid, argv[0], image path, another mapped file or "").
 Row = tuple[str, str, str, str, str]
 
-CLAUDE_DESKTOP = "/Applications/Claude.app/Contents/MacOS/Claude"
+CLAUDE_APP = "/Applications/Claude.app/Contents"
+CLAUDE_DESKTOP = f"{CLAUDE_APP}/MacOS/Claude"
+CLAUDE_HELPER = f"{CLAUDE_APP}/Frameworks/Claude Helper.app/Contents/MacOS/Claude Helper"
+CLAUDE_CRASHPAD = f"{CLAUDE_APP}/Frameworks/Electron Framework.framework/Helpers/chrome_crashpad_handler"
+CLAUDE_DISCLAIMER = f"{CLAUDE_APP}/Helpers/disclaimer"
 CHATGPT_DESKTOP = "/Applications/ChatGPT.app/Contents/MacOS/ChatGPT"
 CHATGPT_CODEX = "/Applications/ChatGPT.app/Contents/Resources/codex-cli/CodexCLI.app/Contents/MacOS/codex"
 CLAUDE_CODE = f"{HOME}/.local/share/claude/versions/2.1.322"
 NODE = f"{HOME}/.nvm/versions/node/v23.7.0/bin/node"
-CODEX_NPM = (f"{HOME}/.nvm/versions/node/v23.7.0/lib/node_modules/@openai/codex/node_modules/"
-             "@openai/codex-darwin-arm64/vendor/aarch64-apple-darwin/bin/codex")
+CODEX_VENDOR = (f"{HOME}/.nvm/versions/node/v23.7.0/lib/node_modules/@openai/codex/node_modules/"
+                "@openai/codex-darwin-arm64/vendor/aarch64-apple-darwin")
+CODEX_NPM = f"{CODEX_VENDOR}/bin/codex"
 # Where lsof found the same session's image after npm, updating the package, renamed its directory.
 CODEX_NPM_RENAMED = CODEX_NPM.replace("@openai/codex/", "@openai/.codex-gS3DM69j/", 1)
 CODEX_DAEMON = f"{HOME}/.codex/packages/app-server-daemon/releases/0.167.2-aarch64-apple-darwin/bin/codex"
@@ -99,10 +108,8 @@ CODEX_DAEMON = f"{HOME}/.codex/packages/app-server-daemon/releases/0.167.2-aarch
 # Measured 2026-11-12 (pids, parents, argv[0] and images as ps and lsof reported them).
 MEASURED: list[Row] = [
     ("1771", "1", CLAUDE_DESKTOP, CLAUDE_DESKTOP, ""),
-    ("1955", "1771", "/Applications/Claude.app/Contents/Frameworks/Claude Helper.app/Contents/MacOS/Claude Helper",
-     "/Applications/Claude.app/Contents/Frameworks/Claude Helper.app/Contents/MacOS/Claude Helper", ""),
-    ("1945", "1", "/Applications/Claude.app/Contents/Frameworks/Electron Framework.framework/Helpers/chrome_crashpad_handler",
-     "/Applications/Claude.app/Contents/Frameworks/Electron Framework.framework/Helpers/chrome_crashpad_handler", ""),
+    ("1955", "1771", CLAUDE_HELPER, CLAUDE_HELPER, ""),
+    ("1945", "1", CLAUDE_CRASHPAD, CLAUDE_CRASHPAD, ""),
     ("4506", "1", "-zsh", "/bin/zsh", ""),
     ("4721", "4506", "claude", CLAUDE_CODE, ""),
     ("73748", "1", "-zsh", "/bin/zsh", ""),
@@ -133,14 +140,16 @@ ps() {
   fi
   awk -F'\t' -v p="$4" '$1 == p { printf "%6s\n", $2; found = 1 } END { exit !found }' "$TABLE"
 }
-# -Fpn output: a p record per process, then each txt file, executable first. It exits 1 after a
-# full answer, which real lsof can do: the status must not cost the list.
+# -Fpn output: a p record per process, then each txt file, executable first. In every mode that
+# answers, it then exits 1, which real lsof can do after a full answer: the status must not
+# cost the list.
 lsof() {
   echo "lsof $*" >> "$TABLE.log"
-  if [[ "$LSOF_MODE" == "absent" ]]; then
-    echo "lsof: command not found" >&2
-    return 127
-  fi
+  case "$LSOF_MODE" in
+    absent) echo "lsof: command not found" >&2; return 127 ;;
+    empty)  return 1 ;;
+    hang)   exec sleep 30 ;;
+  esac
   awk -F'\t' '{
     printf "p%s\nftxt\nn%s\n", $1, $4
     if ($5 != "") printf "ftxt\nn%s\n", $5
@@ -157,10 +166,13 @@ pgrep() {
 # This shell is the installer: it joins the table under the parent the case gave it.
 printf '%s\t%s\t%s\t%s\t\n' "$$" '@@SELF_PPID@@' "bash" "/bin/bash" >> "$TABLE"
 echo "CSA_TEST_BEGIN"
-rc=0
-@@CALL@@ || rc=$?
+@@INVOKE@@
 echo "CSA_TEST_END rc=$rc"
 """
+# Called inside `||`, where bash ignores set -e in the function, or as a plain statement, where
+# set -e applies to everything it runs - which is how a failing step would kill an installer.
+GUARDED = "rc=0\n@@CALL@@ || rc=$?"
+PLAIN = "@@CALL@@\nrc=0"
 
 
 def extract(text: str, name: str) -> str:
@@ -174,48 +186,64 @@ NEW_FUNCTIONS = "\n".join(extract(TEXT, n) for n in
                           ("csa_ancestor_pids", "running_ai_clients", "check_running_tools"))
 
 
+class Result:
+    def __init__(self, out: str, log: str, rc: int, seconds: float, leftovers: list[str]):
+        self.out, self.log, self.rc, self.seconds, self.leftovers = out, log, rc, seconds, leftovers
+
+    @property
+    def lines(self) -> list[str]:
+        return [line for line in self.out.splitlines() if line]
+
+
 def run(rows: list[Row], call: str, *, self_ppid: str = "1", old: bool = False,
-        lsof_mode: str = "table", stdin: str = "n\n") -> tuple[str, str, int]:
-    """(output between the markers, the stub log, exit status). -1 when it hung or broke."""
+        lsof_mode: str = "table", plain: bool = False, home: str = HOME,
+        stdin: str = "n\n") -> Result:
+    """Run one call against the stubs. rc is -1 when it hung, or never reached its end."""
     work = tempfile.mkdtemp(prefix="csa-running-")
     try:
         table = pathlib.Path(work, "table")
         table.write_text("".join("\t".join(r) + "\n" for r in rows), encoding="utf-8")
+        tmpdir = pathlib.Path(work, "tmp")
+        tmpdir.mkdir()
+        invoke = (PLAIN if plain else GUARDED).replace("@@CALL@@", call)
         script = (DRIVER.replace("@@TABLE@@", str(table))
                   .replace("@@LSOF_MODE@@", lsof_mode)
                   .replace("@@SELF_PPID@@", self_ppid)
                   .replace("@@FUNCTIONS@@", OLD_CHECK_RUNNING_TOOLS if old else NEW_FUNCTIONS)
-                  .replace("@@CALL@@", call))
+                  .replace("@@INVOKE@@", invoke))
         path = pathlib.Path(work, "driver.sh")
         path.write_text(script, encoding="utf-8")
-        env = {"PATH": "/usr/bin:/bin", "HOME": HOME}
+        env = {"PATH": "/usr/bin:/bin", "HOME": home, "TMPDIR": str(tmpdir)}
+        start = time.monotonic()
         try:
             proc = subprocess.run([BASH, str(path)], input=stdin, capture_output=True, text=True,
                                   env=env, timeout=60)
         except subprocess.TimeoutExpired:
-            return "TIMEOUT", "", -1
+            return Result("TIMEOUT", "", -1, time.monotonic() - start, [])
+        seconds = time.monotonic() - start
         log_path = pathlib.Path(str(table) + ".log")
         log = log_path.read_text(encoding="utf-8") if log_path.exists() else ""
+        leftovers = sorted(p.name for p in tmpdir.iterdir())
         out = proc.stdout + proc.stderr
         body = re.search(r"CSA_TEST_BEGIN\n(.*)CSA_TEST_END rc=(\d+)", out, re.S)
         if not body:
-            return out, log, -1
-        return body.group(1), log, int(body.group(2))
+            return Result(out, log, -1, seconds, leftovers)
+        return Result(body.group(1), log, int(body.group(2)), seconds, leftovers)
     finally:
         shutil.rmtree(work, ignore_errors=True)
 
 
 def clients(rows: list[Row], **kw) -> list[str]:
-    out, _, rc = run(rows, "running_ai_clients", **kw)
-    return [line for line in out.splitlines() if line] if rc == 0 else [f"<rc={rc}: {out!r}>"]
+    r = run(rows, "running_ai_clients", **kw)
+    return r.lines if r.rc == 0 else [f"<rc={r.rc}: {r.out!r}>"]
 
 
 def old_named(rows: list[Row], **kw) -> tuple[list[str], bool]:
     """What the old check named, and whether it asked."""
-    out, _, _ = run(rows, "check_running_tools", old=True, **kw)
-    m = re.search(r"These tools are currently running: (.*)", out)
+    r = run(rows, "check_running_tools", old=True, **kw)
+    m = re.search(r"These tools are currently running: (.*)", r.out)
     names = re.findall(r"Claude Code|Codex CLI|Gemini CLI", m.group(1)) if m else []
-    return names, "ASKED:" in out
+    return names, "ASKED:" in r.out
 
 
 # Cases shared by the new code and the control: (label, rows, self_ppid, expected).
@@ -299,6 +327,16 @@ def main() -> int:
                   self_ppid="4")
     check(got == [], f"an ancestor desktop app is not named either ({got})")
 
+    got = clients([("1945", "1", CLAUDE_CRASHPAD, CLAUDE_CRASHPAD, ""),
+                   ("1955", "1", CLAUDE_HELPER, CLAUDE_HELPER, ""),
+                   ("2166", "1", CLAUDE_DISCLAIMER, CLAUDE_DISCLAIMER, "")])
+    check(got == [], f"Claude Desktop quit, its helpers still alive: not Claude Desktop ({got})")
+
+    got = clients([("900", "1", f"{CODEX_VENDOR}/codex-path/rg", f"{CODEX_VENDOR}/codex-path/rg", ""),
+                   ("901", "1", f"{CODEX_VENDOR}/bin/codex-code-mode-host",
+                    f"{CODEX_VENDOR}/bin/codex-code-mode-host", "")])
+    check(got == [], f"the npm Codex package's other binaries (rg, codex-code-mode-host) are not the CLI ({got})")
+
     got = clients([("900", "1", "/usr/bin/mdworker", "/usr/bin/mdworker", CLAUDE_DESKTOP)])
     check(got == [], f"a process that merely maps a client's binary is not that client ({got})")
 
@@ -313,30 +351,61 @@ def main() -> int:
                     "/Applications/Copilot.app/Contents/MacOS/Copilot", "")])
     check(got == [], f"not listed, as on Windows: the Gemini CLI (it is node), Gemini Desktop, Copilot ({got})")
 
-    out, log, rc = run(MEASURED, "running_ai_clients")
-    check(rc == 0 and "-d txt" in log and "-u 501" in log and "-Fpn" in log and "UNEXPECTED" not in log,
-          f"lsof is asked for executables, for this user only, and ps only for parents ({log.strip()!r})")
+    # A $HOME that is a symlink: lsof reports the resolved path. On macOS the temporary directory
+    # is itself under /var -> /private/var, so this is the real shape, not only the test's.
+    links = tempfile.mkdtemp(prefix="csa-home-")
+    try:
+        real = pathlib.Path(links, "real")
+        (real / ".local").mkdir(parents=True)
+        link = pathlib.Path(links, "link")
+        link.symlink_to(real)
+        image = os.path.realpath(real) + "/.local/share/claude/versions/2.1.322"
+        got = clients([("700", "1", "claude", image, "")], home=str(link))
+        check(got == ["Claude Code"], f"a symlinked $HOME still finds Claude Code at its resolved path ({got})")
+    finally:
+        shutil.rmtree(links, ignore_errors=True)
 
-    got = clients(MEASURED, lsof_mode="absent")
-    check(got == [], f"without lsof it names nothing and does not fail ({got})")
+    r = run(MEASURED, "running_ai_clients")
+    check(r.rc == 0 and "-d txt" in r.log and "-u 501" in r.log and "-Fpn" in r.log
+          and "UNEXPECTED" not in r.log,
+          f"lsof is asked for executables, for this user only, and ps only for parents ({r.log.strip()!r})")
+
+    r = run(MEASURED, "running_ai_clients", plain=True)
+    check(r.rc == 0 and r.lines == ["Claude Code", "Claude Desktop", "Codex CLI"],
+          f"lsof exiting 1 after a full answer costs nothing, even where set -e applies ({r.rc}, {r.lines})")
+
+    print("\nwhen lsof gives no answer")
+    for mode, why in (("absent", "no lsof"), ("empty", "lsof failing with no output")):
+        r = run(MEASURED, "running_ai_clients", lsof_mode=mode)
+        check(r.rc == 1 and r.lines == [], f"{why}: it returns 1 and names nothing ({r.rc}, {r.lines})")
+    r = run(MEASURED, "running_ai_clients", lsof_mode="hang")
+    check(r.rc == 1 and r.lines == [] and r.seconds < 15,
+          f"an lsof that hangs is given up on (5 s bound): it returns 1 after {r.seconds:.1f} s")
+    check(r.leftovers == [], f"and leaves no temporary file behind ({r.leftovers})")
+    r = run(MEASURED, "running_ai_clients")
+    check(r.leftovers == [], f"nor does a normal run ({r.leftovers})")
+    r = run(MEASURED, "check_running_tools", lsof_mode="absent", plain=True)
+    check(r.rc == 0 and r.out.strip() == "INFO Could not tell which AI clients are running "
+                                         "(lsof gave no answer) - carrying on.",
+          f"check_running_tools says it could not tell, and carries on ({r.out.strip()!r})")
 
     print("\ncsa_ancestor_pids is bounded")
-    out, _, rc = run([("700", "800", "a", "/bin/a", ""), ("800", "700", "b", "/bin/b", "")],
-                     "csa_ancestor_pids", self_ppid="700")
-    lines = out.split()
-    check(rc == 0 and 0 < len(lines) <= 12, f"a cycle in the parent chain ends within 12 hops ({len(lines)} pids)")
-    out, _, rc = run([("900", "900", "a", "/bin/a", "")], "csa_ancestor_pids", self_ppid="900")
-    check(rc == 0 and out.split()[1:] == ["900"], f"a process that is its own parent ends the walk ({out.split()})")
+    r = run([("700", "800", "a", "/bin/a", ""), ("800", "700", "b", "/bin/b", "")],
+            "csa_ancestor_pids", self_ppid="700")
+    check(r.rc == 0 and 0 < len(r.lines) <= 12,
+          f"a cycle in the parent chain ends within 12 hops ({len(r.lines)} pids)")
+    r = run([("900", "900", "a", "/bin/a", "")], "csa_ancestor_pids", self_ppid="900")
+    check(r.rc == 0 and r.lines[1:] == ["900"], f"a process that is its own parent ends the walk ({r.lines})")
 
     print("\ncheck_running_tools")
-    out, _, rc = run(MEASURED, "check_running_tools")
-    check(rc == 0 and out.strip().startswith("INFO Found Claude Code, Claude Desktop, Codex CLI running - "
-                                             "no need to close anything.")
-          and out.strip().count("\n") == 0,
-          f"one line naming what was found ({out.strip()!r})")
-    check("ASKED:" not in out and "ABORT" not in out, "it asks nothing, and a 'n' on stdin stops nothing")
-    out, _, rc = run(ANCESTRY, "check_running_tools", self_ppid="500")
-    check(rc == 0 and out.strip() == "", f"nothing found prints nothing ({out.strip()!r})")
+    r = run(MEASURED, "check_running_tools", plain=True)
+    check(r.rc == 0 and r.lines == ["INFO Found Claude Code, Claude Desktop, Codex CLI running - no need "
+                                    "to close anything. Restart them once this finishes, so they use "
+                                    "what it installs."],
+          f"one line naming what was found ({r.lines})")
+    check("ASKED:" not in r.out and "ABORT" not in r.out, "it asks nothing, and a 'n' on stdin stops nothing")
+    r = run(ANCESTRY, "check_running_tools", self_ppid="500", plain=True)
+    check(r.rc == 0 and r.out.strip() == "", f"nothing found prints nothing ({r.out.strip()!r})")
 
     # The same expectation as above, so a broken stub cannot make the control pass: a pgrep stub
     # that never matched would leave the old check naming nothing, and the cases expecting

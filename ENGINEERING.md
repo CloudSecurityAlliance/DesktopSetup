@@ -90,7 +90,7 @@ tools/
   check-*.py                 # fourteen repo-specific checks; all fourteen also run in CI
   sweep-csa-sources.sh       # weekly drift sweep (network + gh; NOT in check-all.sh)
 tests/
-  test_*.py                  # fifteen standalone executables — run one directly with python3
+  test_*.py                  # sixteen standalone executables — run one directly with python3
   NativeWrappers.Tests.ps1   # Pester; the only suite that needs real 5.1 to mean anything
   DesktopApps.Tests.ps1      # Pester; windows-update.ps1's wait before replacing a running app
   NpmGlobals.Tests.ps1       # Pester; the npm installers run install -g <pkg>@latest (#153)
@@ -597,7 +597,7 @@ every file that uses it** — `check-duplication.py` enforces byte-identical beh
 
 ## The guard layer
 
-Fourteen checkers in `tools/` and eighteen test files in `tests/`. **`./tools/check-all.sh` mirrors CI
+Fourteen checkers in `tools/` and nineteen test files in `tests/`. **`./tools/check-all.sh` mirrors CI
 exactly** — run it before pushing.
 
 A guard here is added only for a mistake that actually shipped, names its issue in the file, and
