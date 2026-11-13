@@ -28,19 +28,22 @@ what that plan file showed as a re-point and is unchanged since (same client, sc
 name and fingerprint), and only when the standard binary is there. It edits the client's own
 file, never through a client CLI (argv is visible to every account): `command`, plus `args` in
 the pinned `-m <module>` form, and nothing else. A write to Claude Code's config takes Claude
-Code's own lock (M1) and never breaks one. Every write makes no backup until the file is known
-unchanged since it was read, keeps the file's mode, and reads back what it wrote, restoring the
-backup if that differs. Backups are `<file>.bak-<14 digits>`, pruned to three, as
-csa-claude-connectors.py names and prunes them; each holds the same secrets as its file, at its
-mode.
+Code's own lock (M1), never breaks one, abandons the write if it has held it 5 s, and removes
+only the lock it made. Every write makes no backup until the file is known unchanged since it
+was read, keeps the file's mode, refuses a config with a second name (a hard link), and reads
+back what it wrote, restoring the backup if that differs. Backups are `<file>.bak-<14 digits>`,
+pruned to three, as csa-claude-connectors.py names and prunes them; each holds the same secrets
+as its file, at its mode. SIGTERM and SIGHUP stop apply through its clean-ups, and each apply
+removes this tool's own temp files older than itself that a run stopped mid-write left.
 
 Re-serialising a JSON config keeps every value, the key order, the indent width (tabs too), the
 trailing newline or its absence, and CRLF. What it can change is spelling only: the whitespace
 between tokens becomes json.dumps's (one item per line, `": "`); a `\\u` escape of a printable
 character is written as the character (`\\u00e9`), while a lone surrogate stays escaped; and a
-number is written in Python's form (`1.5e3` as `1500.0`). mkstemp plus os.replace keeps the
-mode, not the file's extended attributes or ACLs. Codex's config.toml is edited line by line:
-only the `command` line, and the `args` line for the `-m` form, change.
+number is written in Python's form (`1.5e3` as `1500.0`, `-0` as `0`). A config holding a
+number no JSON client can read back (`1e999`, NaN) is not rewritten. mkstemp plus os.replace
+keeps the mode, not the file's extended attributes or ACLs. Codex's config.toml is edited line
+by line: only the `command` line, and the `args` line for the `-m` form, change.
 
 Neither ever opens a token, OAuth state or credential file, runs a server, or prints an env
 VALUE - only key names and counts. The values it reads stay in memory, and a value is written
@@ -82,7 +85,7 @@ import tempfile
 import time
 import unicodedata
 
-SCRIPT_VERSION = "2026-11-13T04:20Z"
+SCRIPT_VERSION = "2026-11-13T14:57Z"
 
 # ── The plan's decisions (D1-D5). Each is pinned by one test; an answer changes the constant. ──
 
@@ -1076,6 +1079,8 @@ def plan_document(ctx, clients, findings):
             "scope": f.reg.scope,
             "project": f.reg.project,
             "name": f.reg.name,
+            # The file it is in, resolved: apply's approval binds it (A4). A path, not a value.
+            "config": os.path.realpath(f.reg.config),
             "transport": f.reg.transport,
             "fingerprint": f.fingerprint,
             "env_keys": sorted(f.reg.env),
@@ -1248,6 +1253,10 @@ def plan(args, created):
 # the lock, and every other client is still repaired.
 CLAUDE_LOCK_WAIT = 10.0
 LOCK_POLL = 0.05
+# Held longer than this (a slow disk, or a Mac that slept mid-write), the write is abandoned:
+# past 10 s Claude Code may call the lock stale and take it over, and two writers would race.
+# Wall-clock time, as proper-lockfile measures staleness: a monotonic clock stops in sleep.
+LOCK_HOLD_MAX = 5.0
 
 # A13: the same backup name, regex and cap as csa-claude-connectors.py, deliberately, so one
 # prune bounds both tools' copies of a file that holds secrets (backup_rule_matches_connectors).
@@ -1255,6 +1264,10 @@ LOCK_POLL = 0.05
 BACKUPS_KEPT = 3
 BACKUP_RE = re.compile(r"\.bak-\d{14}$")
 TMP_PREFIX = ".csa-registrations-"
+# The names mkstemp gives this tool's temp files: the prefix and eight of its characters. A run
+# killed mid-write can leave one, holding the config's secrets; the next apply removes those
+# older than itself, and nothing else.
+TMP_NAME = re.compile(r"^\.csa-registrations-[a-z0-9_]{8}$")
 
 # The tests set this to see, or move, a file between the steps of a write. Never set in a run.
 TEST_HOOK = None
@@ -1279,7 +1292,14 @@ R_CODEX_LAYOUT = "its Codex entry is laid out in a way this cannot edit safely; 
 R_CODEX_UNREAD = "Codex could not show it (`codex mcp get --json` failed); not changed"
 R_LOCKED = ("Claude Code's config stayed locked for {secs:g}s, so it was not changed; the lock "
             "was left as it is")
+R_LOCK_SLOW = ("the write held Claude Code's lock for more than {secs:g}s, near when Claude Code "
+               "may take it over; not written — run again")
+R_LOCK_LOST = "Claude Code's lock stopped being this run's during the write; not written — run again"
+R_HARD_LINK = ("its config has another name too (a hard link), which a replace would cut off; "
+               "not changed — edit it by hand")
 T_LOCKED = "Claude Code's config is locked; close Claude Code and run again"
+# A crashed process's lock outlives it, and closing Claude Code does not clear that one.
+T_LOCKED_STALE = "; if Claude Code is not running, remove {lock}"
 T_NO_STANDARD = "{label} is dead, and its standard binary is not installed yet; run this again once its setup has installed it"
 T_RESTART = "Restart {client}"
 OK_LINE = "{name} re-pointed in {where} at ~/.local/bin/{entry}; its {settings} kept"
@@ -1304,18 +1324,21 @@ def unlink_quietly(path):
         pass
 
 
-def approval_key(client, scope, project, name, fingerprint):
+def approval_key(client, scope, project, name, fingerprint, config):
     """What must match between the plan agreed to and this run (A4): the same registration, in
-    the same place, with the same command, args and setting NAMES."""
-    return (client, scope, project, name, fingerprint)
+    the same place, with the same command, args and setting NAMES, in the same file (`config`,
+    its realpath): a run under another HOME or CLAUDE_CONFIG_DIR is another file."""
+    return (client, scope, project, name, fingerprint, config)
 
 
 def key_of(f):
-    return approval_key(f.reg.client, f.reg.scope, f.reg.project, f.reg.name, f.fingerprint)
+    return approval_key(f.reg.client, f.reg.scope, f.reg.project, f.reg.name, f.fingerprint,
+                        os.path.realpath(f.reg.config))
 
 
 def load_approved(path):
-    """(the keys planned as re-points, every key planned, None), or (None, None, why)."""
+    """(the keys planned as re-points, every key planned, None), or (None, None, why). A key
+    the file lists both as a re-point and as anything else counts as left: the safe side."""
     try:
         with open(path, "rb") as fh:
             raw = fh.read()
@@ -1331,20 +1354,20 @@ def load_approved(path):
     findings = data.get("findings")
     if not isinstance(findings, list):
         return foreign
-    repoint, every = set(), set()
+    repoint, left, every = set(), set(), set()
     for f in findings:
         if not isinstance(f, dict):
             return foreign
-        fields = (f.get("client"), f.get("scope"), f.get("name"), f.get("fingerprint"))
+        fields = (f.get("client"), f.get("scope"), f.get("name"), f.get("fingerprint"),
+                  f.get("config"))
         project = f.get("project")
         if not all(isinstance(x, str) for x in fields) or not (project is None
                                                                  or isinstance(project, str)):
             return foreign
-        key = approval_key(fields[0], fields[1], project, fields[2], fields[3])
+        key = approval_key(fields[0], fields[1], project, fields[2], fields[3], fields[4])
         every.add(key)
-        if f.get("action") == "re-point":
-            repoint.add(key)
-    return repoint, every, None
+        (repoint if f.get("action") == "re-point" else left).add(key)
+    return repoint - left, every, None
 
 
 class Change(object):
@@ -1410,27 +1433,70 @@ class Locked(Exception):
         self.lock = lock
 
 
-@contextlib.contextmanager
-def claude_lock(path):
-    """Claude Code's own lock on its config (M1): mkdir `<config>.lock`, wait a bounded time
-    for one that is held, never break it, rmdir it after."""
-    lock = path + ".lock"
-    deadline = time.monotonic() + CLAUDE_LOCK_WAIT
-    while True:
-        try:
-            os.mkdir(lock, 0o700)
-            break
-        except FileExistsError:
-            if time.monotonic() >= deadline:
-                raise Locked(lock)
-            time.sleep(LOCK_POLL)
+def dir_identity(path):
     try:
-        yield lock
-    finally:
-        try:
-            os.rmdir(lock)
-        except OSError:
-            pass
+        st = os.lstat(path)
+    except OSError:
+        return None
+    return st.st_dev, st.st_ino, st.st_mtime_ns
+
+
+class ClaudeLock(object):
+    """Claude Code's own lock on its config (M1): mkdir `<config>.lock`, wait a bounded time
+    for one that is held, never break it. What was created is recorded, so `check` can tell
+    the write it is still this run's and held briefly, and the release removes only this run's
+    lock: held past Claude Code's stale limit, the lock may have been taken over by then."""
+
+    def __init__(self, path):
+        self.lock = path + ".lock"
+        self.mine = None
+        self.taken = None
+
+    def __enter__(self):
+        deadline = time.monotonic() + CLAUDE_LOCK_WAIT
+        while True:
+            try:
+                os.mkdir(self.lock, 0o700)
+                break
+            except FileExistsError:
+                if time.monotonic() >= deadline:
+                    raise Locked(self.lock)
+                time.sleep(LOCK_POLL)
+        self.taken = time.time()
+        self.mine = dir_identity(self.lock)
+        return self
+
+    def ours(self):
+        return self.mine is not None and dir_identity(self.lock) == self.mine
+
+    def check(self):
+        """None while the write may go on; else why it must stop."""
+        if time.time() - self.taken > LOCK_HOLD_MAX:
+            return R_LOCK_SLOW.format(secs=LOCK_HOLD_MAX)
+        if not self.ours():
+            return R_LOCK_LOST
+        return None
+
+    def __exit__(self, *exc):
+        if self.ours():
+            try:
+                os.rmdir(self.lock)
+            except OSError:
+                pass
+        return False
+
+
+class NoLock(object):
+    """The clients that take no lock on their config."""
+
+    def __enter__(self):
+        return self
+
+    def check(self):
+        return None
+
+    def __exit__(self, *exc):
+        return False
 
 
 def identity(st):
@@ -1461,6 +1527,11 @@ def prune_backups(path, keep=BACKUPS_KEPT):
                   reverse=True)
     for name in mine[keep:]:
         unlink_quietly(os.path.join(d, name))
+
+
+def backup_stamp():
+    """The %Y%m%d%H%M%S stamp csa-claude-connectors.py also uses, local time (A13)."""
+    return time.strftime("%Y%m%d%H%M%S")
 
 
 def make_backup(path, stamp, mode):
@@ -1501,14 +1572,21 @@ def abandon(*paths):
     return "changed", None
 
 
-def replace_file(path, data, before, stamp, verify):
-    """Steps 4-10 of the plan's edit_json, for any config: ("ok" | "changed" | "restored" |
-    "unrestored", backup).
+def other_names(st):
+    """A hard-linked config has another name; os.replace would give this one a new file and
+    leave the other holding the old, silently cut off."""
+    return st.st_nlink > 1
+
+
+def replace_file(path, data, before, stamp, verify, lock):
+    """Steps 4-10 of the plan's edit_json, for any config: (status, detail). The status is
+    "ok", "restored" or "unrestored" (detail: the backup), "changed", or "refused" (detail: why).
 
     `before` is the lstat taken before the file was read. No backup exists until the file is
     known unchanged since then (step 5), and one made is removed again if the file moves before
-    the replace (step 7): an abandoned write leaves no backup and prunes nothing. Only a replace
-    that reads back as intended prunes (A13)."""
+    the replace (step 7), or the lock is no longer safely held (`lock.check`): an abandoned
+    write leaves no backup and prunes nothing. Only a replace that reads back as intended
+    prunes (A13)."""
     mode = stat.S_IMODE(before.st_mode) & 0o777
     tmp = write_temp(path, data, mode)                     # 4
     backup = None
@@ -1520,6 +1598,11 @@ def replace_file(path, data, before, stamp, verify):
         hook("backed-up", path)
         if moved(path, before):                            # 7
             return abandon(tmp, backup)
+        why = lock.check()
+        if why:
+            unlink_quietly(tmp)
+            unlink_quietly(backup)
+            return "refused", why
         os.replace(tmp, path)                              # 8
         tmp = None
     except BaseException:
@@ -1550,14 +1633,45 @@ def restore(path, backup, mode):
     return "restored"
 
 
-def outcome(status, change, backup):
+def outcome(status, change, detail):
     if status == "ok":
         return done(change)
     if status == "restored":
         return refused(change, R_RESTORED)
     if status == "unrestored":
-        return refused(change, R_UNRESTORED.format(backup=tilde(backup)))
+        return refused(change, R_UNRESTORED.format(backup=tilde(detail)))
+    if status == "refused":
+        return refused(change, detail)
     return refused(change, R_CHANGED)
+
+
+def sweep_temps(directory, since):
+    """Remove this tool's own temp files in `directory` that are older than this run: a run
+    killed between its mkstemp and its replace leaves one, holding the config's secrets. Only
+    regular files, owned by this user, named exactly as mkstemp names them here (TMP_NAME), and
+    last changed before `since`. Never anything else. Returns how many were removed."""
+    try:
+        names = os.listdir(directory)
+    except OSError:
+        return 0
+    uid = os.getuid() if hasattr(os, "getuid") else None
+    removed = 0
+    for name in names:
+        if not TMP_NAME.match(name):
+            continue
+        p = os.path.join(directory, name)
+        try:
+            st = os.lstat(p)
+        except OSError:
+            continue
+        if (stat.S_ISREG(st.st_mode) and (uid is None or st.st_uid == uid)
+                and st.st_mtime < since):
+            try:
+                os.unlink(p)
+                removed += 1
+            except OSError:
+                pass
+    return removed
 
 
 def same(a, b, ordered=True):
@@ -1642,19 +1756,20 @@ def edit_json(client, path, changes, ctx, stamp):
     if linked_config(path):  # A10, again: it may have become a link since the audit
         why = R_LINK.format(path=tilde(os.path.realpath(path)))
         return [(c, refused(c, why)) for c in changes]
-    lock = claude_lock(path) if client == CLAUDE_CODE else contextlib.nullcontext()
     try:
-        with lock:
-            return edit_json_held(client, path, changes, stamp)
+        with (ClaudeLock(path) if client == CLAUDE_CODE else NoLock()) as lock:
+            return edit_json_held(client, path, changes, stamp, lock)
     except Locked as e:
-        todo = (TODO_RESTART, f"{T_LOCKED} (the lock is {tilde(e.lock)})")
+        todo = (TODO_RESTART, T_LOCKED + T_LOCKED_STALE.format(lock=tilde(e.lock)))
         return [(c, refused(c, R_LOCKED.format(secs=CLAUDE_LOCK_WAIT), *todo)) for c in changes]
 
 
-def edit_json_held(client, path, changes, stamp):
+def edit_json_held(client, path, changes, stamp, lock):
     before = os.lstat(path)
     if not stat.S_ISREG(before.st_mode):
         return [(c, refused(c, R_CHANGED)) for c in changes]
+    if other_names(before):
+        return [(c, refused(c, R_HARD_LINK)) for c in changes]
     with open(path, "rb") as fh:
         raw = fh.read()
     hook("read", path)
@@ -1707,8 +1822,8 @@ def edit_json_held(client, path, changes, stamp):
         except (OSError, ValueError, ShapeError, RecursionError):
             return False
 
-    status, backup = replace_file(path, out, before, stamp, verify)
-    return results + [(c, outcome(status, c, backup)) for c, _ in kept]
+    status, detail = replace_file(path, out, before, stamp, verify, lock)
+    return results + [(c, outcome(status, c, detail)) for c, _ in kept]
 
 
 # ── Codex: a line-local edit of config.toml, read back through `codex mcp get --json` ─────────
@@ -1765,12 +1880,17 @@ def codex_line_edits(lines, change):
     """{line index: new line} for the change, or None when the table is not laid out as this
     can edit safely: `[mcp_servers.<name>]` (or `."<name>"`) exactly once; inside it, until the
     next header, exactly one `command = "<old>"` line, and for the interpreter form exactly one
-    one-line `args = ["-m", "<module>"]`; and no multi-line string, which could hide a header."""
+    one-line `args = ["-m", "<module>"]`; and no multi-line string delimiter anywhere up to the
+    end of the table. Lines are matched one at a time, and a multi-line string can hold a line
+    that looks like the header or the command: one ABOVE the header could be the "header" this
+    found while the real table is spelled `[mcp_servers.'<name>']` (review of d39f719)."""
     name = re.escape(change.reg.name)
     header = re.compile(r'^\s*\[\s*mcp_servers\s*\.\s*(?:%s|"%s")\s*\]\s*(?:#.*)?$' % (name, name))
     body = [ln[:-1] if ln.endswith("\r") else ln for ln in lines]
     heads = [i for i, ln in enumerate(body) if header.match(ln)]
     if len(heads) != 1:
+        return None
+    if any('"""' in ln or "'''" in ln for ln in body[:heads[0]]):
         return None
     start = heads[0] + 1
     end = next((i for i in range(start, len(body)) if body[i].lstrip().startswith("[")),
@@ -1832,6 +1952,8 @@ def edit_codex(path, changes, ctx, stamp):
     before = os.lstat(path)
     if not stat.S_ISREG(before.st_mode):
         return [(c, refused(c, R_CHANGED)) for c in changes]
+    if other_names(before):
+        return [(c, refused(c, R_HARD_LINK)) for c in changes]
     with open(path, "rb") as fh:
         raw = fh.read()
     hook("read", path)
@@ -1866,19 +1988,61 @@ def edit_codex(path, changes, ctx, stamp):
         # Unordered: Codex may list a server's env in any order from one call to the next.
         return all(same(codex_get(c.reg.name, ctx), want, ordered=False) for c, want in kept)
 
-    status, backup = replace_file(path, "\n".join(lines).encode("utf-8"), before, stamp, verify)
-    return results + [(c, outcome(status, c, backup)) for c, _ in kept]
+    status, detail = replace_file(path, "\n".join(lines).encode("utf-8"), before, stamp, verify,
+                                  NoLock())
+    return results + [(c, outcome(status, c, detail)) for c, _ in kept]
 
 
 # ── apply ────────────────────────────────────────────────────────────────────────────────────
 
+STOP_SIGNALS = ("SIGTERM", "SIGHUP")
+
+
+@contextlib.contextmanager
+def exits_on_signals():
+    """While apply runs, SIGTERM and SIGHUP raise SystemExit instead of ending the process
+    where it stands, so every clean-up on the way out runs: the temp file holding a config's
+    secrets is removed, an unused backup with it, and Claude Code's lock is released (review of
+    d39f719: both were left). A signal between two statements can still leave a temp file
+    behind, which the next apply sweeps (sweep_temps)."""
+    def stop(signum, frame):
+        raise SystemExit(128 + signum)
+
+    saved = {}
+    for name in STOP_SIGNALS:
+        sig = getattr(signal, name, None)
+        # One the caller ignores (`nohup` ignores SIGHUP) stays ignored.
+        if sig is None or signal.getsignal(sig) == signal.SIG_IGN:
+            continue
+        try:
+            saved[sig] = signal.signal(sig, stop)
+        except (ValueError, OSError):  # not the main thread, or not this platform's
+            pass
+    try:
+        yield
+    finally:
+        for sig, old in saved.items():
+            signal.signal(sig, old if old is not None else signal.SIG_DFL)
+
+
 def apply(args):
     """Re-audit; re-point each finding the agreed plan showed as a re-point, unchanged since
     (A4), whose standard binary is there; report everything else, and leave the to-dos."""
+    started = time.time()
     ctx = Context(os.environ, args.system_applications)
     clients, findings = audit(ctx)
     for line in ctx.logs:
         emit("log", line)
+    swept = []
+    for client in CLIENTS:
+        config = ctx.configs.get(client)
+        directory = os.path.dirname(config) if config else None
+        if directory and directory not in swept and not linked_config(config):
+            swept.append(directory)
+            n = sweep_temps(directory, started)
+            if n:
+                emit("info", f"removed {n} temporary {'copy' if n == 1 else 'copies'} of a "
+                             f"config, left in {tilde(directory)} by a run stopped mid-write")
     if args.approved is None:
         # By hand: re-plan, show it, and act on it, as csa-claude-connectors.py --apply does.
         for row in render(clients, findings):
@@ -1921,7 +2085,7 @@ def apply(args):
         emit("warn", result[1])
         todos.add(*result[2])
 
-    stamp = time.strftime("%Y%m%d%H%M%S")
+    stamp = backup_stamp()
     restart = []
     for (client, path), changes in groups.items():
         # D4, asked again just before the write: Desktop may have started since the audit,
@@ -1977,7 +2141,11 @@ def main(argv=None):
         return 0 if e.code in (0, None) else 2
     if args.command == "apply":
         try:
-            return apply(args)
+            with exits_on_signals():
+                return apply(args)
+        except SystemExit:
+            say("stopped by a signal, with what was reported done")
+            raise
         except OutputLost:
             say("the results could not be printed; stopped, with what was reported done")
             return 2

@@ -2521,7 +2521,9 @@ def claude_lock_honoured():
         expect(state(cfg) == before, "written while Claude Code's lock was held")
         expect(lock.is_dir(), "the lock someone else held was removed")
         titles = [t for t in a.todo_titles(10) if t.startswith(T_LOCKED)]
-        expect(titles and "~/.claude.json.lock" in titles[0], f"ledger: {a.todos}")
+        # Closing Claude Code does not clear a crashed process's lock: the to-do says how.
+        expect(titles and titles[0].endswith(
+            "; if Claude Code is not running, remove ~/.claude.json.lock"), f"ledger: {a.todos}")
         expect(entry_of(gem, "csa-zendesk")["command"] == std_bin(w, "csa-zendesk"),
                "a locked Claude Code config stopped the other clients' repairs")
     with world() as w:
@@ -2729,6 +2731,407 @@ def apply_by_hand_replans_and_applies():
         expect(SECRET_A not in a.stdout + a.stderr, "a value was printed")
 
 
+# ── The review of d39f719 ────────────────────────────────────────────────────────────────────
+
+# Runs apply with a hook that, at one point of the write, says so and then waits, so a test
+# can send it a real signal from outside at exactly that point.
+SIGNAL_DRIVER = r'''
+import importlib.util, sys, time
+spec = importlib.util.spec_from_file_location("m", sys.argv[1])
+mod = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(mod)
+point, marker = sys.argv[2], sys.argv[3]
+
+def hold(at, path):
+    if at == point:
+        open(marker, "w").close()
+        time.sleep(60)
+
+mod.TEST_HOOK = hold
+sys.exit(mod.main(sys.argv[4:]))
+'''
+
+
+@case
+def signal_mid_write_leaves_nothing():
+    # SIGTERM or SIGHUP mid-write: no temp copy of the config (it holds the settings' values),
+    # no backup made for a write that did not happen, and Claude Code's lock released.
+    for sig, point in ((signal.SIGTERM, "written"), (signal.SIGHUP, "backed-up")):
+        with world() as w:
+            w.std("csa-zendesk")
+            cfg = w.claude(user={"csa-zendesk": reg(gone(w, "csa-zendesk"), env={"K": SECRET_A})})
+            w.run().ok()
+            before = state(cfg)
+            driver = w.tmp / "driver.py"
+            driver.write_text(SIGNAL_DRIVER)
+            marker = w.tmp / "at-point"
+            # Both signals at their defaults in the child, whatever the runner ignores: apply
+            # leaves a signal its caller ignores ignored (nohup), which is not this case.
+            p = subprocess.Popen([sys.executable, "-I", str(driver), str(SCRIPT), point,
+                                  str(marker)] + w.apply_argv("plan", []),
+                                 env=w.apply_env(False), cwd=str(w.tmp),
+                                 stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                 preexec_fn=lambda: [signal.signal(s, signal.SIG_DFL)
+                                                     for s in (signal.SIGTERM, signal.SIGHUP)])
+            try:
+                deadline = time.time() + 120
+                while not marker.exists() and p.poll() is None and time.time() < deadline:
+                    time.sleep(0.05)
+                expect(marker.exists(), f"{sig.name}: the write never reached {point}")
+                p.send_signal(sig)
+                _, err = p.communicate(timeout=60)
+            finally:
+                if p.poll() is None:
+                    p.kill()
+                    p.communicate()
+            expect(p.returncode == 128 + sig, f"{sig.name}: exit {p.returncode}: {err[-300:]!r}")
+            left = sorted(n for n in os.listdir(w.home) if n not in (".claude.json", ".local"))
+            expect(not left, f"{sig.name} at {point}: left behind: {left}")
+            expect(state(cfg) == before, f"{sig.name}: the config changed")
+            expect(b"stopped by a signal" in err, f"{sig.name}: stderr {err[-300:]!r}")
+    with world() as w:
+        # A signal the caller ignores (nohup ignores SIGHUP) stays ignored while apply runs.
+        mod = load_module()
+        old = signal.signal(signal.SIGHUP, signal.SIG_IGN)
+        try:
+            with mod.exits_on_signals():
+                during = signal.getsignal(signal.SIGHUP)
+        finally:
+            signal.signal(signal.SIGHUP, old)
+        expect(during == signal.SIG_IGN, f"an ignored SIGHUP was made to stop apply: {during}")
+
+
+@case
+def stale_temp_files_swept():
+    # A temp file a stopped run left holds a config's secrets. The next apply removes this
+    # tool's own, older than itself, in each config's directory - and nothing else.
+    with world() as w:
+        w.std("csa-zendesk")
+        w.claude(user={"csa-zendesk": reg(gone(w, "csa-zendesk"), env={"K": SECRET_A})})
+        w.desktop({})
+        w.run().ok()
+        old, future = time.time() - 3600, time.time() + 3600
+        desktop_dir = desktop_cfg(w).parent
+        stale = [w.home / ".csa-registrations-ab12cd_9", desktop_dir / ".csa-registrations-0z9y8x7w"]
+        kept = [w.home / ".csa-registrations-keep.txt", w.home / ".csa-registrations-ABCDEFGH",
+                w.home / ".csa-registrations-short", w.home / "csa-registrations-ab12cd_9",
+                w.tmp / ".csa-registrations-elsewhe"]
+        for p in stale + kept:
+            p.write_text(SECRET_A)
+            os.utime(p, (old, old))
+        newer = w.home / ".csa-registrations-zz99zz99"  # changed after the run began
+        newer.write_text("x")
+        os.utime(newer, (future, future))
+        outside = w.tmp / "outside.txt"
+        outside.write_text("outside")
+        link = w.home / ".csa-registrations-lnk00000"
+        link.symlink_to(outside)
+        os.utime(link, (old, old), follow_symlinks=False)
+        a = w.apply()
+        a.ok()
+        for p in stale:
+            expect(not os.path.lexists(p), f"{p.name}: a stale temp file was left")
+        for p in kept + [newer, link]:
+            expect(os.path.lexists(p), f"{p.name}: removed, though it is not a stale temp file")
+        expect(outside.read_text() == "outside", "a link's target was touched")
+        expect(any("stopped mid-write" in i for i in a.infos), f"not said: {a.infos}")
+
+
+@case
+def desktop_state_unknown_at_write_skipped():
+    # D4: `ps` answers at the audit and fails just before the write. "Could not tell" is not
+    # "not running", so Desktop's config is not written.
+    with world() as w:
+        w.std("csa-zendesk")
+        cfg = w.desktop({"csa-zendesk": reg(gone(w, "csa-zendesk"))})
+        count = w.tmp / "ps.count"
+        w.stub("ps", f'n=$(cat "{count}" 2>/dev/null || echo 0); n=$((n+1)); echo "$n" > "{count}"\n'
+                     'if [ "$n" -ge 3 ]; then exit 1; fi\nexit 0')
+        r = w.run()
+        r.ok()
+        expect(r.f("csa-zendesk", "Claude Desktop")["action"] == "re-point", "fixture")
+        before = state(cfg)
+        a = w.apply()
+        a.ok()
+        expect(state(cfg) == before, "written when it could not be told whether Desktop runs")
+        expect(a.warned("could not tell whether Claude Desktop is running"), f"{a.warns}")
+        expect(a.has_todo(10, T_QUIT_DESKTOP), f"ledger: {a.todos}")
+
+
+@case
+def backup_name_never_overwritten():
+    # The backup's name is claimed exclusively: whatever is already there - an earlier backup
+    # made the same second, or a link to somewhere else - is never written over.
+    for kind in ("file", "link"):
+        with world() as w:
+            mod = load_module()
+            mod.backup_stamp = lambda: "20300101000000"
+            w.std("csa-zendesk")
+            cfg = w.claude(user={"csa-zendesk": reg(gone(w, "csa-zendesk"), env={"K": SECRET_A})})
+            w.run().ok()
+            taken = w.home / ".claude.json.bak-20300101000000"
+            outside = w.tmp / "outside.txt"
+            outside.write_text("not a backup\n")
+            if kind == "file":
+                taken.write_text("an earlier backup\n")
+            else:
+                taken.symlink_to(outside)
+            before = state(cfg)
+            a = w.apply_inproc(mod)
+            a.ok()
+            expect(state(cfg) == before, f"{kind}: written without its own backup")
+            expect(outside.read_text() == "not a backup\n", f"{kind}: written through the link")
+            if kind == "file":
+                expect(taken.read_text() == "an earlier backup\n", "an existing backup was overwritten")
+            else:
+                expect(taken.is_symlink(), "the link was replaced")
+            expect(SECRET_A not in outside.read_text(), "a value reached another file")
+            expect(a.warns and not a.oks, f"{kind}: warns {a.warns}, oks {a.oks}")
+
+
+@case
+def backup_looser_than_file_abandons():
+    with world() as w:
+        mod = load_module()
+
+        class LooseShutil(object):
+            def __getattr__(self, name):
+                return getattr(__import__("shutil"), name)
+
+            @staticmethod
+            def copy2(src, dst):
+                __import__("shutil").copy2(src, dst)
+                os.chmod(dst, 0o644)
+
+        mod.shutil = LooseShutil()
+        w.std("csa-zendesk")
+        cfg = w.claude(user={"csa-zendesk": reg(gone(w, "csa-zendesk"), env={"K": SECRET_A})})
+        w.run().ok()
+        before = state(cfg)
+        a = w.apply_inproc(mod)
+        a.ok()
+        expect(state(cfg) == before, "written after a backup came out more permissive")
+        expect(backups(cfg) == [], f"the permissive backup was left: {backups(cfg)}")
+        expect(a.warned("more permissive"), f"no warning: {a.warns}")
+
+
+@case
+def codex_write_time_link_refused():
+    # A10 for Codex too: config.toml becomes a link after the audit, before the write.
+    with world() as w:
+        mod = load_module()
+        w.std("csa-zendesk")
+        cfg = w.codex_toml({"csa-zendesk": {"command": gone(w, "csa-zendesk")}})
+        w.run().ok()
+        real = w.tmp / "dotfiles" / "config.toml"
+        real.parent.mkdir()
+
+        def relink(point, path):
+            if point == "edit" and not os.path.islink(path):
+                os.replace(path, real)
+                os.symlink(real, path)
+
+        mod.TEST_HOOK = relink
+        a = w.apply_inproc(mod)
+        a.ok()
+        expect(os.path.islink(cfg) and os.readlink(cfg) == str(real), "the link was replaced")
+        expect(gone(w, "csa-zendesk") in real.read_text(), "written through the link")
+        expect(a.warned("its config is a link to"), f"no warning: {a.warns}")
+        expect(not a.oks, f"apply reported a re-point: {a.oks}")
+
+
+@case
+def non_finite_number_not_rewritten():
+    # Python reads 1e999 as infinity and NaN as NaN; no JSON client reads `Infinity` or `NaN`
+    # back. A config holding one is not rewritten.
+    for name, raw_value in (("infinity", "1e999"), ("nan", "NaN")):
+        with world() as w:
+            w.std("csa-zendesk")
+            raw = ('{\n  "big": %s,\n  "mcpServers": {\n    "csa-zendesk": {\n'
+                   '      "command": "%s"\n    }\n  }\n}\n' % (raw_value, gone(w, "csa-zendesk")))
+            cfg = w.claude(raw=raw)
+            w.run().ok()
+            before = state(cfg)
+            a = w.apply()
+            a.ok()
+            expect(state(cfg) == before, f"{name}: rewritten")
+            expect(a.warned("cannot write back exactly"), f"{name}: {a.warns}")
+
+
+@case
+def codex_multiline_string_refused():
+    # Lines are matched one at a time, and a multi-line string can hold a line that looks
+    # like the header or the command: such a file is refused, not edited.
+    with world() as w:
+        # Inside the table.
+        w.std("csa-zendesk")
+        listing = [{"name": "csa-zendesk", "transport": {"type": "stdio",
+                                                          "command": gone(w, "csa-zendesk")}}]
+        raw = ('[mcp_servers.csa-zendesk]\n'
+               f'command = "{gone(w, "csa-zendesk")}"\n'
+               'cwd = """\n/tmp"""\n')
+        cfg = w.codex_toml(raw=raw, listing=listing)
+        w.run().ok()
+        before = state(cfg)
+        a = w.apply()
+        a.ok()
+        expect(state(cfg) == before, "a table holding a multi-line string was edited")
+        expect(a.warned(R_CODEX_LAYOUT), f"no layout warning: {a.warns}")
+        expect(any(R_CODEX_LAYOUT in t for t in a.todo_titles(40)), f"ledger: {a.todos}")
+    with world() as w:
+        # Above the header (review of d39f719): a look-alike header inside a string, and the
+        # real table spelled `[mcp_servers.'csa-zendesk']`.
+        w.std("csa-zendesk")
+        g = gone(w, "csa-zendesk")
+        listing = [{"name": "csa-zendesk", "transport": {"type": "stdio", "command": g}}]
+        raw = ('notes = """\n[mcp_servers.csa-zendesk]\n'
+               f'command = "{g}"\n[x]\n"""\n\n'
+               "[mcp_servers.'csa-zendesk']\n"
+               f'command = "{g}"\n')
+        cfg = w.codex_toml(raw=raw, listing=listing)
+        w.run().ok()
+        before = state(cfg)
+        a = w.apply()
+        a.ok()
+        expect(state(cfg) == before, "a line inside another key's string was edited")
+        expect(a.warned(R_CODEX_LAYOUT), f"no layout warning: {a.warns}")
+        expect(backups(cfg) == [], "a backup was made for a refused edit")
+
+
+@case
+def hard_linked_config_refused():
+    # A config with a second name: os.replace would give this name a new file and leave the
+    # other with the old one, silently cut off.
+    with world() as w:
+        w.std("csa-zendesk")
+        cfg = w.claude(user={"csa-zendesk": reg(gone(w, "csa-zendesk"))})
+        toml = w.codex_toml({"csa-zendesk": {"command": gone(w, "csa-zendesk")}})
+        other = [w.tmp / "claude-other-name.json", w.tmp / "codex-other-name.toml"]
+        os.link(cfg, other[0])
+        os.link(toml, other[1])
+        w.run().ok()
+        before = [state(cfg), state(toml)]
+        a = w.apply()
+        a.ok()
+        expect([state(cfg), state(toml)] == before, "a hard-linked config was replaced")
+        for path, name in ((cfg, other[0]), (toml, other[1])):
+            expect(os.stat(path).st_ino == os.stat(name).st_ino, f"{path.name} was detached")
+        expect(len(a.warned("hard link")) == 2, f"warns: {a.warns}")
+        expect(not a.oks, f"oks: {a.oks}")
+
+
+@case
+def lock_held_too_long_abandons():
+    # Held near Claude Code's 10 s stale limit, the write is abandoned: Claude Code may take
+    # the lock over, and two writers would race.
+    with world() as w:
+        mod = load_module()
+        mod.LOCK_HOLD_MAX = 0.3
+        w.std("csa-zendesk")
+        cfg = w.claude(user={"csa-zendesk": reg(gone(w, "csa-zendesk"))})
+        w.run().ok()
+        mod.TEST_HOOK = lambda point, path: time.sleep(0.6) if point == "backed-up" else None
+        before = state(cfg)
+        a = w.apply_inproc(mod)
+        a.ok()
+        expect(state(cfg) == before, "written after holding the lock too long")
+        expect(backups(cfg) == [], f"a backup was left: {backups(cfg)}")
+        expect(a.warned("held Claude Code's lock for more than"), f"{a.warns}")
+        expect(not (w.home / ".claude.json.lock").exists(), "its own lock was left")
+
+
+@case
+def lock_taken_over_is_left():
+    # Claude Code took the lock over mid-write (after its stale limit): the write is
+    # abandoned, and the lock - Claude Code's now - is not removed.
+    with world() as w:
+        mod = load_module()
+        w.std("csa-zendesk")
+        cfg = w.claude(user={"csa-zendesk": reg(gone(w, "csa-zendesk"))})
+        w.run().ok()
+        lock = w.home / ".claude.json.lock"
+
+        def take_over(point, path):
+            if point == "written":
+                os.rmdir(lock)
+                os.mkdir(lock)
+                t = time.time() + 5  # proper-lockfile stamps its lock's mtime
+                os.utime(lock, (t, t))
+
+        mod.TEST_HOOK = take_over
+        before = state(cfg)
+        a = w.apply_inproc(mod)
+        a.ok()
+        expect(state(cfg) == before, "written under a lock that was no longer this run's")
+        expect(lock.is_dir(), "Claude Code's lock was removed")
+        expect(a.warned("stopped being this run's"), f"{a.warns}")
+
+
+@case
+def approval_binds_config_path():
+    # The same registration, with the same fingerprint, in another file (another
+    # CLAUDE_CONFIG_DIR) is not the one the plan showed.
+    with world() as w:
+        w.std("csa-zendesk")
+        entry = {"csa-zendesk": reg(gone(w, "csa-zendesk"))}
+        w.claude(user=entry, at=w.tmp / "a" / ".claude.json")
+        other = w.claude(user=entry, at=w.tmp / "b" / ".claude.json")
+        w.extra_env["CLAUDE_CONFIG_DIR"] = str(w.tmp / "a")
+        r = w.run()
+        r.ok()
+        expect(r.f("csa-zendesk")["config"] == str(w.tmp / "a" / ".claude.json"),
+               f"the plan file does not record the config: {r.f('csa-zendesk').get('config')}")
+        w.extra_env["CLAUDE_CONFIG_DIR"] = str(w.tmp / "b")
+        before = state(other)
+        a = w.apply()
+        a.ok()
+        expect(state(other) == before, "a file the plan did not show was written")
+        expect(a.warned(R_UNAPPROVED), f"{a.warns}")
+
+
+@case
+def write_failure_says_no_value():
+    # A write that fails is reported by type and this script's line, never by the exception's
+    # text, which can carry what it was handed - a setting's value included.
+    with world() as w:
+        mod = load_module()
+
+        def fail(*a, **k):
+            raise RuntimeError(f"could not write {SECRET_A}")
+
+        mod.write_temp = fail
+        w.std("csa-zendesk")
+        cfg = w.claude(user={"csa-zendesk": reg(gone(w, "csa-zendesk"), env={"K": SECRET_A})})
+        w.run().ok()
+        before = state(cfg)
+        a = w.apply_inproc(mod)
+        a.ok()
+        expect(state(cfg) == before, "the config changed")
+        expect(a.warned("could not be written (RuntimeError at line"), f"{a.warns}")
+        expect(SECRET_A not in a.stdout + a.stderr + a.ledger_text, "the exception's text was printed")
+
+
+@case
+def duplicate_plan_row_resolves_to_leave():
+    # A plan file listing one registration both as a re-point and as left: left.
+    with world() as w:
+        w.std("csa-zendesk")
+        cfg = w.claude(user={"csa-zendesk": reg(gone(w, "csa-zendesk"))})
+        r = w.run()
+        r.ok()
+        doc = json.loads(w.out.read_text())
+        row = dict(doc["findings"][0])
+        expect(row["action"] == "re-point", "fixture")
+        row["action"] = "leave"
+        doc["findings"].append(row)
+        w.out.write_text(json.dumps(doc))
+        before = state(cfg)
+        a = w.apply()
+        a.ok()
+        expect(state(cfg) == before, "a row listed as both re-point and left was re-pointed")
+        expect(a.warns and not a.oks, f"warns {a.warns}, oks {a.oks}")
+
+
 # ═════════════════════════════════════════════════════════════════════════════════════════════
 # The file itself
 # ═════════════════════════════════════════════════════════════════════════════════════════════
@@ -2873,8 +3276,8 @@ MUTATIONS = [
      "os.killpg(p.pid, signal.SIGKILL)", "p.kill()"),
     # ── apply: Task 2 Step 4, the plan's six ──
     ("changed_since_plan_not_written", "drop the fingerprint from the approval",
-     "    return (client, scope, project, name, fingerprint)",
-     "    return (client, scope, project, name)"),
+     "    return (client, scope, project, name, fingerprint, config)",
+     "    return (client, scope, project, name, config)"),
     ("desktop_mode_0600_kept", "write the temp file with plain open(), at the umask's mode",
      "    fd, tmp = tempfile.mkstemp(dir=os.path.dirname(path), prefix=TMP_PREFIX)\n    try:\n"
      '        with os.fdopen(fd, "wb") as fh:\n            os.fchmod(fh.fileno(), mode)\n',
@@ -2895,9 +3298,10 @@ MUTATIONS = [
      "        running = (desktop_running(ctx, fresh=True)\n", "        running = (False\n"),
     # ── apply: the guards Task 2 added, each broken on purpose (ADR-005) ──
     ("claude_lock_honoured", "write without taking Claude Code's lock",
-     "            os.mkdir(lock, 0o700)\n            break\n", "            break\n"),
+     "                os.mkdir(self.lock, 0o700)\n                break\n", "                break\n"),
     ("claude_lock_honoured", "break a lock still held after the wait",
-     "                raise Locked(lock)\n", "                os.rmdir(lock)\n                continue\n"),
+     "                    raise Locked(self.lock)\n",
+     "                    os.rmdir(self.lock)\n                    continue\n"),
     ("concurrent_change_aborts_write", "skip the fingerprint check made under the lock",
      'if reg.transport != "stdio" or reg.fingerprint() != c.fingerprint:',
      'if reg.transport != "stdio":'),
@@ -2923,6 +3327,57 @@ MUTATIONS = [
      "ensure_ascii=False, allow_nan=False", "ensure_ascii=True, allow_nan=False"),
     ("json_format_preserved", "write a lone surrogate raw",
      '    text = LONE_SURROGATE.sub(lambda m: "\\\\u%04x" % ord(m.group()), text)\n', ""),
+    # ── apply: the review of d39f719 ──
+    ("signal_mid_write_leaves_nothing", "leave SIGTERM and SIGHUP at their defaults",
+     "            saved[sig] = signal.signal(sig, stop)", "            saved[sig] = signal.getsignal(sig)"),
+    ("signal_mid_write_leaves_nothing", "make a signal the caller ignores stop apply",
+     "        if sig is None or signal.getsignal(sig) == signal.SIG_IGN:", "        if sig is None:"),
+    ("stale_temp_files_swept", "sweep nothing", "            n = sweep_temps(directory, started)",
+     "            n = 0"),
+    ("stale_temp_files_swept", "sweep temp files of any age", "                and st.st_mtime < since):",
+     "                and True):"),
+    ("stale_temp_files_swept", "sweep any name with the prefix",
+     r'TMP_NAME = re.compile(r"^\.csa-registrations-[a-z0-9_]{8}$")',
+     r'TMP_NAME = re.compile(r"^\.csa-registrations-")'),
+    ("stale_temp_files_swept", "sweep links too", "        if (stat.S_ISREG(st.st_mode) and",
+     "        if (True and"),
+    ("desktop_state_unknown_at_write_skipped", "treat 'could not tell' as not running at the write",
+     "        if running is not False:\n            row = ROW_DESKTOP_RUNNING if running else",
+     "        if running:\n            row = ROW_DESKTOP_RUNNING if running else"),
+    ("backup_name_never_overwritten", "claim the backup's name without O_EXCL",
+     "os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr", "os.O_WRONLY | os.O_CREAT | getattr"),
+    ("backup_looser_than_file_abandons", "accept a backup looser than its file",
+     "        if stat.S_IMODE(os.lstat(backup).st_mode) & ~mode:", "        if False:"),
+    ("codex_write_time_link_refused", "drop Codex's write-time link check",
+     "    if linked_config(path):  # A10\n", "    if False:\n"),
+    ("non_finite_number_not_rewritten", "write Infinity and NaN", "allow_nan=False", "allow_nan=True"),
+    ("codex_multiline_string_refused", "allow a multi-line string inside the table",
+     "    if any('\"\"\"' in body[i] or \"'''\" in body[i] for i in region):", "    if False:"),
+    ("codex_multiline_string_refused", "allow a multi-line string above the header",
+     "    if any('\"\"\"' in ln or \"'''\" in ln for ln in body[:heads[0]]):", "    if False:"),
+    ("hard_linked_config_refused", "replace a hard-linked config", "    return st.st_nlink > 1",
+     "    return False"),
+    ("lock_held_too_long_abandons", "hold the lock as long as the write takes",
+     "        if time.time() - self.taken > LOCK_HOLD_MAX:", "        if False:"),
+    ("lock_held_too_long_abandons", "keep the backup when the lock check stops the write",
+     '            unlink_quietly(tmp)\n            unlink_quietly(backup)\n            return "refused", why',
+     '            unlink_quietly(tmp)\n            return "refused", why'),
+    ("lock_taken_over_is_left", "write without checking the lock is still this run's",
+     "        if not self.ours():\n            return R_LOCK_LOST", "        if False:\n            return R_LOCK_LOST"),
+    ("lock_taken_over_is_left", "remove the lock without checking it is this run's",
+     "    def __exit__(self, *exc):\n        if self.ours():", "    def __exit__(self, *exc):\n        if True:"),
+    ("claude_lock_honoured", "drop the advice for a crashed process's lock",
+     "T_LOCKED + T_LOCKED_STALE.format(lock=tilde(e.lock))", "T_LOCKED"),
+    ("approval_binds_config_path", "drop the config from the approval",
+     "    return (client, scope, project, name, fingerprint, config)",
+     "    return (client, scope, project, name, fingerprint, None)"),
+    ("duplicate_plan_row_resolves_to_leave", "let a re-point row win over a left one",
+     "    return repoint - left, every, None", "    return repoint, every, None"),
+    ("claude_lock_honoured", "never release the lock",
+     "                os.rmdir(self.lock)\n", "                os.stat(self.lock)\n"),
+    ("write_failure_says_no_value", "report a failed write by the exception's text",
+     "why = e.strerror if isinstance(e, OSError) and e.strerror else describe_error(e)",
+     "why = repr(e)"),
 ]
 
 
