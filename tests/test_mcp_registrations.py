@@ -1153,10 +1153,78 @@ def out_refuses_client_configs():
                 expect(path.read_bytes() == before, f"--out {path}: the config changed")
             else:
                 expect(not os.path.lexists(path), f"--out {path}: a config was created")
+                # Refused by name, before any file exists - not created and then caught by
+                # identity, which leaves a moment where a running client could read the plan.
+                expect("on this volume" not in r.stderr and "keeps its config; refused" in r.stderr,
+                       f"--out {path}: not refused before the write: {r.stderr!r}")
         w.extra_env["CLAUDE_CONFIG_DIR"] = str(alt)        # the config Claude Code would read
         r = w.run("--out", str(alt / ".claude.json"))
         expect(r.rc == 2 and not (alt / ".claude.json").exists(), f"CLAUDE_CONFIG_DIR: exit {r.rc}")
         expect("Claude Code" in r.stderr, f"stderr: {r.stderr!r}")
+
+
+@case
+def out_config_spelled_otherwise_refused():
+    # Refused by what the file IS, not by how the name is spelled: on a case-insensitive
+    # volume `~/.CLAUDE.json` is `~/.claude.json` (review of a9f9a94).
+    with world() as w:
+        # Every platform: the name check is bypassed, so only the identity check stands
+        # between the plan and the path Gemini reads its settings from.
+        mod = load_module()
+        mod.out_refusal = lambda path, ctx: None
+        w.gemini(config=False)
+        (w.home / ".gemini").mkdir()
+        settings = w.home / ".gemini" / "settings.json"
+        r = w.run_inproc(mod, "--out", str(settings))
+        expect(r.rc == 2, f"identity check: exit {r.rc}")
+        expect(not os.path.lexists(settings), "the plan was left where Gemini reads its config")
+        expect("Gemini" in r.stderr, f"stderr: {r.stderr!r}")
+    with world() as w:
+        probe = w.tmp / "CaseProbe"
+        probe.write_text("")
+        if not (w.tmp / "caseprobe").exists():
+            print("        (case-sensitive volume: the respelled names are distinct files here)")
+            return
+        w.stub("claude", "exit 0")
+        w.gemini(config=False)
+        (w.home / ".gemini").mkdir()
+        w.codex(config=False)
+        (w.home / ".codex").mkdir()
+        for spelled, real in ((".CLAUDE.json", ".claude.json"),
+                              (".gemini/Settings.json", ".gemini/settings.json"),
+                              (".codex/CONFIG.TOML", ".codex/config.toml")):
+            r = w.run("--out", str(w.home / spelled))
+            expect(r.rc == 2, f"--out ~/{spelled}: exit {r.rc}")
+            expect(not os.path.lexists(w.home / real), f"--out ~/{spelled}: ~/{real} was created")
+
+
+@case
+def discard_spares_a_file_swapped_in():
+    # The plan file's identity is taken before its name exists. If the file at --out is
+    # replaced after the link and the run then fails, the replacement is not deleted.
+    with world() as w:
+        mod = load_module()
+
+        class Os(object):
+            def __getattr__(self, name):
+                return getattr(os, name)
+
+            @staticmethod
+            def link(src, dst):
+                os.link(src, dst)
+                os.unlink(dst)
+                Path(dst).write_text("somebody else's file\n")
+
+        def boom(*a, **k):
+            raise RuntimeError("deliberate")
+
+        mod.os = Os()
+        mod.show = boom
+        w.claude(user={"csa-zendesk": reg(w.tmp / "gone" / "csa-zendesk-mcp")})
+        r = w.run_inproc(mod)
+        expect(r.rc == 2, f"exit {r.rc}")
+        expect(w.out.exists() and w.out.read_text() == "somebody else's file\n",
+               "a failed run deleted a file it did not create")
 
 
 @case
@@ -1837,6 +1905,11 @@ MUTATIONS = [
      "        if real == os.path.realpath(config_path(client, ctx)):", "        if False:"),
     ("out_never_replaced_even_after_the_check", "replace whatever appeared at --out",
      "        os.link(tmp, path)", "        os.replace(tmp, path)"),
+    ("out_config_spelled_otherwise_refused", "trust the name check alone",
+     "        clash = config_at(created[-1], ctx)\n", "        clash = None\n"),
+    ("discard_spares_a_file_swapped_in", "take the plan file's identity after the link",
+     "    return st.st_dev, st.st_ino\n\n\ndef config_at",
+     "    st = os.lstat(path)\n    return st.st_dev, st.st_ino\n\n\ndef config_at"),
     ("plan_file_has_no_values", "record args in the plan file",
      '"env_keys": sorted(f.reg.env),', '"args": f.reg.args, "env_keys": sorted(f.reg.env),'),
     ("internal_error_exits_2", "print the exception's message",
