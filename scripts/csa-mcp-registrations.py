@@ -54,7 +54,7 @@ import sys
 import tempfile
 import unicodedata
 
-SCRIPT_VERSION = "2026-11-13T03:37Z"
+SCRIPT_VERSION = "2026-11-13T03:51Z"
 
 # ── The plan's decisions (D1-D5). Each is pinned by one test; an answer changes the constant. ──
 
@@ -1077,7 +1077,9 @@ def out_refusal(path, ctx):
 def create_private(path, text):
     """Create `path` whole, at 0600, and never over anything: mkstemp beside it, fsync, then
     os.link, which fails if the name exists by then, where os.replace would silently replace
-    whatever had appeared there since out_refusal looked. Returns the new file's identity."""
+    whatever had appeared there since out_refusal looked. Returns the new file's identity,
+    taken from the open file before the name exists: an lstat of `path` after the link could
+    name a file swapped in since, which discard() would then delete (review of a9f9a94)."""
     d = os.path.dirname(os.path.abspath(path))
     fd, tmp = tempfile.mkstemp(dir=d, prefix=".csa-registrations-")
     try:
@@ -1087,12 +1089,32 @@ def create_private(path, text):
             f.write(text)
             f.flush()
             os.fsync(f.fileno())
+            st = os.fstat(f.fileno())
         os.link(tmp, path)
     finally:
         if os.path.lexists(tmp):
             os.unlink(tmp)
-    st = os.lstat(path)
     return st.st_dev, st.st_ino
+
+
+def config_at(identity, ctx):
+    """The client whose config IS the file this run just created, or None.
+
+    By device and inode, not by name: on a case-insensitive volume `~/.CLAUDE.json` is
+    `~/.claude.json`, and out_refusal's comparison of realpath strings says it is not (review of
+    a9f9a94); a Unicode-normalising volume does the same with other spellings. lstat and stat
+    both, so a config path that is itself a link to the new file is caught too.
+    """
+    for client in CLIENTS:
+        path = config_path(client, ctx)
+        for look in (os.lstat, os.stat):
+            try:
+                st = look(path)
+            except OSError:
+                continue
+            if (st.st_dev, st.st_ino) == identity:
+                return client
+    return None
 
 
 def discard(path, identity):
@@ -1159,6 +1181,13 @@ def plan(args, created):
         # that UTF-8 cannot encode cannot fail the write).
         text = json.dumps(plan_document(ctx, clients, findings), indent=2, ensure_ascii=True)
         created.append(create_private(args.out, text + "\n"))
+        clash = config_at(created[-1], ctx)
+        if clash:
+            discard(args.out, created[-1])
+            del created[:]
+            say(f"--out {tilde(args.out)} is, on this volume, where {clash} keeps its config; "
+                "refused, and nothing was written")
+            return 2
     try:
         show(lines)
     except OutputLost:
