@@ -3,8 +3,14 @@
 Plan: [`plans/2026-11-12-registration-repair.md`](../2026-11-12-registration-repair.md), Task 0.
 
 **Step 1 is recorded here:** the measurements that need nothing from the CINO. These are M0, M1 (isolated), M3's
-isolated parts, M4, M6 and M7, all taken on 2026-11-12 on the CINO's Mac. **M2, M3's Desktop part and M5 are
-awaiting the CINO's go-ahead** (Step 2). Until they are recorded, their safe defaults stand (D4, A8, D5).
+isolated parts, M4, M6 and M7, all taken on 2026-11-12 on the CINO's Mac.
+
+**Step 2 so far:**
+- **M5 is recorded below.** It ran with the CINO's go-ahead on 2026-11-13.
+- **M2 and M3's Desktop part** were approved in the same answer. Another session is running them with him, and they
+  are not recorded here yet.
+
+Until a measurement is recorded, its safe default stands (D4, A8, D5).
 
 Scrubbing: home is shown as `~`, a scratch directory as `<scratch>`, a scratch `HOME` as `<HOME>`, and the account
 name as `<user>`. No secret was read, so none can appear here.
@@ -91,11 +97,11 @@ disk. Its secret lives in the registration's env.
 **Branch triggered.** None: no token is outside `HOME`. M4 ran all four servers, and Task 6 Step 1's real launches
 need no go-ahead on M0's account. **Two caveats bind Task 3 and Task 6 Step 1:**
 - **A scratch `HOME` isolates a server only when its launch env carries none of the override keys above.** That
-  includes an inherited `XDG_CONFIG_HOME`, which Claude Code and Gemini pass through (M3). Whether any real
-  registration carries one was not checked, because that would read the real configs. Task 1's plan output shows
-  key names.
+  includes an inherited `XDG_CONFIG_HOME`, which Claude Code and Gemini pass through (M3). M5 read the four
+  Claude Code user-scope registrations in memory, and none carries an override key. Other clients' and other scopes'
+  registrations were not checked; Task 1's plan output shows their key names.
 - **A csa-skilljar launch with its registration env carries a real credential.** That is a question for M5, not for
-  `HOME`.
+  `HOME`. M5 saw no connection at that launch.
 
 ## M1 (isolated): does a running Claude Code session write an old `.claude.json` over an external edit, and does it lock?
 
@@ -289,9 +295,72 @@ Neither `mcp add` created a `.gemini/` in the directory it ran from.
 - **The measured effect, though, is benign for the gate's probe.** The name still matches, and `add --scope user`
   is unchanged. It also removes a server launch. See "What the plan got wrong" below.
 
-## Awaiting the CINO's go-ahead (Step 2)
+## M5 (real `HOME`): does a server change a token file, or open a connection, between spawn and 2 s after its answer?
 
-- **M2, with M3's Desktop part, in one session.** It touches the real Claude Desktop config,
+**Go-ahead.** The CINO's answer, verbatim: *"Both, now (Recommended)"* (2026-11-13). It answered a question that
+described M5 as launching each of the four CSA servers once, as Claude Code would. The question also said that M5
+reads the real `~/.claude.json` in memory for their env, only `stat`s token-file metadata before and after, samples
+network connections for 2 s, and that a launch may refresh a token. M2 was approved in the same answer. It is being
+run interactively with him by another session, and this run touched neither the Desktop config nor the Desktop app.
+
+**Method.** Run on 2026-11-13 at 02:39Z, one server at a time, each launched exactly as Task 3 will launch it.
+- **The entry:** each user-scope Claude Code registration was read from the real `~/.claude.json`, in memory. Only
+  its command, its arg count and its env key names were printed.
+- **The launch env:** this session's environment, standing in for the installer's, minus `CSA_TODO_FILE`, `CSA_LOG`,
+  `CSA_DEBUG`, `CSA_NESTED` and `CSA_REGISTRATIONS_*`, plus the registration's env. It was passed through
+  `subprocess`'s `env`, never argv. No registration value uses `$`.
+- **The launch:** working directory a fresh `mktemp -d`, `start_new_session=True`. One `initialize`. On the answer,
+  stdin was closed; after 2 s, SIGTERM to the process group; after 2 s more, SIGKILL; then reaped.
+- **Token paths:** each one M0 names was `stat`ed before and after (inode, mtime, size, mode), with its directory,
+  and never opened. No registration carries a token-path override key (`CSA_ZENDESK_TOKEN_FILE`, `CSA_GW_TOKEN`,
+  `CSA_GGC_TOKEN_PATH`, `CSA_SKILLJAR_ENV_FILE`), and the launch env had no `XDG_CONFIG_HOME`, so every path is the
+  default, under `HOME`. The Google servers' `client_secret.json` was `stat`ed too.
+- **Keychain:** not applicable. M0 found no keychain use in any server.
+- **Network:** `lsof -nP -a -g <pgid> -i` every 0.1 s or more (each run took about 0.02 s), from spawn until the
+  group was killed. Only remote `host:port` was kept.
+- **Cleanup:** afterwards, `pgrep -g` found nothing in any of the four process groups. `pgrep -f` for the four
+  binaries listed only processes that open clients (Claude Desktop and Claude Code sessions) were already running:
+  84 of them.
+
+| Server | Registration env keys | Answer | Token and credential files (inode, mtime, size, mode) | Remote hosts contacted |
+|---|---|---|---|---|
+| csa-zendesk 0.3.1 | `CSA_ZD_ALLOWLIST_READ`, `CSA_ZD_ALLOWLIST_WRITE`, `CSA_ZENDESK_MCP_SERVER_IDENTIFIER`, `CSA_ZENDESK_SUBDOMAIN` | 0.49 s | `~/.config/csa-zendesk/tokens.json` (`0600`) and its directory (`0700`): **unchanged** | **none observed** (44 samples) |
+| csa-google-workspace 0.55.1 | `CSA_GW_ALLOWLIST_MODIFY`, `CSA_GW_ALLOWLIST_READ`, `CSA_GW_CAPABILITIES` | 0.64 s | `~/.csa_google_workspace/token.json` (`0600`), `client_secret.json` (`0600`) and the directory (`0700`): **unchanged**; `token.readonly.json` absent before and after | **none observed** (46 samples) |
+| csa-google-gmail-calendar 0.5.1 | `CSA_GGC_ATTACH_DIR`, `CSA_GGC_DOWNLOAD_DIR` | 1.84 s | `~/.csa_google_gmail_calendar/token.json` (`0600`), `client_secret.json` (`0600`) and the directory (`0700`): **unchanged** | **none observed** (57 samples) |
+| csa-skilljar 0.16.1 | `CSA_SKILLJAR_PROFILE`, `CSA_SKILLJAR_V1_API_KEY`, `CSA_SKILLJAR_V2_CLIENT_ID`, `CSA_SKILLJAR_V2_CLIENT_SECRET` | 0.55 s | no token file (M0); no `CSA_SKILLJAR_ENV_FILE` | **none observed** (45 samples), although its launch carried its real client credentials |
+
+Every server exited by itself 0.06 to 0.11 s after stdin closed. No token changed, so the plan's "repeat once" did
+not apply.
+
+**What this does not show:**
+- **The window is the launch Task 3 makes,** not a client's long-lived session. Because stdin closes on the answer
+  and each server exits about 0.1 s later, the observed window ran from spawn to about 0.1 s after the answer, not a
+  full 2 s with the server alive. Work that a server does later in a session, such as on its first tool call, is
+  outside it.
+- **`lsof` can miss a connection shorter than its interval.** It also shows no DNS lookup, because those go through
+  `mDNSResponder`.
+- **Whether a server *read* its token at startup is not measured.** Access times were recorded, but a test file in
+  the scratchpad showed that this volume does not update `atime` on a read, so `atime` proves nothing here.
+- **The launch env was this session's,** standing in for the installer's. It carries `VIRTUAL_ENV`, which does not
+  change how the entry points' absolute-shebang Python starts.
+
+**Branch triggered: "a server with no token change and no connection becomes a candidate for D5 (c), and the
+question to the CINO lists what each server touched."**
+- **All four servers are candidates for D5 (c).** For the launch `verify` makes, each touched nothing observed: no
+  token-file change, and no network connection.
+- **D5's question to the CINO lists that, per server.** It also says what M6 showed: every gate run already makes a
+  launch of this kind through `claude mcp get`.
+- **The constant stays Task 3's.** `VERIFY_ON_RERUN` keeps its safe default until D5 is answered, or until the AI
+  applies D5's own "what would let the AI decide next time" rule under P1, recording this measurement.
+- **M4's timeout is confirmed.** With credentials present, the slowest answer was 1.84 s, so the 20 s timeout
+  stands.
+
+## Go-aheads (Step 2)
+
+The CINO answered *"Both, now (Recommended)"* on 2026-11-13, covering M2 and M5.
+
+- **M2, with M3's Desktop part, in one session.** Approved, and being run with him by another session; not recorded
+  here yet. It touches the real Claude Desktop config,
   `~/Library/Application Support/Claude/claude_desktop_config.json`:
   - **A backup** beside the config, `claude_desktop_config.json.bak-<14 digits>`, at the same mode. It holds the
     config's secrets.
@@ -305,8 +374,8 @@ Neither `mcp add` created a `.gemini/` in the directory it ran from.
 
   It also needs four actions from him in Desktop: quit, start, change one named preference, quit. **Restoring that
   preference is his,** the next time he uses Desktop.
-- **M5.** Under the real `HOME`, it launches each of the four standard binaries once, with its user-scope env passed
-  through `subprocess`'s `env`. It touches:
+- **M5.** Approved, and recorded above. As approved, it launches each of the four standard binaries once under the
+  real `HOME`, with its user-scope env passed through `subprocess`'s `env`. It touches:
   - **the real `~/.claude.json`, which holds secrets.** It is read in memory to get each user-scope entry's env, and
     nothing from it is printed or written;
   - **each token path:** a `stat` of the path and its directory, before and after. The defaults are
