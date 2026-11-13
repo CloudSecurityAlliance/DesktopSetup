@@ -87,7 +87,7 @@ scripts/
   csa-plugins-internal.txt   # CSA-internal plugin list, same
 tools/
   check-all.sh               # everything CI runs, locally, in one command
-  check-*.py                 # thirteen repo-specific checks; all thirteen also run in CI
+  check-*.py                 # fourteen repo-specific checks; all fourteen also run in CI
   sweep-csa-sources.sh       # weekly drift sweep (network + gh; NOT in check-all.sh)
 tests/
   test_*.py                  # thirteen standalone executables — run one directly with python3
@@ -595,7 +595,7 @@ every file that uses it** — `check-duplication.py` enforces byte-identical beh
 
 ## The guard layer
 
-Thirteen checkers in `tools/` and sixteen test files in `tests/`. **`./tools/check-all.sh` mirrors CI
+Fourteen checkers in `tools/` and sixteen test files in `tests/`. **`./tools/check-all.sh` mirrors CI
 exactly** — run it before pushing.
 
 A guard here is added only for a mistake that actually shipped, names its issue in the file, and
@@ -614,6 +614,22 @@ Worth knowing individually:
   `PLATFORM_ONLY` or `PER_PAIR` with a reason, and **an allowlist entry matching nothing is
   itself reported** — an exception for a step that no longer exists has stopped checking without
   failing. Run against the scripts before #69 it reports exactly the three gaps that shipped.
+- **`check-app-lists.py`** — the third kind of duplication: repeated *data* within one
+  script. Each work-tools script declares its app sets once: on macOS `CSA_CORE_APPS`
+  (`label:cask:app-bundle`) and `CSA_DEV_TOOLS` (`label:kind:package:probe`, kind
+  `cask|formula|npm`); on Windows `$CoreApps` and `$DevWingetApps`. Nothing changes a list
+  after its declaration. Every rendering (menu, plan, install, summary, next steps) is checked
+  one by one to be built from its list. The installers make no literal install calls, so a new
+  app cannot bypass the list. No listed value appears on any other code line, except the
+  `ALLOWED` lines, which each give a reason and are reported once stale. Matching is by whole
+  token, so a trailing comment or "zoom in" is reported (its docstring says how to respond).
+  Adding Office on Windows in #69 updated three of six copies. `--rev 1115b64` reports every
+  copy, including the "install Office from your Microsoft 365 portal" line, and `--rev 36e76b4`
+  reports the macOS copies #78 removed. **Windows' dev set is only partly a list.** Wrangler
+  (npm) and `Show-Summary`'s version lines sit outside `$DevWingetApps` by #73's design. The two
+  Windows `ALLOWED` lines are both `Show-Summary`'s: its VS Code winget Id and its AWS CLI line.
+  Nothing records Wrangler. It passes only because `Install-NpmPackage` is not a listed install
+  call, so deleting the Windows Wrangler install also passes.
 - **`check-plan-covers-steps.py`** — every step `main()` runs must be named in the plan the user
   agreed to, across all six entry points. It imports `EQUIV` from `check-parity.py` so the two
   cannot disagree about what counts as a counterpart. `--rev <ref>` audits a historical commit;
