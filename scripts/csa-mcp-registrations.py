@@ -54,7 +54,7 @@ import sys
 import tempfile
 import unicodedata
 
-SCRIPT_VERSION = "2026-11-13T03:51Z"
+SCRIPT_VERSION = "2026-11-13T03:58Z"
 
 # ── The plan's decisions (D1-D5). Each is pinned by one test; an answer changes the constant. ──
 
@@ -106,9 +106,10 @@ CLIENTS = (CLAUDE_CODE, DESKTOP, CODEX, GEMINI)
 # M3: the PATH each client hands a stdio server. Claude Code and Gemini pass their caller's PATH
 # unchanged; Codex prepends two directories of its own that hold no CSA binary. So for those
 # three a bare command name resolves on the PATH of the shell that started the client - here,
-# this one. Claude Desktop's is not measured yet (M2's session): until it is, DESKTOP_PATH is
-# None and a bare-name Desktop entry is left, never called dead (A8). When M3 records it, it
-# goes here, as a PATH string.
+# this one. Claude Desktop's PATH has no value that holds for every machine, so DESKTOP_PATH is
+# None and a bare-name Desktop entry is left, never called dead (A8). M3 recorded one Mac's
+# Desktop PATH on 2026-11-13; it is not applied: AI ruling 2026-11-13, P1, machine-specific
+# (nvm and pyenv directories) and possibly Desktop's fallback PATH.
 INHERITS_PATH = (CLAUDE_CODE, CODEX, GEMINI)
 DESKTOP_PATH = None
 
@@ -155,7 +156,10 @@ R_LAUNCHER = "it runs through {base}, which this does not inspect; left as it is
 R_PY_GONE = "its Python no longer exists"
 R_PY_BROKEN = "its Python does not run"
 R_ELSEWHERE = "it points at {path}, not ~/.local/bin/{entry}"
-R_DESKTOP_PATH = "not checked: Claude Desktop's PATH is not measured yet"
+# Not the plan's verbatim text ("...is not measured yet"): M3 has since measured one Mac's, so
+# that would be untrue. Reworded 2026-11-13 under P2, honesty of what we claim.
+R_DESKTOP_PATH = ("not checked: Claude Desktop's PATH differs from machine to machine, so a "
+                  "bare command name can't be resolved here")
 R_LINK = "its config is a link to {path}; not changed — edit it there"
 R_MODULE = "its args run a module this does not recognise"
 R_NOT_STDIO = "it is not a stdio registration, which is all this audits"
@@ -688,7 +692,7 @@ class Finding(object):
 
 
 def client_path(client, ctx):
-    """The PATH a client hands a server, as M3 measured it; None where it is not measured."""
+    """The PATH a client hands a server, as M3 measured it; None where no single value holds."""
     if client in INHERITS_PATH:
         return ctx.path
     if client == DESKTOP:
@@ -870,9 +874,9 @@ def classify(reg, ctx):
         # not resolve there - its own `<entry>` name included - cannot start, so it is dead and
         # re-pointed at the absolute standard binary, by design: the plan's #176 row, "a
         # bare-name ... entry that does not resolve on [the client's] measured PATH is dead and
-        # re-pointed at the absolute binary". Where the PATH is not measured, it is left.
+        # re-pointed at the absolute binary". Where no single PATH holds (Desktop), it is left.
         path = client_path(reg.client, ctx)
-        if path is None:
+        if path is None:  # Desktop: M3's one-Mac PATH not applied (AI ruling 2026-11-13, P1)
             return f.leave("unchecked", R_DESKTOP_PATH)
         resolved = which(command, path)
     elif not os.path.isabs(command):

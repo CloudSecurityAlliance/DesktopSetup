@@ -407,6 +407,8 @@ Desktop ran for about 14 minutes between its start and its quit.
 from the recorded key names."**
 - **A8:** a bare-name Desktop entry resolves on the `PATH` above, which includes `~/.local/bin`. That resolution
   is labelled with the extraction caveat: it is the `PATH` Desktop passed at a start whose shell extraction timed out.
+  **Not applied — AI ruling 2026-11-13, P1: machine-specific, possibly fallback PATH; bare-name Desktop entries
+  stay 'not checked'.**
 - **Task 3, a labelled approximation:** Desktop's launch env is `HOME`, `LOGNAME`, `PATH`, `SHELL` and `USER`,
   with the `PATH` above, plus the registration's env.
   - It leaves out two of the seven recorded names, `LC_CTYPE` and `__CF_USER_TEXT_ENCODING`, on the inference above
