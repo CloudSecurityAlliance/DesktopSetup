@@ -32,7 +32,7 @@
 
 set -euo pipefail
 
-SCRIPT_VERSION="2026-11-12T21:58Z"
+SCRIPT_VERSION="2026-11-13T04:08Z"
 
 # ── CSA plugin marketplaces ─────────────────────────────────────────
 # Plugin marketplaces to register with Claude Code. Each entry is an
@@ -308,23 +308,206 @@ if [[ -z "${NONINTERACTIVE-}" ]]; then
   fi
 fi
 
-# ── Running process check ────────────────────────────────────────────
+# ── Running AI clients ──────────────────────────────────────────────
+#
+# Which AI clients are running, identified by the PATH of the image each process executes, never
+# by its name: the rule Get-RunningAiClients set on Windows (#109). Measured on a Mac on
+# 2026-11-12 (TODO.md H1), the name failed here in three ways:
+#   - The name is what somebody typed. `pgrep -x` and `ps -o comm=` both read argv[0]:
+#     `exec -a fakename /bin/sleep` is found by `pgrep -x fakename` and not by `pgrep -x sleep`.
+#     Claude Code typed in a shell is "claude", started by path it is "<home>/.local/bin/claude",
+#     and the image both run is ~/.local/share/claude/versions/<version>, whose kernel name
+#     (`ps -o ucomm=`) is the version number.
+#   - The name found the wrong program. `pgrep -x codex` matched five processes and called them
+#     all "Codex CLI": two were the npm Codex CLI, two its app-server daemon, and one was
+#     ChatGPT.app's bundled Contents/Resources/codex-cli/.../codex. Claude Desktop and ChatGPT
+#     Desktop were never looked for at all.
+#   - The path moves under a running process. Updating the Codex CLI, npm renamed the package
+#     directory of a session still running to node_modules/@openai/.codex-<random>/, as Claude
+#     Code's updater renames its image on Windows. lsof reports the image where it is now.
+#
+# `lsof -d txt` lists each process's executable first, then what it maps (checked for a native
+# binary, an app bundle and node), in about 0.2 s for 850 processes. This user's only. It reports
+# the path it resolved, so Claude Code's is matched under $HOME and under $HOME resolved, in case
+# $HOME is a symlink.
+#
+# Listed: the clients that run CSA MCP servers, as on Windows. A desktop app counts by its MAIN
+# executable only, app_running's rule: on 2026-11-12 twelve processes under
+# ChatGPT.app/Contents/Resources ran while ChatGPT did not - all descended from the Codex CLI,
+# which borrows ChatGPT's bundled node and codex. Not listed:
+#   - the Gemini CLI: an npm package running as `node`, so no image path names it (as on Windows);
+#   - Gemini Desktop and Copilot: they run no CSA server (Windows dropped its Gemini rule for that
+#     reason, #161). Replacing a running desktop app is wait_for_app_exit's job, when it happens;
+#   - the Codex CLI's app-server daemon (~/.codex/packages/), which it starts and can outlive it.
 
-check_running_tools() {
-  local running=()
-  pgrep -x claude >/dev/null 2>&1 && running+=("Claude Code")
-  pgrep -x codex >/dev/null 2>&1 && running+=("Codex CLI")
-  pgrep -x gemini >/dev/null 2>&1 && running+=("Gemini CLI")
-
-  if [[ ${#running[@]} -gt 0 ]]; then
-    warn "These tools are currently running: ${running[*]}"
-    echo "  It's safe to continue, but running sessions will stay on the old version."
-    echo "  For a clean migration, close them first and re-run this script."
-    echo ""
-    if ! confirm "Continue anyway?"; then
-      abort "Aborted. Close running tools and try again."
+# This script's own process and everything that started it, bounded. The one-liner is routinely
+# run FROM Claude Code, and "Claude Code is running" about the session running the installer is a
+# finding nobody can act on (Get-CsaAncestorPids on Windows). At most 12 hops, stopping when ps
+# has no answer or a process is its own parent, so a strange process table cannot hang a run.
+csa_ancestor_pids() {
+  local pid="$$" ppid i=0
+  while [[ $i -lt 12 ]] && [[ -n "$pid" ]] && [[ "$pid" != "0" ]]; do
+    echo "$pid"
+    ppid="$(ps -o ppid= -p "$pid" 2>/dev/null | tr -d ' ')" || ppid=""
+    if [[ -z "$ppid" ]] || [[ "$ppid" == "$pid" ]]; then
+      break
     fi
+    pid="$ppid"
+    i=$((i + 1))
+  done
+}
+
+# The lsof that running_ai_clients started, its output file, and the INT and TERM traps it
+# displaced. Globals, because a signal handler has to reach them.
+csa_lsof_pid=""
+csa_lsof_out=""
+csa_lsof_prev_int=""
+csa_lsof_prev_term=""
+
+# A tenth of a second, during which a trapped INT or TERM is acted on at once. A foreground
+# `sleep` is not enough: when it exits normally just as Ctrl-C arrives, bash takes the Ctrl-C as
+# the child's to handle and never runs the trap - measured on bash 3.2, 2 runs in 10. The `wait`
+# builtin returns as soon as a trapped signal arrives, and the trap runs. And `|| true`: under
+# set -e a nap cut short would otherwise exit the shell before the trap runs.
+csa_lsof_nap() {
+  sleep 0.1 &
+  wait "$!" 2>/dev/null || true
+}
+
+# Stops a background lsof: TERM, half a second's grace, then KILL - and never `wait`. A process
+# stuck in the kernel (the unresponsive mount this bound exists for) cannot die until the call
+# returns, so waiting to reap it is the very hang the bound prevents: at review a stub that
+# ignored TERM held a `wait` here for 11 s. Disowned, so nothing later waits for it either.
+csa_lsof_stop() {
+  local pid="$1" n=0
+  kill -TERM "$pid" 2>/dev/null || return 0
+  while kill -0 "$pid" 2>/dev/null && [[ $n -lt 5 ]]; do
+    csa_lsof_nap
+    n=$((n + 1))
+  done
+  kill -KILL "$pid" 2>/dev/null || true
+  disown "$pid" 2>/dev/null || true
+}
+
+# Removes the output file and puts the displaced INT and TERM traps back.
+csa_lsof_release() {
+  if [[ -n "$csa_lsof_out" ]]; then
+    rm -f "$csa_lsof_out"
   fi
+  csa_lsof_out=""
+  csa_lsof_pid=""
+  trap - INT TERM
+  eval "$csa_lsof_prev_int"
+  eval "$csa_lsof_prev_term"
+}
+
+# Ctrl-C (or a TERM) inside the 5 s window: stop lsof, remove its file, put the previous traps
+# back, and act on the signal: run the previous trap's action if there was one, or exit 130 (INT)
+# or 143 (TERM). Either way lsof is stopped and the file is gone.
+#
+# That exit reaches the EXIT trap (csa_on_exit, which then says "stopped early") only when this
+# runs in the installer's own shell. main() runs it inside $(...), through check_running_tools:
+# there the exit is the subshell's, the installer dies of the same signal itself, and csa_on_exit
+# runs once, sees status 0, and prints nothing - as it does on a Ctrl-C during any $(...) in this
+# script (measured, bash 3.2).
+#
+# Not by raising the signal again: on bash 3.2 a signal raised inside its own trap never reached
+# a trap put back there (measured).
+#
+# The window's traps replace whatever was there, a caller's `trap '' INT` included. A Ctrl-C that
+# caller meant to ignore still stops lsof here, and the check returns 1 (no answer); the empty
+# action then runs, so the run carries on, and `trap '' INT` is put back (measured).
+csa_lsof_trap_action() { csa_lsof_action="$2"; }
+csa_lsof_interrupted() {
+  local prev status=130 csa_lsof_action=""
+  if [[ "$1" == INT ]]; then prev="$csa_lsof_prev_int"; else prev="$csa_lsof_prev_term"; status=143; fi
+  if [[ -n "$csa_lsof_pid" ]]; then
+    csa_lsof_stop "$csa_lsof_pid"
+  fi
+  csa_lsof_release
+  if [[ -n "$prev" ]]; then
+    # `trap -p` prints `trap -- '<action>' SIGINT`, quoted for eval: the action is the 2nd word.
+    eval "csa_lsof_trap_action ${prev#trap }"
+    eval "$csa_lsof_action"
+    return 0
+  fi
+  exit "$status"
+}
+
+# Prints each running client's name once, sorted. Returns 1, printing nothing, when it could not
+# look: no lsof, or no answer from it within 5 s. Its answer always includes this shell, so an
+# answer naming no process at all is no answer.
+#
+# Bounded because it runs before the plan, and lsof can stall (on an unresponsive network mount,
+# for one). Stock macOS has no `timeout`, so lsof runs in the background, into a file, and is
+# stopped after 5 s (csa_lsof_stop). Its exit status is not part of the answer: it can exit 1
+# after a full one. The INT and TERM traps are held only for that window, and given back, and
+# it naps with csa_lsof_nap so a Ctrl-C in it is always acted on.
+running_ai_clients() {
+  local mine phome txt waited=0
+  mine="$(csa_ancestor_pids | tr '\n' ' ')" || mine=""
+  phome="$(cd "$HOME" 2>/dev/null && pwd -P)" || phome="$HOME"
+  csa_lsof_prev_int="$(trap -p INT)"
+  csa_lsof_prev_term="$(trap -p TERM)"
+  # For these 5 s only, and over a caller's `trap '' INT` too (see csa_lsof_interrupted).
+  trap 'csa_lsof_interrupted INT' INT
+  trap 'csa_lsof_interrupted TERM' TERM
+  if ! csa_lsof_out="$(mktemp "${TMPDIR:-/tmp}/csa-lsof.XXXXXX")"; then
+    csa_lsof_out=""
+    csa_lsof_release
+    return 1
+  fi
+  lsof -n -P -a -d txt -u "$(id -u)" -Fpn >"$csa_lsof_out" 2>/dev/null &
+  csa_lsof_pid=$!
+  while kill -0 "$csa_lsof_pid" 2>/dev/null; do
+    if [[ $waited -ge 50 ]]; then
+      csa_lsof_stop "$csa_lsof_pid"
+      csa_lsof_release
+      return 1
+    fi
+    csa_lsof_nap
+    waited=$((waited + 1))
+  done
+  # Gone, so already reaped: this only collects its status, which is ignored.
+  wait "$csa_lsof_pid" 2>/dev/null || true
+  txt="$(cat "$csa_lsof_out" 2>/dev/null)" || txt=""
+  csa_lsof_release
+  if [[ "$txt" != p* ]] && [[ "$txt" != *$'\n'p* ]]; then
+    return 1
+  fi
+  printf '%s\n' "$txt" | awk -v mine=" $mine" -v home="$HOME" -v phome="$phome" '
+    /^p/ { pid = substr($0, 2); first = 1; next }
+    /^n/ && first {
+      first = 0
+      if (index(mine, " " pid " ")) next
+      path = substr($0, 2); name = ""
+      if (index(path, "/Applications/Claude.app/Contents/MacOS/") == 1)       name = "Claude Desktop"
+      else if (index(path, "/Applications/ChatGPT.app/Contents/MacOS/") == 1) name = "ChatGPT Desktop"
+      else if (index(path, home "/.local/share/claude/versions/") == 1)       name = "Claude Code"
+      else if (index(path, phome "/.local/share/claude/versions/") == 1)      name = "Claude Code"
+      else if (index(path, "/node_modules/@openai/") && path ~ /\/codex$/)    name = "Codex CLI"
+      else if (index(path, "/Caskroom/codex/") || index(path, "/Cellar/codex/")) name = "Codex CLI"
+      if (name != "") found[name] = 1
+    }
+    END { for (n in found) print n }' | sort
+}
+
+# States what is running and asks nothing, as Check-RunningTools has on Windows since #109. The
+# `Continue anyway?` that stood here fired on every run that found a familiar name, over a risk
+# macOS does not have: a running program's files can be replaced under it without breaking the
+# install. What it does with them varies - a native binary keeps what it loaded, a node or Python
+# client may load some new files mid-session - so the advice is to restart afterwards. A desktop
+# app that has to be replaced is waited for at that moment (wait_for_app_exit).
+check_running_tools() {
+  local running
+  if ! running="$(running_ai_clients)"; then
+    info "Could not tell which AI clients are running (lsof gave no answer) - carrying on."
+    return 0
+  fi
+  if [[ -z "$running" ]]; then
+    return 0
+  fi
+  info "Found ${running//$'\n'/, } running - no need to close anything. Restart them once this finishes, so they use what it installs."
 }
 
 # ── Helpers ─────────────────────────────────────────────────────────
@@ -532,6 +715,7 @@ csa_brew_upgrade() {
 
 claude_needs_migration=""   # "brew" or "npm" if installed wrong
 codex_needs_migration=""    # "brew" if installed via homebrew
+codex_brew_kind=""          # "cask" or "formula": which of the two Homebrew holds
 gemini_needs_migration=""   # "brew" if installed via homebrew
 copilot_needs_migration=""  # "brew" if the microsoft-365-copilot cask is installed
 path_updated=0              # set to 1 if ~/.local/bin was added to shell config
@@ -548,9 +732,17 @@ detect_migrations() {
     claude_needs_migration="npm"
   fi
 
-  # Codex: should be npm, not brew
+  # Codex: should be npm, not brew. Homebrew has shipped it both ways: a homebrew-core formula
+  # until 2025-10-17, then a cask (homebrew-core's tap_migrations.json maps "codex" to
+  # homebrew/cask). Nothing moves an installed formula's keg, so an early Homebrew install is
+  # still the formula. Measured 2026-11-12 on Homebrew 7.0.13: a codex keg in the Cellar is found
+  # by `brew list --formula codex` (exit 0) and missed by `brew list --cask codex` (exit 1).
   if has_command brew && brew list --cask codex >/dev/null 2>&1; then
     codex_needs_migration="brew"
+    codex_brew_kind="cask"
+  elif has_command brew && brew list --formula codex >/dev/null 2>&1; then
+    codex_needs_migration="brew"
+    codex_brew_kind="formula"
   fi
 
   # Gemini: should be npm, not brew
@@ -836,7 +1028,7 @@ migrate_claude() {
 migrate_codex() {
   if [[ "$codex_needs_migration" == "brew" ]]; then
     info "Removing Codex CLI from Homebrew (migrating to npm)"
-    brew uninstall --cask codex || warn "brew uninstall codex failed; continuing"
+    brew uninstall "--${codex_brew_kind:-cask}" codex || warn "brew uninstall codex failed; continuing"
   fi
 }
 

@@ -140,6 +140,15 @@ check python3 tests/test_summary_interpreter.py
 step "a desktop app is replaced only after it is quit, and never mistaken for a look-alike"
 check python3 tests/test_desktop_apps.py
 
+step "a running AI client is named by its image path, never its name or the installer's own ancestry"
+check python3 tests/test_running_clients.py
+
+step "a Homebrew Codex CLI is migrated whether it is a cask or a formula"
+check python3 tests/test_codex_migration.py
+
+step "the update plan says when its Homebrew list may be behind what brew update will see"
+check python3 tests/test_brew_outdated_plan.py
+
 step "the plan must cover what main() runs"
 check python3 tools/check-plan-covers-steps.py
 
