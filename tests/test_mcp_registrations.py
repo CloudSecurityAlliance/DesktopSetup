@@ -38,10 +38,12 @@ import io
 import json
 import os
 import re
+import signal
 import stat
 import subprocess
 import sys
 import tempfile
+import time
 import traceback
 from pathlib import Path
 
@@ -77,6 +79,8 @@ W_CELLAR = ("it runs from a venv built on a Homebrew Cellar Python, which the ne
             "upgrade deletes")
 WINDOWS = "not audited: Windows support is #184 (Task 1W)"
 
+CONTROL = re.compile(r"[\x00-\x1f\x7f-\x9f]")
+
 INTERPRETER_KEYS = ("PYTHONPATH", "PYTHONHOME", "PYTHONSTARTUP", "PYTHONUSERBASE",
                     "PYTHONEXECUTABLE", "VIRTUAL_ENV", "CONDA_PREFIX", "UV_PROJECT_ENVIRONMENT")
 
@@ -102,6 +106,13 @@ def load_module():
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
     return mod
+
+
+def script_line(number):
+    """Line `number` of the script under test, or "" when it has no such line."""
+    lines = SCRIPT.read_text(encoding="utf-8").splitlines()
+    n = int(number)
+    return lines[n - 1] if 0 < n <= len(lines) else ""
 
 
 def tilde(path, home):
@@ -519,8 +530,34 @@ def python_stdlib_partly_missing():
         f = r.f("csa-zendesk")
         expect((f["state"], f["reason"]) == ("dead", R_PY_BROKEN), f"{f['state']}/{f['reason']}")
         probes = [ln for ln in w.stub_log() if ln.startswith("probe ")]
-        expect(probes and "-I -c" in probes[0] and "import json, importlib.resources" in probes[0],
-               f"the probe was not `-I -c \"import json, importlib.resources\"`: {probes}")
+        expect(probes and "-I -B -c" in probes[0]
+               and "import json, importlib.resources" in probes[0],
+               f"the probe was not `-I -B -c \"import json, importlib.resources\"`: {probes}")
+
+
+@case
+def probe_writes_no_bytecode():
+    # The review of fba8c54 found the probe wrote 55 .pyc files into a fresh interpreter's
+    # stdlib. Here the interpreter is a private one whose bytecode cache is redirected into a
+    # tree of its own (-X pycache_prefix), so any .pyc the probe would write is seen; the
+    # control proves that the same interpreter, probed without -B, does write.
+    with world() as w:
+        probed_pyc, control_pyc = w.tmp / "pyc-probed", w.tmp / "pyc-control"
+        probed = write_exec(w.tmp / "private" / "bin" / "python3.14",
+                            f'#!/bin/sh\nexec "{sys.executable}" -X pycache_prefix="{probed_pyc}" "$@"\n')
+        control = write_exec(w.tmp / "control" / "python3.14",
+                             f'#!/bin/sh\nexec "{sys.executable}" -X pycache_prefix="{control_pyc}" "$@"\n')
+        subprocess.run([str(control), "-I", "-c", "import json, importlib.resources"],
+                       env=w.env(), check=True, timeout=60)
+        written = [p for p in control_pyc.rglob("*.pyc")] if control_pyc.exists() else []
+        expect(written, "fixture: without -B the private interpreter wrote no bytecode")
+        script = w.checkout("csa-zendesk", python=probed, home=probed.parent)
+        w.claude(user={"csa-zendesk": reg(script)})
+        r = w.run()
+        r.ok()
+        expect(r.f("csa-zendesk")["state"] == "elsewhere", "the private interpreter was not probed")
+        left = [str(p) for p in probed_pyc.rglob("*")] if probed_pyc.exists() else []
+        expect(not left, f"the probe wrote bytecode: {len(left)} file(s)")
 
 
 @case
@@ -905,6 +942,149 @@ def symlinked_config_refused():
 
 
 @case
+def linked_parent_dir_refused():
+    # A10 reaches every directory between the config and HOME, not just the last component:
+    # `~/.gemini` linked into a dotfiles repository must not be written through.
+    with world() as w:
+        dots = w.tmp / "dotfiles"
+        gone = w.tmp / "gone" / "csa-zendesk-mcp"
+        (dots / "gemini").mkdir(parents=True)
+        (dots / "gemini" / "settings.json").write_text(json.dumps({"mcpServers": {
+            "csa-zendesk": reg(gone)}}))
+        (w.home / ".gemini").symlink_to(dots / "gemini")
+        w.stub("gemini", "exit 0")
+        (dots / "claude").mkdir()
+        w.claude(user={"csa-zendesk": reg(gone)}, at=dots / "claude" / ".claude.json")
+        (w.tmp / "cc-link").symlink_to(dots / "claude")
+        w.extra_env["CLAUDE_CONFIG_DIR"] = str(w.tmp / "cc-link")
+        (dots / "desktop").mkdir()
+        (w.home / "Library" / "Application Support").mkdir(parents=True)
+        (w.home / "Library" / "Application Support" / "Claude").symlink_to(dots / "desktop")
+        w.desktop({"csa-zendesk": reg(gone)})
+        before = snapshot(dots)
+        r = w.run()
+        r.ok()
+        for client, real in (("Gemini", dots / "gemini" / "settings.json"),
+                             ("Claude Code", dots / "claude" / ".claude.json"),
+                             ("Claude Desktop", dots / "desktop" / "claude_desktop_config.json")):
+            f = r.f("csa-zendesk", client)
+            expect(f["config_is_link"] is True, f"{client}: a linked directory read as no link")
+            expect(f["action"] == "leave", f"{client}: {f['action']} through a linked directory")
+            want = f"its config is a link to {real}; not changed — edit it there"
+            expect(r.rows_with(want), f"{client}: no row says {want!r}: {r.rows}")
+        expect(snapshot(dots) == before, "the dotfiles directory changed")
+    with world() as w:
+        # The control: a HOME that is itself a link (a home on another volume) is the
+        # machine's, and a config inside it is not "linked".
+        (w.tmp / "home-link").symlink_to(w.home)
+        w.extra_env["HOME"] = str(w.tmp / "home-link")
+        w.claude(user={"csa-zendesk": reg(w.tmp / "gone" / "csa-zendesk-mcp")})
+        r = w.run()
+        r.ok()
+        f = r.f("csa-zendesk")
+        expect(f["config_is_link"] is False and f["action"] == "re-point",
+               f"a linked HOME made its config a link: {f['config_is_link']}/{f['action']}")
+
+
+@case
+def hostile_input_contained():
+    # Whatever one client's config holds, only THAT client is "not audited" (B9); the run
+    # still exits 0 and the other clients are audited.
+    with world() as w:
+        gone = str(w.tmp / "gone" / "csa-zendesk-mcp")
+        w.claude(user={"csa-zendesk": reg(gone)})
+        w.gemini({"csa-zendesk": reg("/x\u0000y")})
+        w.desktop(raw='{"mcpServers": {}, "deep": ' + "[" * 100000 + "]" * 100000 + "}")
+        w.codex(raw='{"csa-zendesk": ' + "[" * 100000 + "]" * 100000 + "}")
+        r = w.run()
+        r.ok()
+        for client in ("Gemini", "Claude Desktop", "Codex"):
+            expect((r.client_status(client) or "").startswith("not audited: "),
+                   f"{client}: {r.client_status(client)!r}")
+        expect("nested too deeply" in (r.client_status("Claude Desktop") or ""),
+               f"Desktop: {r.client_status('Claude Desktop')!r}")
+        expect(r.f("csa-zendesk")["action"] == "re-point", "Claude Code was not audited")
+
+
+@case
+def client_failure_contained():
+    # An unexpected failure classifying one client's registrations is reported against that
+    # client, with this script's line - not a stdlib frame's, nor the test's - and no message.
+    with world() as w:
+        mod = load_module()
+
+        def boom(*a, **k):
+            raise RuntimeError(f"deliberate {SECRET_A}")
+
+        mod.classify = boom
+        w.claude(user={"csa-zendesk": reg(w.tmp / "gone" / "csa-zendesk-mcp")})
+        w.gemini({})
+        r = w.run_inproc(mod)
+        r.ok()
+        status = r.client_status("Claude Code") or ""
+        m = re.search(r"RuntimeError at line (\d+)", status)
+        expect(status.startswith("not audited: ") and m, f"Claude Code: {status!r}")
+        line = script_line(m.group(1))
+        expect("classify(reg, ctx)" in line, f"line {m.group(1)} is not the script's own: {line!r}")
+        expect(r.client_status("Gemini") == "ok", f"Gemini: {r.client_status('Gemini')!r}")
+        expect(SECRET_A not in r.stdout + r.stderr + (r.plan_text or ""), "the message was printed")
+
+
+@case
+def control_chars_cannot_forge_rows():
+    with world() as w:
+        proj = w.home / "evil\nrow\tFORGED-PROJECT"
+        proj.mkdir()
+        gone_proj = w.home / "gone\nrow\tFORGED-LOG"
+        key = "K\nrow\tFORGED-KEY"
+        gone = w.tmp / "gone" / "csa-zendesk-mcp"
+        w.claude(user={"csa-zendesk": reg(gone, env={key: SECRET_A})},
+                 projects={str(proj): {"mcpServers": {"csa-zendesk": reg(gone, env={key: "v"})}},
+                           str(gone_proj): {"mcpServers": {"csa-skilljar": reg(gone)}}})
+        r = w.run()
+        r.ok()
+        for line in r.stdout.splitlines():
+            expect(line.startswith(("row\t", "log\t")), f"a stray line: {line!r}")
+            expect(not line.split("\t", 1)[1].startswith("FORGED"), f"a forged line: {line!r}")
+        for f in r.plan["findings"]:
+            for field in ("reason", "todo"):
+                expect(not CONTROL.search(f[field] or ""), f"{field} holds a control character")
+            expect(not any(CONTROL.search(x) for x in f["warnings"]), "a warning does")
+        expect(len(r.rows_with("FORGED-PROJECT")) >= 1, "the project's row is missing")
+
+
+@case
+def stdout_closed_writes_no_plan():
+    with world() as w:
+        w.claude(user={"csa-zendesk": reg(w.tmp / "gone" / "csa-zendesk-mcp")})
+        cmd = [sys.executable, "-I", str(SCRIPT), "plan", "--out", str(w.out),
+               "--system-applications", str(w.apps)]
+        # Started with fd 1 closed.
+        p = subprocess.run(cmd, env=w.env(), cwd=str(w.tmp), stderr=subprocess.PIPE,
+                           preexec_fn=lambda: os.close(1), timeout=180)
+        expect(p.returncode == 2, f"closed stdout: exit {p.returncode}")
+        expect(not w.out.exists(), "closed stdout: the plan file was left")
+        # A reader that has gone away.
+        p = subprocess.Popen(cmd, env=w.env(), cwd=str(w.tmp), stdout=subprocess.PIPE,
+                             stderr=subprocess.PIPE)
+        p.stdout.close()
+        _, err = p.communicate(timeout=180)
+        expect(p.returncode == 2, f"broken pipe: exit {p.returncode}: {err[-300:]!r}")
+        expect(not w.out.exists(), "broken pipe: the plan file was left")
+
+
+@case
+def bom_has_its_own_reason():
+    with world() as w:
+        w.claude(raw="﻿" + json.dumps({"mcpServers": {}}))
+        r = w.run()
+        r.ok()
+        status = r.client_status("Claude Code") or ""
+        expect(status.startswith("not audited: ") and "byte-order mark" in status,
+               f"status {status!r}")
+
+
+@case
 def http_registration_not_audited():
     with world() as w:
         w.claude(user={"csa-zendesk": {"type": "http", "url": "https://example.invalid/mcp"}})
@@ -1057,6 +1237,67 @@ def codex_json_shapes():
 
 
 @case
+def codex_home_respected():
+    with world() as w:
+        codex_home = w.tmp / "codex-home"
+        codex_home.mkdir()
+        (codex_home / "config.toml").write_text("# fixture\n")
+        w.codex([])
+        (w.home / ".codex" / "config.toml").unlink()
+        w.extra_env["CODEX_HOME"] = str(codex_home)
+        r = w.run()
+        r.ok()
+        expect(r.client_status("Codex") == "ok",
+               f"CODEX_HOME's config was not found: {r.client_status('Codex')!r}")
+        expect(any(ln.startswith("codex mcp list") for ln in w.stub_log()), "codex was not run")
+    with world() as w:
+        # And the other way round: ~/.codex has a config, CODEX_HOME does not.
+        w.codex([])
+        empty = w.tmp / "codex-home-empty"
+        empty.mkdir()
+        w.extra_env["CODEX_HOME"] = str(empty)
+        r = w.run()
+        r.ok()
+        expect(r.client_status("Codex") == "no config yet",
+               f"~/.codex was read instead of CODEX_HOME: {r.client_status('Codex')!r}")
+
+
+@case
+def codex_timeout_kills_its_group():
+    # S2: on a timeout the whole process group dies. An npm `codex` is a Node wrapper around a
+    # native child, and killing only the wrapper left the child running (measurements).
+    with world() as w:
+        mod = load_module()
+        mod.CLIENT_TIMEOUT = 2
+        pidfile = w.tmp / "grandchild.pid"
+        w.codex([])
+        w.stub("codex", f'sleep 30 >/dev/null 2>&1 &\necho $! > "{pidfile}"\n'
+                        "exec sleep 25 >/dev/null 2>&1")
+        pid, alive = None, False
+        try:
+            r = w.run_inproc(mod)
+            r.ok()
+            status = r.client_status("Codex") or ""
+            expect(status.startswith("not audited: ") and "within 2s" in status,
+                   f"status {status!r}")
+            pid = int(pidfile.read_text().strip())
+            alive, deadline = True, time.time() + 5
+            while alive and time.time() < deadline:
+                try:
+                    os.kill(pid, 0)
+                    time.sleep(0.1)
+                except ProcessLookupError:
+                    alive = False
+            expect(not alive, "codex's child survived the timeout: only the wrapper was killed")
+        finally:
+            if pid is not None and alive:  # bounded: never leave the survivor running
+                try:
+                    os.kill(pid, signal.SIGKILL)
+                except OSError:
+                    pass
+
+
+@case
 def client_reads_run_in_empty_dir():
     with world() as w:
         busy = w.tmp / "busy"
@@ -1099,11 +1340,13 @@ def plan_file_has_no_values():
         env = {"CSA_ZD_ALLOWLIST_WRITE": SECRET_A, "CSA_ZENDESK_TOKEN_FILE": SECRET_B}
         w.claude(user={"csa-zendesk": reg(gone, env=env)})
         w.desktop({"csa-zendesk": reg(gone, env={"CSA_SKILLJAR_V1_API_KEY": SECRET_C})})
-        w.gemini({"csa-zendesk": reg(gone, env={"K": SECRET_A})})
+        # Args can carry a secret too (`--api-key …`): only the fingerprint covers them.
+        w.gemini({"csa-zendesk": reg(gone, ["--api-key", SECRET_C], env={"K": SECRET_A})})
         w.codex([{"name": "csa-zendesk", "transport": {"type": "stdio", "command": str(gone),
                                                         "env": {"K": SECRET_B}}}])
         r = w.run()
         r.ok()
+        expect(not any("args" in f for f in r.plan["findings"]), "the plan file records args")
         for s in SECRETS:
             for where, text in (("stdout", r.stdout), ("stderr", r.stderr),
                                 ("plan file", r.plan_text)):
@@ -1224,17 +1467,25 @@ def token_dirs_unreadable_still_plans():
 
 @case
 def internal_error_exits_2():
+    # A failure outside any one client: exit 2, no plan file, and stderr names the type and
+    # this script's own line, never the exception's message.
     with world() as w:
         mod = load_module()
 
         def boom(*a, **k):
-            raise RuntimeError("deliberate")
+            raise RuntimeError(f"deliberate {SECRET_A}")
 
-        mod.classify = boom
+        mod.render = boom
         w.claude(user={"csa-zendesk": reg(w.tmp / "gone" / "csa-zendesk-mcp")})
         r = w.run_inproc(mod)
         expect(r.rc == 2, f"exit {r.rc}, expected 2")
         expect(not w.out.exists(), "the plan file was written after an internal error")
+        expect(SECRET_A not in r.stdout + r.stderr, "the exception's message was printed")
+        m = re.search(r"RuntimeError at line (\d+)", r.stderr)
+        expect(m, f"stderr: {r.stderr!r}")
+        line = script_line(m.group(1))
+        expect("render(clients, findings)" in line,
+               f"line {m.group(1)} is not this script's own frame: {line!r}")
 
 
 @case
@@ -1314,6 +1565,31 @@ MUTATIONS = [
     ("desktop_detected_by_path_not_name", "detect Claude Desktop by process name",
      "ctx.running = any(line.strip() in targets for line in lines)",
      'ctx.running = any(os.path.basename(line.strip()) == "Claude" for line in lines)'),
+    # Found by the review of fba8c54.
+    ("probe_writes_no_bytecode", "probe without -B",
+     '[interp, "-I", "-B", "-c", PROBE]', '[interp, "-I", "-c", PROBE]'),
+    ("linked_parent_dir_refused", "check only the config's last component for a link",
+     "self.config_is_link = linked_config(config)", "self.config_is_link = os.path.islink(config)"),
+    ("client_failure_contained", "let one client's failure abort the audit",
+     "        except Exception as e:\n            status, found =",
+     "        except ZeroDivisionError as e:\n            status, found ="),
+    ("control_chars_cannot_forge_rows", "show key names uncleaned",
+     "return sep.join(clean(k) for k in keys)", "return sep.join(keys)"),
+    ("stdout_closed_writes_no_plan", "leave the plan file when the plan was not shown",
+     "        if args.out and os.path.exists(args.out):\n            os.unlink(args.out)\n"
+     "        say(", "        say("),
+    ("plan_file_has_no_values", "record args in the plan file",
+     '"env_keys": sorted(f.reg.env),', '"args": f.reg.args, "env_keys": sorted(f.reg.env),'),
+    ("internal_error_exits_2", "print the exception's message",
+     'return f"{type(exc).__name__} at line {own_line(exc)}"',
+     'return f"{type(exc).__name__}: {exc} at line {own_line(exc)}"'),
+    ("internal_error_exits_2", "report the innermost frame, whosever it is",
+     "if os.path.abspath(tb.tb_frame.f_code.co_filename) == me:", "if True:"),
+    ("codex_home_respected", "ignore CODEX_HOME",
+     'codex_home = ctx.environ.get("CODEX_HOME") or os.path.join(ctx.home, ".codex")',
+     'codex_home = os.path.join(ctx.home, ".codex")'),
+    ("codex_timeout_kills_its_group", "kill only the child on a timeout, not its group",
+     "os.killpg(p.pid, signal.SIGKILL)", "p.kill()"),
 ]
 
 
