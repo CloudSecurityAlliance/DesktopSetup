@@ -2791,8 +2791,12 @@ def apply_stopped(w, mod):
     """apply in process, to its end or to the SystemExit a stop signal raises: (exit, result,
     the stop signals apply left held). Once stopped, apply holds them to the process's end; a
     test run goes on, so it drops any still pending (SIG_IGN discards a pending signal),
-    unblocks them, and puts its own handlers back."""
+    unblocks them, and puts its own handlers back. Each starts at its default, whatever this
+    run inherited: apply leaves a signal its caller ignores ignored (`check-all.sh &` ignores
+    SIGINT, nohup SIGHUP), which is not what these cases test."""
     saved = {s: signal.getsignal(s) for s in STOPS}
+    for s in STOPS:
+        signal.signal(s, signal.default_int_handler if s == signal.SIGINT else signal.SIG_DFL)
     try:
         try:
             a = w.apply_inproc(mod)
@@ -3369,6 +3373,24 @@ def lock_never_removed_without_proof():
 
 
 @case
+def signals_held_keeps_the_callers_mask():
+    # signals_held holds the stop signals for its block, then puts back the mask it found: one
+    # the caller had already blocked stays blocked, and the rest are free again (review of
+    # f566ac2: unblocking its own set instead would unblock the caller's too).
+    mod = load_module()
+    old = signal.pthread_sigmask(signal.SIG_BLOCK, {signal.SIGHUP})
+    try:
+        with mod.signals_held():
+            inside = set(signal.pthread_sigmask(signal.SIG_BLOCK, []))
+        after = set(signal.pthread_sigmask(signal.SIG_BLOCK, []))
+    finally:
+        signal.pthread_sigmask(signal.SIG_SETMASK, old)
+    expect(inside >= set(STOPS), f"not held inside: {sorted(inside)}")
+    expect(signal.SIGHUP in after, "a signal the caller had blocked was unblocked")
+    expect(not ({signal.SIGTERM, signal.SIGINT} & after), f"left held: {sorted(after)}")
+
+
+@case
 def temp_files_are_this_runs_alone():
     # A temp file is created 0600 with O_EXCL under this run's own pid, and only names this
     # run created are ever removed: never one somebody else holds (review of 79aa251).
@@ -3817,6 +3839,8 @@ MUTATIONS = [
     ("signal_mid_write_leaves_nothing", "let a second stop signal cut the clean-up short",
      "        if stopping:\n            return  # one stop is enough",
      "        if False:\n            return  # one stop is enough"),
+    ("signals_held_keeps_the_callers_mask", "unblock the held set, not restore the mask found",
+     "        mask(signal.SIG_SETMASK, old)", "        mask(signal.SIG_UNBLOCK, sigs)"),
     ("signal_mid_write_leaves_nothing", "leave the stop signals unheld after a stop",
      "            mask(signal.SIG_BLOCK, {getattr(signal, n) for n in STOP_SIGNALS if hasattr(signal, n)})",
      "            pass"),
