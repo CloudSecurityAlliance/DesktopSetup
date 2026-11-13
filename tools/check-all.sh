@@ -132,7 +132,7 @@ check python3 tests/test_claude_connectors.py
 
 # CI runs this under python3 and, on macOS, Apple's /usr/bin/python3 (3.9), which is what a stock
 # Mac runs the audit with. That stub opens an install dialog without the Command Line Tools.
-step "the CSA registration audit says what is wrong with each registration, and writes nothing"
+step "the CSA registration audit says what is wrong with each registration, and apply re-points only a planned dead one"
 check python3 tests/test_mcp_registrations.py
 check python3 tests/test_mcp_registrations.py --self-test
 if [[ "$(uname -s)" == Darwin ]] && xcode-select -p >/dev/null 2>&1; then

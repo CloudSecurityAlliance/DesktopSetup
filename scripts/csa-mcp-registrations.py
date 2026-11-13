@@ -19,15 +19,34 @@ so a dead local-scope entry breaks a project even when the user entry is healthy
   elsewhere   it works, but is not the standard binary - usually a developer's checkout, and
               a choice. Left alone, and said so.
 
-A dead one is planned for a re-point at the standard binary, changing only its command (`apply`,
-a later task), unless the plan's decisions leave it: a local-scope entry, an env that would
-point the release binary at another tree, a config that is a symlink, or Claude Desktop running.
+A dead one is planned for a re-point at the standard binary, changing only its command, unless
+the plan's decisions leave it: a local-scope entry, an env that would point the release binary
+at another tree, a config that is a symlink, or Claude Desktop running.
 
-It writes nothing but the plan file it is asked for. It never opens a token, OAuth state or
-credential file, never runs a server, and never prints an env VALUE - only key names and
-counts. The values it reads stay in memory. Its own client calls (`codex mcp list --json`, the
-probe of each interpreter) run from a fresh, empty directory, so a project config in the
-caller's directory cannot stand in for the user's.
+`plan` writes nothing but the plan file it is asked for. `apply` re-audits, and re-points only
+what that plan file showed as a re-point and is unchanged since (same client, scope, project,
+name and fingerprint), and only when the standard binary is there. It edits the client's own
+file, never through a client CLI (argv is visible to every account): `command`, plus `args` in
+the pinned `-m <module>` form, and nothing else. A write to Claude Code's config takes Claude
+Code's own lock (M1) and never breaks one. Every write makes no backup until the file is known
+unchanged since it was read, keeps the file's mode, and reads back what it wrote, restoring the
+backup if that differs. Backups are `<file>.bak-<14 digits>`, pruned to three, as
+csa-claude-connectors.py names and prunes them; each holds the same secrets as its file, at its
+mode.
+
+Re-serialising a JSON config keeps every value, the key order, the indent width (tabs too), the
+trailing newline or its absence, and CRLF. What it can change is spelling only: the whitespace
+between tokens becomes json.dumps's (one item per line, `": "`); a `\\u` escape of a printable
+character is written as the character (`\\u00e9`), while a lone surrogate stays escaped; and a
+number is written in Python's form (`1.5e3` as `1500.0`). mkstemp plus os.replace keeps the
+mode, not the file's extended attributes or ACLs. Codex's config.toml is edited line by line:
+only the `command` line, and the `args` line for the `-m` form, change.
+
+Neither ever opens a token, OAuth state or credential file, runs a server, or prints an env
+VALUE - only key names and counts. The values it reads stay in memory, and a value is written
+only back into the file it came from and that file's backup. Its own client calls (`codex mcp
+list|get --json`, the probe of each interpreter) run from a fresh, empty directory, so a project
+config in the caller's directory cannot stand in for the user's.
 
 The plan's decisions are the constants below, each at its safe default until the CINO answers
 (plans/2026-11-12-registration-repair.md, D1-D5); measurements it relies on are in
@@ -35,26 +54,35 @@ plans/reviews/2026-11-12-registration-repair-measurements.md (M0, M3, M7).
 
     python3 -I scripts/csa-mcp-registrations.py plan                   # print the plan
     python3 -I scripts/csa-mcp-registrations.py plan --out plan.json   # and record it
+    python3 -I scripts/csa-mcp-registrations.py apply --approved plan.json
+    python3 -I scripts/csa-mcp-registrations.py apply                  # by hand: plan, then apply
 
-Output is one `row<TAB>text` line per row of the plan, and `log<TAB>text` for what is only
+`plan` prints one `row<TAB>text` line per row of the plan, and `log<TAB>text` for what is only
 logged. --out must be a new file: an existing one, or the path of any client's config, is
 refused and left as it is. Exit 0, or 2 on an error, in which case no plan file is left.
+
+`apply` prints `ok<TAB>`, `warn<TAB>` and `info<TAB>` lines. Its to-dos (restart a client, quit
+Claude Desktop, a registration left for somebody to fix) go to CSA_TODO_FILE when it is set, and
+are printed as `info` lines when it is not. Exit 0, or 2 on an internal error.
 """
 import argparse
 import collections
 import contextlib
+import copy
 import hashlib
 import json
 import os
 import re
 import shutil
 import signal
+import stat
 import subprocess
 import sys
 import tempfile
+import time
 import unicodedata
 
-SCRIPT_VERSION = "2026-11-13T03:58Z"
+SCRIPT_VERSION = "2026-11-13T04:20Z"
 
 # ── The plan's decisions (D1-D5). Each is pinned by one test; an answer changes the constant. ──
 
@@ -337,11 +365,14 @@ class Registration(object):
         self.other = dict(other or {})
         self.config_is_link = linked_config(config)
 
-    def label(self):
+    def where(self):
         if self.client == CLAUDE_CODE:
-            where = "user scope" if self.scope == "user" else f"local scope, {tilde(self.project)}"
-            return clean(f"{self.name} in Claude Code ({where})")
-        return clean(f"{self.name} in {self.client}")
+            scope = "user scope" if self.scope == "user" else f"local scope, {tilde(self.project)}"
+            return clean(f"Claude Code ({scope})")
+        return clean(self.client)
+
+    def label(self):
+        return clean(f"{self.name} in {self.where()}")
 
     def fingerprint(self):
         """sha256 of the command, the args and the SORTED KEY NAMES of the env - never a value."""
@@ -841,10 +872,12 @@ def standard_dead(path, server, ctx):
     return kind == "interpreter" and interpreter_dead(detail, ctx) is not None
 
 
-def desktop_running(ctx):
+def desktop_running(ctx, fresh=False):
     """True, False, or None when it cannot be told. By executable path, never process name:
-    `claude` is also Claude Code, whose updater renames its running image (AGENTS.md)."""
-    if ctx.asked_running:
+    `claude` is also Claude Code, whose updater renames its running image (AGENTS.md).
+    Asked once per run, unless `fresh`: apply asks again just before it writes Desktop's
+    config, since Desktop can start while the run waits on a lock or a client."""
+    if ctx.asked_running and not fresh:
         return ctx.running
     ctx.asked_running = True
     exe = which("ps", ctx.path)
@@ -1203,6 +1236,724 @@ def plan(args, created):
     return 0
 
 
+# ── apply: re-point an approved dead registration in place, changing only its command ────────────
+
+# M1: Claude Code takes `<config>.lock`, a DIRECTORY, around each write of its config, and waits
+# for one somebody else holds. apply takes it the same way and holds it across the read, the
+# checks, the backup and the replace: milliseconds, well under the 10 s after which
+# proper-lockfile, which Claude Code bundles, calls a lock stale. It waits at most
+# CLAUDE_LOCK_WAIT for a held lock and NEVER breaks one (the measurement review's ruling,
+# 2026-11-12, P1): breaking a lock a live session holds lets two writers race. So a crashed
+# session's leftover lock blocks Claude Code's repair until somebody removes it; the to-do names
+# the lock, and every other client is still repaired.
+CLAUDE_LOCK_WAIT = 10.0
+LOCK_POLL = 0.05
+
+# A13: the same backup name, regex and cap as csa-claude-connectors.py, deliberately, so one
+# prune bounds both tools' copies of a file that holds secrets (backup_rule_matches_connectors).
+# The regex matches ONLY `<name>.bak-` plus fourteen digits: no other tool's backup is pruned.
+BACKUPS_KEPT = 3
+BACKUP_RE = re.compile(r"\.bak-\d{14}$")
+TMP_PREFIX = ".csa-registrations-"
+
+# The tests set this to see, or move, a file between the steps of a write. Never set in a run.
+TEST_HOOK = None
+
+# The to-do ledger's orders (ENGINEERING.md, "The to-do ledger"): 10 restart, 40+ the installer's.
+TODO_RESTART = 10
+TODO_LEFT = 40
+
+R_UNAPPROVED = "found after you agreed to the plan; not changed — run again"
+R_NOT_PLANNED = "the plan you agreed to left it as it was; not changed — run again"
+R_NO_PLAN = "not changed, because the plan you agreed to could not be read — run again"
+R_NO_STANDARD = "its standard binary is not installed yet"
+R_CHANGED = "changed while this ran; not written — run again"
+R_NOT_CONFINED = "the edit could not be confined to its command; not changed"
+R_UNWRITABLE_VALUE = "its config holds a value this cannot write back exactly; not changed"
+R_UNWRITTEN = "its config could not be written ({why}); not changed"
+R_RESTORED = ("its config did not read back as written, so it was restored from its backup; "
+              "not changed")
+R_UNRESTORED = ("its config did not read back as written, and restoring it failed; its backup "
+                "is {backup}")
+R_CODEX_LAYOUT = "its Codex entry is laid out in a way this cannot edit safely; left as it is"
+R_CODEX_UNREAD = "Codex could not show it (`codex mcp get --json` failed); not changed"
+R_LOCKED = ("Claude Code's config stayed locked for {secs:g}s, so it was not changed; the lock "
+            "was left as it is")
+T_LOCKED = "Claude Code's config is locked; close Claude Code and run again"
+T_NO_STANDARD = "{label} is dead, and its standard binary is not installed yet; run this again once its setup has installed it"
+T_RESTART = "Restart {client}"
+OK_LINE = "{name} re-pointed in {where} at ~/.local/bin/{entry}; its {settings} kept"
+# M1 (and M2 for Desktop): a running client keeps the command it started with, so a repair
+# reaches what starts after it. The Claude Code line says so; every client also gets a restart.
+OK_CLAUDE_CODE = "; Claude Code sessions started after this use it"
+
+
+def emit(kind, text):
+    show([(kind, text)])
+
+
+def hook(point, path):
+    if TEST_HOOK is not None:
+        TEST_HOOK(point, path)
+
+
+def unlink_quietly(path):
+    try:
+        os.unlink(path)
+    except OSError:
+        pass
+
+
+def approval_key(client, scope, project, name, fingerprint):
+    """What must match between the plan agreed to and this run (A4): the same registration, in
+    the same place, with the same command, args and setting NAMES."""
+    return (client, scope, project, name, fingerprint)
+
+
+def key_of(f):
+    return approval_key(f.reg.client, f.reg.scope, f.reg.project, f.reg.name, f.fingerprint)
+
+
+def load_approved(path):
+    """(the keys planned as re-points, every key planned, None), or (None, None, why)."""
+    try:
+        with open(path, "rb") as fh:
+            raw = fh.read()
+    except OSError:
+        return None, None, "it could not be opened"
+    try:
+        data, why = parse_json(raw.decode("utf-8"), "it")
+    except UnicodeDecodeError:
+        why = "not UTF-8"
+    foreign = (None, None, "it is not a plan this tool wrote")
+    if why or not isinstance(data, dict) or data.get("tool") != "csa-mcp-registrations":
+        return foreign
+    findings = data.get("findings")
+    if not isinstance(findings, list):
+        return foreign
+    repoint, every = set(), set()
+    for f in findings:
+        if not isinstance(f, dict):
+            return foreign
+        fields = (f.get("client"), f.get("scope"), f.get("name"), f.get("fingerprint"))
+        project = f.get("project")
+        if not all(isinstance(x, str) for x in fields) or not (project is None
+                                                                 or isinstance(project, str)):
+            return foreign
+        key = approval_key(fields[0], fields[1], project, fields[2], fields[3])
+        every.add(key)
+        if f.get("action") == "re-point":
+            repoint.add(key)
+    return repoint, every, None
+
+
+class Change(object):
+    """One approved re-point, as the write needs it."""
+
+    def __init__(self, finding, ctx):
+        self.reg = finding.reg
+        self.fingerprint = finding.fingerprint
+        server = SERVERS[self.reg.name]
+        self.entry = server.entry
+        self.module = server.module
+        self.command = os.path.join(ctx.home, ".local", "bin", server.entry)
+        # The pinned interpreter form is the only one whose args change: to [] (#179 item 2).
+        self.interp = self.reg.args == ["-m", server.module]
+
+
+def done(change):
+    reg = change.reg
+    text = OK_LINE.format(name=reg.name, where=reg.where(), entry=change.entry,
+                          settings=plural(len(reg.env), "setting"))
+    if reg.client == CLAUDE_CODE:
+        text += OK_CLAUDE_CODE
+    return True, text, None
+
+
+def refused(change, reason, order=TODO_LEFT, todo=None):
+    label = change.reg.label()
+    return False, f"{label}: {reason}", (order, todo or f"{label}: {reason}")
+
+
+class Todos(object):
+    """The closing to-dos: CSA_TODO_FILE when the installer set one, else `info` lines."""
+
+    def __init__(self):
+        self.items = []
+
+    def add(self, order, title):
+        item = (order, clean(title))
+        if item not in self.items:
+            self.items.append(item)
+
+    def flush(self, environ):
+        items = sorted(self.items, key=lambda it: it[0])  # stable: within an order, as found
+        path = environ.get("CSA_TODO_FILE")
+        if path and items:
+            try:
+                # The gate scripts' record, `<order>\t<title>\t-\t-`, so the installer's list
+                # de-duplicates "Restart Claude Desktop" with theirs.
+                with open(path, "a", encoding="utf-8") as fh:
+                    fh.write("".join(f"{order}\t{title}\t-\t-\n" for order, title in items))
+                return
+            except OSError:
+                pass
+        for _, title in items:
+            emit("info", title)
+
+
+# ── Writing a config: the same steps for every client ───────────────────────────────────────
+
+class Locked(Exception):
+    def __init__(self, lock):
+        Exception.__init__(self)
+        self.lock = lock
+
+
+@contextlib.contextmanager
+def claude_lock(path):
+    """Claude Code's own lock on its config (M1): mkdir `<config>.lock`, wait a bounded time
+    for one that is held, never break it, rmdir it after."""
+    lock = path + ".lock"
+    deadline = time.monotonic() + CLAUDE_LOCK_WAIT
+    while True:
+        try:
+            os.mkdir(lock, 0o700)
+            break
+        except FileExistsError:
+            if time.monotonic() >= deadline:
+                raise Locked(lock)
+            time.sleep(LOCK_POLL)
+    try:
+        yield lock
+    finally:
+        try:
+            os.rmdir(lock)
+        except OSError:
+            pass
+
+
+def identity(st):
+    """What must not move between the read and the replace. The whole mode, not just the type:
+    a chmod since the read changes no mtime, and the replace would put the old mode back."""
+    return st.st_dev, st.st_ino, st.st_mtime_ns, st.st_size, st.st_mode
+
+
+def moved(path, before):
+    """Has the file at `path` changed since `before` was taken? A vanished file has."""
+    try:
+        return identity(os.lstat(path)) != identity(before)
+    except OSError:
+        return True
+
+
+def prune_backups(path, keep=BACKUPS_KEPT):
+    """`path`'s own backups, newest `keep` kept. csa-claude-connectors.py's prune, line for line
+    in what it matches: the literal `.bak-` and exactly fourteen digits, sorted by name (the
+    stamp is fixed-width), so no other tool's backup is ever touched."""
+    d = os.path.dirname(path) or "."
+    prefix = os.path.basename(path) + ".bak-"
+    try:
+        names = os.listdir(d)
+    except OSError:
+        return
+    mine = sorted((n for n in names if n.startswith(prefix) and BACKUP_RE.search(n)),
+                  reverse=True)
+    for name in mine[keep:]:
+        unlink_quietly(os.path.join(d, name))
+
+
+def make_backup(path, stamp, mode):
+    """`<path>.bak-<stamp>`, a copy2 of the file, at its mode and never looser. The name is
+    claimed with O_EXCL first, so nothing already there, a link included, is written through."""
+    backup = f"{path}.bak-{stamp}"
+    fd = os.open(backup, os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0),
+                 0o600)
+    os.close(fd)
+    try:
+        shutil.copy2(path, backup)
+        if stat.S_IMODE(os.lstat(backup).st_mode) & ~mode:
+            raise OSError(0, "its backup came out more permissive than the file")
+    except BaseException:
+        unlink_quietly(backup)
+        raise
+    return backup
+
+
+def write_temp(path, data, mode):
+    """mkstemp beside `path`, set to `mode` before a byte is written, then the bytes, fsynced."""
+    fd, tmp = tempfile.mkstemp(dir=os.path.dirname(path), prefix=TMP_PREFIX)
+    try:
+        with os.fdopen(fd, "wb") as fh:
+            os.fchmod(fh.fileno(), mode)
+            fh.write(data)
+            fh.flush()
+            os.fsync(fh.fileno())
+    except BaseException:
+        unlink_quietly(tmp)
+        raise
+    return tmp
+
+
+def abandon(*paths):
+    for p in paths:
+        unlink_quietly(p)
+    return "changed", None
+
+
+def replace_file(path, data, before, stamp, verify):
+    """Steps 4-10 of the plan's edit_json, for any config: ("ok" | "changed" | "restored" |
+    "unrestored", backup).
+
+    `before` is the lstat taken before the file was read. No backup exists until the file is
+    known unchanged since then (step 5), and one made is removed again if the file moves before
+    the replace (step 7): an abandoned write leaves no backup and prunes nothing. Only a replace
+    that reads back as intended prunes (A13)."""
+    mode = stat.S_IMODE(before.st_mode) & 0o777
+    tmp = write_temp(path, data, mode)                     # 4
+    backup = None
+    try:
+        hook("written", path)
+        if moved(path, before):                            # 5
+            return abandon(tmp)
+        backup = make_backup(path, stamp, mode)            # 6
+        hook("backed-up", path)
+        if moved(path, before):                            # 7
+            return abandon(tmp, backup)
+        os.replace(tmp, path)                              # 8
+        tmp = None
+    except BaseException:
+        if tmp is not None:
+            unlink_quietly(tmp)
+            if backup is not None:
+                unlink_quietly(backup)
+        raise
+    hook("replaced", path)
+    if not verify():                                       # 9
+        return restore(path, backup, mode), backup
+    prune_backups(path)                                    # 10
+    return "ok", backup
+
+
+def restore(path, backup, mode):
+    """Put the backup's bytes back, atomically and at the file's mode. The backup is kept."""
+    tmp = None
+    try:
+        with open(backup, "rb") as fh:
+            saved = fh.read()
+        tmp = write_temp(path, saved, mode)
+        os.replace(tmp, path)
+    except OSError:
+        if tmp is not None:
+            unlink_quietly(tmp)
+        return "unrestored"
+    return "restored"
+
+
+def outcome(status, change, backup):
+    if status == "ok":
+        return done(change)
+    if status == "restored":
+        return refused(change, R_RESTORED)
+    if status == "unrestored":
+        return refused(change, R_UNRESTORED.format(backup=tilde(backup)))
+    return refused(change, R_CHANGED)
+
+
+def same(a, b, ordered=True):
+    """Equal and of the same JSON types, objects with their keys in the same order when
+    `ordered`: 1 == 1.0 == True in Python, and not in a client's JSON."""
+    if type(a) is not type(b):
+        return False
+    if isinstance(a, dict):
+        if (list(a) != list(b)) if ordered else (set(a) != set(b)):
+            return False
+        return all(same(a[k], b[k], ordered) for k in a)
+    if isinstance(a, list):
+        return len(a) == len(b) and all(same(x, y, ordered) for x, y in zip(a, b))
+    return a == b
+
+
+# ── JSON configs: Claude Code, Claude Desktop, Gemini ────────────────────────────────────────
+
+LONE_SURROGATE = re.compile("[\ud800-\udfff]")
+
+
+def json_indent(text):
+    """The indent of the file's first indented line (default 2), tabs kept as tabs."""
+    m = re.search(r"^([ \t]+)\S", text, re.M)
+    if not m:
+        return 2
+    return m.group(1) if "\t" in m.group(1) else len(m.group(1))
+
+
+def dump_json(data, like):
+    """`data`, laid out as `like` was as far as json.dumps can: its indent, its trailing newline
+    or none, its line endings, key order, non-ASCII raw. A lone surrogate is written as the
+    escape JSON.stringify writes; NaN and the infinities, which no JSON client reads, raise."""
+    text = json.dumps(data, indent=json_indent(like), ensure_ascii=False, allow_nan=False)
+    text = LONE_SURROGATE.sub(lambda m: "\\u%04x" % ord(m.group()), text)
+    if like.endswith("\n"):
+        text += "\n"
+    if "\r\n" in like:
+        text = text.replace("\n", "\r\n")
+    return text.encode("utf-8")
+
+
+def entry_holder(data, reg):
+    """The object that holds `reg`'s entry in a parsed config, or ShapeError."""
+    try:
+        if reg.client == CLAUDE_CODE and reg.scope == "local":
+            holder = data["projects"][reg.project]["mcpServers"]
+        else:
+            holder = data["mcpServers"]
+    except (KeyError, TypeError, IndexError):
+        raise ShapeError(reg.name)
+    if not isinstance(holder, dict) or not isinstance(holder.get(reg.name), dict):
+        raise ShapeError(reg.name)
+    return holder
+
+
+def repointed(entry, command, args):
+    """The entry with `command`, and `args` when given, replaced; every other key, `env`
+    included, the same object in the same place."""
+    new = {}
+    for key, value in entry.items():
+        if key == "command":
+            new[key] = command
+        elif key == "args" and args is not None:
+            new[key] = args
+        else:
+            new[key] = value
+    return new
+
+
+def only_command_changed(old, new, change):
+    if list(old) != list(new):
+        return False
+    return all(same(old[k], new[k]) for k in old
+               if k != "command" and not (k == "args" and change.interp))
+
+
+def edit_json(client, path, changes, ctx, stamp):
+    """Re-point every approved change in one JSON config: one read, one backup and one write
+    per file, however many of its entries change."""
+    hook("edit", path)
+    if linked_config(path):  # A10, again: it may have become a link since the audit
+        why = R_LINK.format(path=tilde(os.path.realpath(path)))
+        return [(c, refused(c, why)) for c in changes]
+    lock = claude_lock(path) if client == CLAUDE_CODE else contextlib.nullcontext()
+    try:
+        with lock:
+            return edit_json_held(client, path, changes, stamp)
+    except Locked as e:
+        todo = (TODO_RESTART, f"{T_LOCKED} (the lock is {tilde(e.lock)})")
+        return [(c, refused(c, R_LOCKED.format(secs=CLAUDE_LOCK_WAIT), *todo)) for c in changes]
+
+
+def edit_json_held(client, path, changes, stamp):
+    before = os.lstat(path)
+    if not stat.S_ISREG(before.st_mode):
+        return [(c, refused(c, R_CHANGED)) for c in changes]
+    with open(path, "rb") as fh:
+        raw = fh.read()
+    hook("read", path)
+    try:
+        text = raw.decode("utf-8")
+        data, why = (None, "bom") if text.startswith(chr(0xFEFF)) else parse_json(text, "it")
+    except UnicodeDecodeError:
+        data, why = None, "not UTF-8"
+    if why:
+        return [(c, refused(c, R_CHANGED)) for c in changes]
+    new_data = copy.deepcopy(data)
+    results, kept = [], []
+    for c in changes:
+        try:
+            holder = entry_holder(data, c.reg)
+            reg = json_entry(client, c.reg.scope, c.reg.project, c.reg.name, holder[c.reg.name],
+                             path)
+        except ShapeError:
+            results.append((c, refused(c, R_CHANGED)))
+            continue
+        if reg.transport != "stdio" or reg.fingerprint() != c.fingerprint:
+            results.append((c, refused(c, R_CHANGED)))
+            continue
+        old = holder[c.reg.name]
+        new = repointed(old, c.command, [] if c.interp else None)
+        if not only_command_changed(old, new, c):
+            results.append((c, refused(c, R_NOT_CONFINED)))
+            continue
+        entry_holder(new_data, c.reg)[c.reg.name] = new
+        kept.append((c, new))
+    if not kept:
+        return results
+    # In memory, before the write: put the old entries back, and it is the document read.
+    check = copy.deepcopy(new_data)
+    for c, _ in kept:
+        entry_holder(check, c.reg)[c.reg.name] = entry_holder(data, c.reg)[c.reg.name]
+    try:
+        if not same(check, data):
+            raise ValueError()
+        out = dump_json(new_data, text)
+    except ValueError:
+        return results + [(c, refused(c, R_UNWRITABLE_VALUE)) for c, _ in kept]
+
+    def verify():
+        try:
+            with open(path, "rb") as fh:
+                got, bad = parse_json(fh.read().decode("utf-8"), "it")
+            return not bad and all(same(entry_holder(got, c.reg)[c.reg.name], new)
+                                   for c, new in kept)
+        except (OSError, ValueError, ShapeError, RecursionError):
+            return False
+
+    status, backup = replace_file(path, out, before, stamp, verify)
+    return results + [(c, outcome(status, c, backup)) for c, _ in kept]
+
+
+# ── Codex: a line-local edit of config.toml, read back through `codex mcp get --json` ─────────
+
+TOML_STR = r""""(?:[^"\\]|\\.)*"|'[^']*'"""
+TOML_COMMAND = re.compile(r"^(\s*command\s*=\s*)(" + TOML_STR + r")(\s*(?:#.*)?)$")
+TOML_ARGS = re.compile(r"^(\s*args\s*=\s*)\[\s*(" + TOML_STR + r")\s*,\s*(" + TOML_STR
+                       + r")\s*,?\s*\](\s*(?:#.*)?)$")
+TOML_KEY = "^\\s*(?:{k}|\"{k}\"|'{k}')\\s*="
+TOML_ESCAPES = {"b": "\b", "t": "\t", "n": "\n", "f": "\f", "r": "\r", "e": "\x1b", '"': '"',
+                "\\": "\\"}
+
+
+def toml_string(token):
+    """The value of a one-line TOML string token, or None when it is not one this reads."""
+    if token.startswith("'"):
+        return token[1:-1]
+    body, out, i = token[1:-1], [], 0
+    while i < len(body):
+        if body[i] != "\\":
+            out.append(body[i])
+            i += 1
+            continue
+        code = body[i + 1:i + 2]
+        if code in TOML_ESCAPES:
+            out.append(TOML_ESCAPES[code])
+            i += 2
+        elif code in ("u", "U"):
+            width = 4 if code == "u" else 8
+            digits = body[i + 2:i + 2 + width]
+            if not re.match("^[0-9A-Fa-f]{%d}$" % width, digits) or int(digits, 16) > 0x10FFFF:
+                return None
+            out.append(chr(int(digits, 16)))
+            i += 2 + width
+        else:
+            return None
+    return "".join(out)
+
+
+def toml_basic(value):
+    """`value` as a TOML basic string."""
+    out = []
+    for ch in value:
+        if ch in ('"', "\\"):
+            out.append("\\" + ch)
+        elif ord(ch) < 0x20 or ord(ch) == 0x7F:
+            out.append("\\u%04X" % ord(ch))
+        else:
+            out.append(ch)
+    return '"' + "".join(out) + '"'
+
+
+def codex_line_edits(lines, change):
+    """{line index: new line} for the change, or None when the table is not laid out as this
+    can edit safely: `[mcp_servers.<name>]` (or `."<name>"`) exactly once; inside it, until the
+    next header, exactly one `command = "<old>"` line, and for the interpreter form exactly one
+    one-line `args = ["-m", "<module>"]`; and no multi-line string, which could hide a header."""
+    name = re.escape(change.reg.name)
+    header = re.compile(r'^\s*\[\s*mcp_servers\s*\.\s*(?:%s|"%s")\s*\]\s*(?:#.*)?$' % (name, name))
+    body = [ln[:-1] if ln.endswith("\r") else ln for ln in lines]
+    heads = [i for i, ln in enumerate(body) if header.match(ln)]
+    if len(heads) != 1:
+        return None
+    start = heads[0] + 1
+    end = next((i for i in range(start, len(body)) if body[i].lstrip().startswith("[")),
+               len(body))
+    region = range(start, end)
+    if any('"""' in body[i] or "'''" in body[i] for i in region):
+        return None
+    edits = {}
+    found = [i for i in region if re.match(TOML_KEY.format(k="command"), body[i])]
+    m = TOML_COMMAND.match(body[found[0]]) if len(found) == 1 else None
+    if not m or toml_string(m.group(2)) != change.reg.command:
+        return None
+    edits[found[0]] = m.group(1) + toml_basic(change.command) + m.group(3)
+    if change.interp:
+        found = [i for i in region if re.match(TOML_KEY.format(k="args"), body[i])]
+        m = TOML_ARGS.match(body[found[0]]) if len(found) == 1 else None
+        if not m or [toml_string(m.group(2)), toml_string(m.group(3))] != ["-m", change.module]:
+            return None
+        edits[found[0]] = m.group(1) + "[]" + m.group(4)
+    return {i: new + lines[i][len(body[i]):] for i, new in edits.items()}
+
+
+def codex_get(name, ctx):
+    """`codex mcp get <name> --json`, from a fresh empty directory (A11): the entry, or None."""
+    exe = which("codex", ctx.path)
+    if not exe:
+        return None
+    try:
+        rc, out, _ = run_bounded([exe, "mcp", "get", name, "--json"], CLIENT_TIMEOUT,
+                                 ctx.environ, capture=True)
+        data, why = parse_json(out.decode("utf-8"), "its output")
+    except (OSError, subprocess.TimeoutExpired, UnicodeDecodeError):
+        return None
+    if rc != 0 or why:
+        return None
+    if isinstance(data, list) and len(data) == 1:
+        data = data[0]
+    if isinstance(data, dict) and list(data) == [name] and isinstance(data[name], dict):
+        data = data[name]
+    return data if isinstance(data, dict) else None
+
+
+def codex_expected(got, change):
+    """What `codex mcp get` must show after the edit: what it showed before, with the command
+    (and, for the interpreter form, the args) replaced, and nothing else."""
+    want = copy.deepcopy(got)
+    fields = want["transport"] if isinstance(want.get("transport"), dict) else want
+    fields["command"] = change.command
+    if change.interp:
+        fields["args"] = []
+    return want
+
+
+def edit_codex(path, changes, ctx, stamp):
+    hook("edit", path)
+    if linked_config(path):  # A10
+        why = R_LINK.format(path=tilde(os.path.realpath(path)))
+        return [(c, refused(c, why)) for c in changes]
+    before = os.lstat(path)
+    if not stat.S_ISREG(before.st_mode):
+        return [(c, refused(c, R_CHANGED)) for c in changes]
+    with open(path, "rb") as fh:
+        raw = fh.read()
+    hook("read", path)
+    try:
+        lines = raw.decode("utf-8").split("\n")
+    except UnicodeDecodeError:
+        return [(c, refused(c, R_CODEX_LAYOUT)) for c in changes]
+    results, kept = [], []
+    for c in changes:
+        got = codex_get(c.reg.name, ctx)
+        try:
+            reg = codex_entry(c.reg.name, got, path) if got is not None else None
+        except ShapeError:
+            reg = None
+        if reg is None:
+            results.append((c, refused(c, R_CODEX_UNREAD)))
+            continue
+        if reg.fingerprint() != c.fingerprint:
+            results.append((c, refused(c, R_CHANGED)))
+            continue
+        edits = codex_line_edits(lines, c)
+        if edits is None:
+            results.append((c, refused(c, R_CODEX_LAYOUT)))
+            continue
+        for i, line in edits.items():
+            lines[i] = line
+        kept.append((c, codex_expected(got, c)))
+    if not kept:
+        return results
+
+    def verify():
+        # Unordered: Codex may list a server's env in any order from one call to the next.
+        return all(same(codex_get(c.reg.name, ctx), want, ordered=False) for c, want in kept)
+
+    status, backup = replace_file(path, "\n".join(lines).encode("utf-8"), before, stamp, verify)
+    return results + [(c, outcome(status, c, backup)) for c, _ in kept]
+
+
+# ── apply ────────────────────────────────────────────────────────────────────────────────────
+
+def apply(args):
+    """Re-audit; re-point each finding the agreed plan showed as a re-point, unchanged since
+    (A4), whose standard binary is there; report everything else, and leave the to-dos."""
+    ctx = Context(os.environ, args.system_applications)
+    clients, findings = audit(ctx)
+    for line in ctx.logs:
+        emit("log", line)
+    if args.approved is None:
+        # By hand: re-plan, show it, and act on it, as csa-claude-connectors.py --apply does.
+        for row in render(clients, findings):
+            emit("row", row)
+        repoint = {key_of(f) for f in findings if f.action == "re-point"}
+        every = {key_of(f) for f in findings}
+        plan_why = None
+    else:
+        repoint, every, plan_why = load_approved(args.approved)
+        if plan_why:
+            emit("warn", f"the plan you agreed to ({tilde(args.approved)}) could not be read: "
+                         f"{plan_why}; nothing is changed this run")
+            repoint, every = set(), set()
+    for client, status in clients:
+        if status != "ok" and any(k[0] == client for k in repoint):
+            emit("warn", f"{client}: {status}; nothing was changed there — run again")
+
+    todos = Todos()
+    groups = collections.OrderedDict()
+    for f in findings:
+        key = key_of(f)
+        if f.action != "re-point":
+            if f.todo:
+                todos.add(TODO_RESTART if f.todo == T_QUIT_DESKTOP else TODO_LEFT, f.todo)
+                if key in repoint and f.row:  # agreed to as a re-point, and now left
+                    emit("warn", f.row)
+            continue
+        change = Change(f, ctx)
+        if plan_why:
+            result = refused(change, R_NO_PLAN)
+        elif key not in repoint:
+            result = refused(change, R_NOT_PLANNED if key in every else R_UNAPPROVED)
+        elif standard_dead(change.command, SERVERS[f.reg.name], ctx):
+            # Never launched: only its Python is probed, as the audit does.
+            result = refused(change, R_NO_STANDARD + "; left as it is",
+                             todo=T_NO_STANDARD.format(label=f.reg.label()))
+        else:
+            groups.setdefault((f.reg.client, f.reg.config), []).append(change)
+            continue
+        emit("warn", result[1])
+        todos.add(*result[2])
+
+    stamp = time.strftime("%Y%m%d%H%M%S")
+    restart = []
+    for (client, path), changes in groups.items():
+        # D4, asked again just before the write: Desktop may have started since the audit,
+        # while this run waited on a lock, a client or a probe.
+        running = (desktop_running(ctx, fresh=True)
+                   if client == DESKTOP and not WRITE_DESKTOP_WHILE_RUNNING else False)
+        if running is not False:
+            row = ROW_DESKTOP_RUNNING if running else ROW_DESKTOP_UNKNOWN
+            for c in changes:
+                emit("warn", row.format(name=c.reg.name))
+            todos.add(TODO_RESTART, T_QUIT_DESKTOP)
+            continue
+        try:
+            if client == CODEX:
+                results = edit_codex(path, changes, ctx, stamp)
+            else:
+                results = edit_json(client, path, changes, ctx, stamp)
+        except Exception as e:  # this file only: the others are still repaired
+            why = e.strerror if isinstance(e, OSError) and e.strerror else describe_error(e)
+            results = [(c, refused(c, R_UNWRITTEN.format(why=why))) for c in changes]
+        for c, (ok, text, todo) in results:
+            emit("ok" if ok else "warn", text)
+            if todo:
+                todos.add(*todo)
+            if ok and client not in restart:
+                restart.append(client)
+    for client in restart:
+        todos.add(TODO_RESTART, T_RESTART.format(client=client))
+    todos.flush(ctx.environ)
+    return 0
+
+
 def main(argv=None):
     if hasattr(sys.stdout, "reconfigure"):
         sys.stdout.reconfigure(encoding="utf-8", errors="replace")
@@ -1213,12 +1964,26 @@ def main(argv=None):
                                     "writes nothing but --out")
     p.add_argument("--out", metavar="FILE", help="record the findings (no values) for apply")
     p.add_argument("--system-applications", default="/Applications", help=argparse.SUPPRESS)
+    a = sub.add_parser("apply", help="re-point each dead registration the agreed plan showed, "
+                                     "changing only its command")
+    a.add_argument("--approved", metavar="FILE",
+                   help="the plan file agreed to (plan --out); without it, re-plan and apply")
+    a.add_argument("--system-applications", default="/Applications", help=argparse.SUPPRESS)
     try:
         args = ap.parse_args(argv)
     except SystemExit as e:
         # argparse has said why. Nothing was created, and whatever is at --out is not touched:
         # this run made it no more than any other file (review of e62c775).
         return 0 if e.code in (0, None) else 2
+    if args.command == "apply":
+        try:
+            return apply(args)
+        except OutputLost:
+            say("the results could not be printed; stopped, with what was reported done")
+            return 2
+        except Exception as e:
+            say(f"internal error ({describe_error(e)}); stopped, with what was reported done")
+            return 2
     if args.command != "plan":
         ap.print_usage(sys.stderr)
         return 2

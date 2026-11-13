@@ -206,7 +206,7 @@ jobs:
         run: python3 tests/test_survives_tool_failure.py
       - name: claude.ai connector tool changes only what it says
         run: python3 tests/test_claude_connectors.py
-      - name: The CSA registration audit says what is wrong with each registration, and writes nothing (#179)
+      - name: The CSA registration audit says what is wrong with each registration, and apply re-points only a planned dead one (#179)
         run: |
           python3 tests/test_mcp_registrations.py
           python3 tests/test_mcp_registrations.py --self-test
