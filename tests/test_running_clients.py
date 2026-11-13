@@ -15,8 +15,11 @@ Measured on a Mac on 2026-11-12, the name failed three ways:
 
 The fix reads each process's image path with `lsof -d txt`, excludes `$$` and its ancestors
 (walked with `ps -o ppid=`, bounded), and asks nothing - Get-RunningAiClients and
-Check-RunningTools on Windows (#109). lsof is bounded at 5 s, and when it gives no answer the
-check says so instead of reporting that nothing runs. The functions are extracted from the
+Check-RunningTools on Windows (#109). lsof is bounded at 5 s and then stopped without being
+waited for (one that ignores TERM is killed), and when it gives no answer the check says so
+instead of reporting that nothing runs. A Ctrl-C or TERM inside that window removes the
+temporary file, gives back the INT and TERM traps, and stops the run; those cases send the
+signal to a real process group, so they run on POSIX only. The functions are extracted from the
 shipping script, not copied, and run against `ps` and `lsof` stubs built from a process table,
 so the logic runs anywhere bash does, Git Bash included (FRICTION-003).
 
@@ -37,6 +40,7 @@ import os
 import pathlib
 import re
 import shutil
+import signal
 import subprocess
 import sys
 import tempfile
@@ -148,7 +152,12 @@ lsof() {
   case "$LSOF_MODE" in
     absent) echo "lsof: command not found" >&2; return 127 ;;
     empty)  return 1 ;;
-    hang)   exec sleep 30 ;;
+    hang|hang-noterm)
+      # A stall: it records its PID (so the test can see whether it was stopped), and in the
+      # second form ignores TERM, as a process stuck in the kernel effectively does.
+      if [[ "$LSOF_MODE" == hang-noterm ]]; then trap '' TERM; fi
+      echo "$(exec /bin/sh -c 'echo "$PPID"')" > "$TABLE.lsofpid"
+      exec sleep 30 ;;
   esac
   awk -F'\t' '{
     printf "p%s\nftxt\nn%s\n", $1, $4
@@ -165,9 +174,11 @@ pgrep() {
 @@FUNCTIONS@@
 # This shell is the installer: it joins the table under the parent the case gave it.
 printf '%s\t%s\t%s\t%s\t\n' "$$" '@@SELF_PPID@@' "bash" "/bin/bash" >> "$TABLE"
+@@PRELUDE@@
 echo "CSA_TEST_BEGIN"
 @@INVOKE@@
 echo "CSA_TEST_END rc=$rc"
+@@AFTER@@
 """
 # Called inside `||`, where bash ignores set -e in the function, or as a plain statement, where
 # set -e applies to everything it runs - which is how a failing step would kill an installer.
@@ -182,23 +193,49 @@ def extract(text: str, name: str) -> str:
     return match.group(0)
 
 
-NEW_FUNCTIONS = "\n".join(extract(TEXT, n) for n in
-                          ("csa_ancestor_pids", "running_ai_clients", "check_running_tools"))
+GLOBALS = re.findall(r'^csa_lsof_[a-z_]+=""$', TEXT, re.M)
+if len(GLOBALS) != 4:
+    raise SystemExit(f"expected the four csa_lsof_* globals in {SOURCE.name}, found {GLOBALS}")
+NEW_FUNCTIONS = "\n".join(GLOBALS) + "\n" + "\n".join(
+    extract(TEXT, n) for n in ("csa_ancestor_pids", "csa_lsof_nap", "csa_lsof_stop", "csa_lsof_release",
+                               "csa_lsof_trap_action", "csa_lsof_interrupted", "running_ai_clients",
+                               "check_running_tools"))
+
+# The installer's EXIT trap, as macos-ai-tools.sh sets it, reduced to reporting the status it saw.
+EXIT_TRAP = 'csa_on_exit() { local s=$?; echo "ON_EXIT status=$s"; }\ntrap csa_on_exit EXIT'
 
 
 class Result:
-    def __init__(self, out: str, log: str, rc: int, seconds: float, leftovers: list[str]):
+    def __init__(self, out: str, log: str, rc: int, seconds: float, leftovers: list[str],
+                 raw: str = "", exit: int | None = None, since_signal: float = 0.0,
+                 lsof_alive: bool = False):
         self.out, self.log, self.rc, self.seconds, self.leftovers = out, log, rc, seconds, leftovers
+        self.raw, self.exit, self.since_signal, self.lsof_alive = raw, exit, since_signal, lsof_alive
 
     @property
     def lines(self) -> list[str]:
         return [line for line in self.out.splitlines() if line]
 
 
+def _alive(pid: int) -> bool:
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    return True
+
+
 def run(rows: list[Row], call: str, *, self_ppid: str = "1", old: bool = False,
         lsof_mode: str = "table", plain: bool = False, home: str = HOME,
-        stdin: str = "n\n") -> Result:
-    """Run one call against the stubs. rc is -1 when it hung, or never reached its end."""
+        stdin: str = "n\n", prelude: str = "", after: str = "",
+        signal_after: tuple[int, float] | None = None) -> Result:
+    """Run one call against the stubs. rc is -1 when it hung, or never reached its end.
+
+    signal_after=(sig, seconds) sends sig to the driver's whole process group, as a terminal's
+    Ctrl-C does, that long after it starts.
+    """
     work = tempfile.mkdtemp(prefix="csa-running-")
     try:
         table = pathlib.Path(work, "table")
@@ -210,25 +247,55 @@ def run(rows: list[Row], call: str, *, self_ppid: str = "1", old: bool = False,
                   .replace("@@LSOF_MODE@@", lsof_mode)
                   .replace("@@SELF_PPID@@", self_ppid)
                   .replace("@@FUNCTIONS@@", OLD_CHECK_RUNNING_TOOLS if old else NEW_FUNCTIONS)
+                  .replace("@@PRELUDE@@", prelude)
+                  .replace("@@AFTER@@", after)
                   .replace("@@INVOKE@@", invoke))
         path = pathlib.Path(work, "driver.sh")
         path.write_text(script, encoding="utf-8")
         env = {"PATH": "/usr/bin:/bin", "HOME": home, "TMPDIR": str(tmpdir)}
         start = time.monotonic()
+        sent = start
+        proc = subprocess.Popen([BASH, str(path)], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                                stderr=subprocess.PIPE, text=True, env=env,
+                                **({"start_new_session": True} if os.name != "nt" else {}))
+        if signal_after is not None:
+            time.sleep(signal_after[1])
+            sent = time.monotonic()
+            try:
+                os.killpg(proc.pid, signal_after[0])
+            except ProcessLookupError:
+                pass
         try:
-            proc = subprocess.run([BASH, str(path)], input=stdin, capture_output=True, text=True,
-                                  env=env, timeout=60)
+            stdout, stderr = proc.communicate(input=stdin, timeout=60)
         except subprocess.TimeoutExpired:
+            proc.kill()
+            proc.communicate()
             return Result("TIMEOUT", "", -1, time.monotonic() - start, [])
         seconds = time.monotonic() - start
         log_path = pathlib.Path(str(table) + ".log")
         log = log_path.read_text(encoding="utf-8") if log_path.exists() else ""
+        lsof_alive = False
+        pid_path = pathlib.Path(str(table) + ".lsofpid")
+        # POSIX only. On Windows os.kill is TerminateProcess whatever the signal, and the PID Git
+        # Bash reports is MSYS's, not Windows's - so the probe could end an unrelated process.
+        if (os.name != "nt" and pid_path.exists()
+                and pid_path.read_text(encoding="utf-8").strip().isdigit()):
+            pid = int(pid_path.read_text(encoding="utf-8").strip())
+            deadline = time.monotonic() + 2
+            lsof_alive = _alive(pid)
+            while lsof_alive and time.monotonic() < deadline:     # let launchd/init reap it
+                time.sleep(0.05)
+                lsof_alive = _alive(pid)
+            if lsof_alive:
+                os.kill(pid, 9)     # never leave the stub behind, whatever the result
         leftovers = sorted(p.name for p in tmpdir.iterdir())
-        out = proc.stdout + proc.stderr
+        out = stdout + stderr
+        extra = dict(raw=out, exit=proc.returncode, since_signal=seconds - (sent - start),
+                     lsof_alive=lsof_alive)
         body = re.search(r"CSA_TEST_BEGIN\n(.*)CSA_TEST_END rc=(\d+)", out, re.S)
         if not body:
-            return Result(out, log, -1, seconds, leftovers)
-        return Result(body.group(1), log, int(body.group(2)), seconds, leftovers)
+            return Result(out, log, -1, seconds, leftovers, **extra)
+        return Result(body.group(1), log, int(body.group(2)), seconds, leftovers, **extra)
     finally:
         shutil.rmtree(work, ignore_errors=True)
 
@@ -379,15 +446,56 @@ def main() -> int:
         r = run(MEASURED, "running_ai_clients", lsof_mode=mode)
         check(r.rc == 1 and r.lines == [], f"{why}: it returns 1 and names nothing ({r.rc}, {r.lines})")
     r = run(MEASURED, "running_ai_clients", lsof_mode="hang")
-    check(r.rc == 1 and r.lines == [] and r.seconds < 15,
-          f"an lsof that hangs is given up on (5 s bound): it returns 1 after {r.seconds:.1f} s")
+    check(r.rc == 1 and r.lines == [] and r.seconds < 8 and not r.lsof_alive,
+          f"an lsof that hangs is stopped (5 s bound): it returns 1 after {r.seconds:.1f} s")
     check(r.leftovers == [], f"and leaves no temporary file behind ({r.leftovers})")
+    # The review finding: after `kill`, a `wait` for an lsof that ignores TERM took 11 s, and one
+    # stuck in the kernel would never return. TERM, a grace, KILL, and no blocking wait.
+    r = run(MEASURED, "running_ai_clients", lsof_mode="hang-noterm")
+    check(r.rc == 1 and r.lines == [] and r.seconds < 8 and not r.lsof_alive and r.leftovers == [],
+          f"an lsof that ignores TERM is killed, not waited for: it returns 1 after {r.seconds:.1f} s, "
+          f"lsof gone: {not r.lsof_alive}, files left: {r.leftovers}")
     r = run(MEASURED, "running_ai_clients")
     check(r.leftovers == [], f"nor does a normal run ({r.leftovers})")
     r = run(MEASURED, "check_running_tools", lsof_mode="absent", plain=True)
     check(r.rc == 0 and r.out.strip() == "INFO Could not tell which AI clients are running "
                                          "(lsof gave no answer) - carrying on.",
           f"check_running_tools says it could not tell, and carries on ({r.out.strip()!r})")
+
+    show_traps = 'echo "INT[$(trap -p INT)]"; echo "TERM[$(trap -p TERM)]"'
+    r = run(MEASURED, "running_ai_clients", prelude="trap 'echo PREV-INT' INT", after=show_traps)
+    # bash 3.2 prints the signal as SIGINT, later bashes as INT.
+    check(re.search(r"INT\[trap -- 'echo PREV-INT' (SIG)?INT\]", r.raw) is not None and "TERM[]" in r.raw,
+          "the INT and TERM traps it held for the window are given back as they were")
+
+    print("\ninterrupted inside the 5 s window")
+    if os.name == "nt":
+        print("    not run  (needs POSIX process groups; the cases above ran)")
+    else:
+        # check_running_tools as main() runs it, so running_ai_clients is inside $(...). The
+        # installer stops at once (bash 3.2 then shows its EXIT trap a status of 0, whatever this
+        # code does); the subshell, signalled with it, stops lsof and removes the file.
+        for sig in (signal.SIGINT, signal.SIGTERM):
+            r = run(MEASURED, "check_running_tools", lsof_mode="hang", plain=True,
+                    prelude=EXIT_TRAP, signal_after=(sig, 1.5))
+            check("ON_EXIT status=" in r.raw and "CSA_TEST_END" not in r.raw
+                  and "Could not tell" not in r.raw and r.since_signal < 3
+                  and r.leftovers == [] and not r.lsof_alive,
+                  f"{sig.name} to the process group stops the installer within {r.since_signal:.1f} s, "
+                  f"through its EXIT trap ({'ON_EXIT' in r.raw}), with no file left ({r.leftovers}) "
+                  f"and lsof stopped ({not r.lsof_alive})")
+        # Called directly, under set -e, as a plain statement: the case that left the file.
+        r = run(MEASURED, "running_ai_clients", lsof_mode="hang", plain=True,
+                prelude=EXIT_TRAP, signal_after=(signal.SIGINT, 1.5))
+        check(r.exit == 130 and "ON_EXIT status=130" in r.raw and r.leftovers == []
+              and not r.lsof_alive,
+              f"Ctrl-C with set -e in force: the shell exits 130 ({r.exit}) through its EXIT "
+              f"trap ({'ON_EXIT status=130' in r.raw}), with no file left ({r.leftovers})")
+        r = run(MEASURED, "running_ai_clients", lsof_mode="hang", plain=True,
+                prelude="trap 'echo PREV-INT-RAN; exit 7' INT", signal_after=(signal.SIGINT, 1.5))
+        check("PREV-INT-RAN" in r.raw and r.exit == 7 and r.leftovers == [] and not r.lsof_alive,
+              f"an INT trap set before it still runs on Ctrl-C, after the cleanup (exit {r.exit}, "
+              f"files left: {r.leftovers})")
 
     print("\ncsa_ancestor_pids is bounded")
     r = run([("700", "800", "a", "/bin/a", ""), ("800", "700", "b", "/bin/b", "")],

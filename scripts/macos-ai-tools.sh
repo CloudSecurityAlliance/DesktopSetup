@@ -32,7 +32,7 @@
 
 set -euo pipefail
 
-SCRIPT_VERSION="2026-11-13T02:35Z"
+SCRIPT_VERSION="2026-11-13T03:55Z"
 
 # ── CSA plugin marketplaces ─────────────────────────────────────────
 # Plugin marketplaces to register with Claude Code. Each entry is an
@@ -357,33 +357,111 @@ csa_ancestor_pids() {
   done
 }
 
+# The lsof that running_ai_clients started, its output file, and the INT and TERM traps it
+# displaced. Globals, because a signal handler has to reach them.
+csa_lsof_pid=""
+csa_lsof_out=""
+csa_lsof_prev_int=""
+csa_lsof_prev_term=""
+
+# A tenth of a second, during which a trapped INT or TERM is acted on at once. A foreground
+# `sleep` is not enough: when it exits normally just as Ctrl-C arrives, bash takes the Ctrl-C as
+# the child's to handle and never runs the trap - measured on bash 3.2, 2 runs in 10. The `wait`
+# builtin returns as soon as a trapped signal arrives, and the trap runs. And `|| true`: under
+# set -e a nap cut short would otherwise exit the shell before the trap runs.
+csa_lsof_nap() {
+  sleep 0.1 &
+  wait "$!" 2>/dev/null || true
+}
+
+# Stops a background lsof: TERM, half a second's grace, then KILL - and never `wait`. A process
+# stuck in the kernel (the unresponsive mount this bound exists for) cannot die until the call
+# returns, so waiting to reap it is the very hang the bound prevents: at review a stub that
+# ignored TERM held a `wait` here for 11 s. Disowned, so nothing later waits for it either.
+csa_lsof_stop() {
+  local pid="$1" n=0
+  kill -TERM "$pid" 2>/dev/null || return 0
+  while kill -0 "$pid" 2>/dev/null && [[ $n -lt 5 ]]; do
+    csa_lsof_nap
+    n=$((n + 1))
+  done
+  kill -KILL "$pid" 2>/dev/null || true
+  disown "$pid" 2>/dev/null || true
+}
+
+# Removes the output file and puts the displaced INT and TERM traps back.
+csa_lsof_release() {
+  if [[ -n "$csa_lsof_out" ]]; then
+    rm -f "$csa_lsof_out"
+  fi
+  csa_lsof_out=""
+  csa_lsof_pid=""
+  trap - INT TERM
+  eval "$csa_lsof_prev_int"
+  eval "$csa_lsof_prev_term"
+}
+
+# Ctrl-C (or a TERM) inside the 5 s window: stop lsof, remove its file, put the previous traps
+# back, and act on the signal. With no trap before, the shell exits 130 (INT) or 143 (TERM), so
+# the installer's EXIT trap (csa_on_exit) reports it stopped early. With one, its action is run.
+#
+# Not by raising the signal again: on bash 3.2 a signal raised inside its own trap never reached
+# a trap put back there (measured). Where check_running_tools runs this, inside $(...), the
+# installer itself got the same Ctrl-C and stops at once; this only cleans up (measured).
+csa_lsof_trap_action() { csa_lsof_action="$2"; }
+csa_lsof_interrupted() {
+  local prev status=130 csa_lsof_action=""
+  if [[ "$1" == INT ]]; then prev="$csa_lsof_prev_int"; else prev="$csa_lsof_prev_term"; status=143; fi
+  if [[ -n "$csa_lsof_pid" ]]; then
+    csa_lsof_stop "$csa_lsof_pid"
+  fi
+  csa_lsof_release
+  if [[ -n "$prev" ]]; then
+    # `trap -p` prints `trap -- '<action>' SIGINT`, quoted for eval: the action is the 2nd word.
+    eval "csa_lsof_trap_action ${prev#trap }"
+    eval "$csa_lsof_action"
+    return 0
+  fi
+  exit "$status"
+}
+
 # Prints each running client's name once, sorted. Returns 1, printing nothing, when it could not
 # look: no lsof, or no answer from it within 5 s. Its answer always includes this shell, so an
 # answer naming no process at all is no answer.
 #
 # Bounded because it runs before the plan, and lsof can stall (on an unresponsive network mount,
 # for one). Stock macOS has no `timeout`, so lsof runs in the background, into a file, and is
-# killed after 5 s. Its exit status is not part of the answer: it can exit 1 after a full one.
+# stopped after 5 s (csa_lsof_stop). Its exit status is not part of the answer: it can exit 1
+# after a full one. The INT and TERM traps are held only for that window, and given back, and
+# it naps with csa_lsof_nap so a Ctrl-C in it is always acted on.
 running_ai_clients() {
-  local mine phome out lsof_pid txt waited=0
+  local mine phome txt waited=0
   mine="$(csa_ancestor_pids | tr '\n' ' ')" || mine=""
   phome="$(cd "$HOME" 2>/dev/null && pwd -P)" || phome="$HOME"
-  out="$(mktemp "${TMPDIR:-/tmp}/csa-lsof.XXXXXX")" || return 1
-  lsof -n -P -a -d txt -u "$(id -u)" -Fpn >"$out" 2>/dev/null &
-  lsof_pid=$!
-  while kill -0 "$lsof_pid" 2>/dev/null; do
+  csa_lsof_prev_int="$(trap -p INT)"
+  csa_lsof_prev_term="$(trap -p TERM)"
+  trap 'csa_lsof_interrupted INT' INT
+  trap 'csa_lsof_interrupted TERM' TERM
+  if ! csa_lsof_out="$(mktemp "${TMPDIR:-/tmp}/csa-lsof.XXXXXX")"; then
+    csa_lsof_out=""
+    csa_lsof_release
+    return 1
+  fi
+  lsof -n -P -a -d txt -u "$(id -u)" -Fpn >"$csa_lsof_out" 2>/dev/null &
+  csa_lsof_pid=$!
+  while kill -0 "$csa_lsof_pid" 2>/dev/null; do
     if [[ $waited -ge 50 ]]; then
-      kill "$lsof_pid" 2>/dev/null || true
-      wait "$lsof_pid" 2>/dev/null || true
-      rm -f "$out"
+      csa_lsof_stop "$csa_lsof_pid"
+      csa_lsof_release
       return 1
     fi
-    sleep 0.1
+    csa_lsof_nap
     waited=$((waited + 1))
   done
-  wait "$lsof_pid" 2>/dev/null || true
-  txt="$(cat "$out")" || txt=""
-  rm -f "$out"
+  # Gone, so already reaped: this only collects its status, which is ignored.
+  wait "$csa_lsof_pid" 2>/dev/null || true
+  txt="$(cat "$csa_lsof_out" 2>/dev/null)" || txt=""
+  csa_lsof_release
   if [[ "$txt" != p* ]] && [[ "$txt" != *$'\n'p* ]]; then
     return 1
   fi
