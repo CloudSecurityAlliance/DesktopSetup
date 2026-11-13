@@ -165,8 +165,8 @@ jobs:
       - name: Every macOS script has a Windows counterpart with matching steps
         run: python3 tools/check-parity.py
 
-      - name: The core app list is declared once per work-tools script, and every consumer reads it (#78)
-        run: python3 tools/check-core-app-list.py
+      - name: Each work-tools script names its app sets once, and every consumer reads them (#78)
+        run: python3 tools/check-app-lists.py
 
       - name: TODO.md cites functions that exist, never line numbers
         run: python3 tools/check-todo-citations.py

@@ -19,14 +19,14 @@
 #  12. AWS CLI
 #  13. Wrangler (Cloudflare CLI, via npm)
 #
-# The core app list itself is CSA_CORE_APPS below; this comment is a summary.
+# The lists themselves are CSA_CORE_APPS and CSA_DEV_TOOLS below; this comment is a summary.
 #
 # Usage:
 #   bash -c "$(curl -fsSL https://raw.githubusercontent.com/CloudSecurityAlliance/DesktopSetup/HEAD/scripts/macos-work-tools.sh)"
 
 set -euo pipefail
 
-SCRIPT_VERSION="2026-11-12T23:54Z"
+SCRIPT_VERSION="2026-11-13T00:12Z"
 
 # ── Output helpers ──────────────────────────────────────────────────
 
@@ -328,20 +328,23 @@ csa_brew_upgrade() {
   fi
 }
 
-# ── The core app set ────────────────────────────────────────────────
+# ── The app sets ────────────────────────────────────────────────────
 #
-# ONE list, read by select_profile, preflight, install_core, summary and the next steps (#78).
-# It used to be written out six times in three shapes, one of them with the fields reversed
-# (`zoom.us:Zoom`). Windows had the same six copies, and adding Office there in #69 updated
-# three and missed the rest - the menu left Office out, and the next steps told people to
-# install it from their Microsoft 365 portal right after the script had installed it. #73 made
-# Windows read one $CoreApps; this is the macOS half. tools/check-core-app-list.py fails if any
-# entry's label, cask or app bundle is written out anywhere else in this script.
+# ONE list per profile, read by select_profile, preflight, install_core / install_dev, summary
+# and the next steps (#78). The core set used to be written out six times in three shapes, one
+# of them with the fields reversed (`zoom.us:Zoom`), and the dev set four times. Windows had the
+# same copies, and adding Office there in #69 updated three and missed the rest - the menu left
+# Office out, and the next steps told people to install it from their Microsoft 365 portal right
+# after the script had installed it. #73 made Windows read one $CoreApps; this is the macOS half.
+# tools/check-app-lists.py fails if a value from either list is written out anywhere else in
+# this script, if a consumer stops reading it, or if anything changes it after this point.
 #
-# label:cask:app-bundle. Three fields because they are three different values - Zoom / zoom /
-# zoom.us, and for Office the bundle checked for presence is Microsoft Word. A colon-separated
-# string because bash 3.2, which macOS ships, has no associative arrays. Never empty: under
-# `set -u`, bash 3.2 treats "${CSA_CORE_APPS[@]}" of an empty array as unbound and exits.
+# Colon-separated strings because bash 3.2, which macOS ships, has no associative arrays. The
+# label is always the first field. Never empty: under `set -u`, bash 3.2 treats "${list[@]}" of
+# an empty array as unbound and exits.
+#
+# Core - label:cask:app-bundle. Three fields because they are three different values - Zoom /
+# zoom / zoom.us, and for Office the bundle checked for presence is Microsoft Word.
 CSA_CORE_APPS=(
   "1Password:1password:1Password"
   "Slack:slack:Slack"
@@ -349,12 +352,23 @@ CSA_CORE_APPS=(
   "Google Chrome:google-chrome:Google Chrome"
   "Microsoft Office:microsoft-office:Microsoft Word"
 )
+# Dev - label:kind:package:probe. The three tools install three ways, so `kind` says which:
+#   cask     package is the cask; probe is the app bundle checked for presence
+#   formula  package is the formula; probe is the command on PATH (its version is reported)
+#   npm      package is the npm package; probe is the command on PATH (its version is reported)
+CSA_DEV_TOOLS=(
+  "VS Code:cask:visual-studio-code:Visual Studio Code"
+  "AWS CLI:formula:awscli:aws"
+  "Wrangler:npm:wrangler:wrangler"
+)
 
-# The labels, comma-separated, for prose. $1 replaces the separator before the last label
-# (default ", "), so the next steps can say "…, Google Chrome, and Microsoft Office".
-csa_core_app_labels() {
-  local last_sep="${1:-, }" out="" entry i=0 n=${#CSA_CORE_APPS[@]}
-  for entry in "${CSA_CORE_APPS[@]}"; do
+# The labels (first fields) of the entries after $1, comma-separated, for prose. $1 is the
+# separator before the last label: ", " for the menu, ", and " for the next steps.
+csa_labels() {
+  local last_sep="$1" out="" entry i=0 n
+  shift
+  n=$#
+  for entry in "$@"; do
     i=$((i + 1))
     if [[ $i -eq 1 ]]; then
       out="${entry%%:*}"
@@ -380,8 +394,8 @@ select_profile() {
   echo ""
   info "Select a profile:"
   echo ""
-  echo "  1) Core — $(csa_core_app_labels), Git, GitHub CLI"
-  echo "  2) Core + Developer — adds VS Code, AWS CLI, Wrangler"
+  echo "  1) Core — $(csa_labels ', ' "${CSA_CORE_APPS[@]}"), Git, GitHub CLI"
+  echo "  2) Core + Developer — adds $(csa_labels ', ' "${CSA_DEV_TOOLS[@]}")"
   echo ""
 
   local reply
@@ -461,23 +475,30 @@ preflight() {
     echo ""
     echo "  ── Developer ──"
 
-    if has_app "Visual Studio Code"; then
-      plan_line "VS Code" "installed"
-    else
-      plan_line "VS Code" "install via Homebrew"
-    fi
-
-    if has_command aws; then
-      plan_line "AWS CLI" "installed ($(get_version aws --version))"
-    else
-      plan_line "AWS CLI" "install via Homebrew"
-    fi
-
-    if has_command wrangler; then
-      plan_line "Wrangler" "installed ($(get_version wrangler --version)); update to latest via npm"
-    else
-      plan_line "Wrangler" "install via npm"
-    fi
+    local kind package probe
+    for entry in "${CSA_DEV_TOOLS[@]}"; do
+      IFS=: read -r label kind package probe <<< "$entry"
+      case "$kind" in
+        cask)
+          if has_app "$probe"; then
+            plan_line "$label" "installed"
+          else
+            plan_line "$label" "install via Homebrew"
+          fi ;;
+        formula)
+          if has_command "$probe"; then
+            plan_line "$label" "installed ($(get_version "$probe" --version))"
+          else
+            plan_line "$label" "install via Homebrew"
+          fi ;;
+        npm)
+          if has_command "$probe"; then
+            plan_line "$label" "installed ($(get_version "$probe" --version)); update to latest via npm"
+          else
+            plan_line "$label" "install via npm"
+          fi ;;
+      esac
+    done
   fi
 
   echo ""
@@ -662,9 +683,15 @@ install_dev() {
   info "Installing developer tools"
   echo ""
 
-  install_cask "Visual Studio Code" "visual-studio-code" "Visual Studio Code"
-  install_formula "AWS CLI" "awscli"
-  install_npm_package "Wrangler" "wrangler" "wrangler"
+  local entry label kind package probe
+  for entry in "${CSA_DEV_TOOLS[@]}"; do
+    IFS=: read -r label kind package probe <<< "$entry"
+    case "$kind" in
+      cask)    install_cask "$label" "$package" "$probe" ;;
+      formula) install_formula "$label" "$package" ;;
+      npm)     install_npm_package "$label" "$package" "$probe" ;;
+    esac
+  done
 }
 
 # ── Post-install setup ─────────────────────────────────────────────
@@ -778,6 +805,13 @@ setup_git_identity() {
 
 # ── Summary ─────────────────────────────────────────────────────────
 
+# "  <label> <dots> <value>", the dots padding the label to the column of the lines above it.
+summary_line() {
+  local dots="..................." width=$((18 - ${#1}))
+  if (( width < 3 )); then width=3; fi
+  printf '  %s %s %s\n' "$1" "${dots:0:width}" "$2"
+}
+
 summary() {
   echo ""
   success "Setup complete! Installed versions:"
@@ -798,7 +832,7 @@ summary() {
   fi
 
   # Check apps
-  local entry label app_name
+  local entry label kind probe app_name
   for entry in "${CSA_CORE_APPS[@]}"; do
     IFS=: read -r label _ app_name <<< "$entry"
     if has_app "$app_name"; then
@@ -806,21 +840,23 @@ summary() {
     fi
   done
 
+  # Dev tools: an app is reported present, a command by its version.
   if [[ "$INSTALL_DEV" == true ]]; then
-    if has_app "Visual Studio Code"; then
-      echo "  VS Code ........... installed"
-    fi
-    if has_command aws; then
-      echo "  AWS CLI ........... $(get_version aws --version)"
-    fi
-    if has_command wrangler; then
-      echo "  Wrangler .......... $(get_version wrangler --version)"
-    fi
+    for entry in "${CSA_DEV_TOOLS[@]}"; do
+      IFS=: read -r label kind _ probe <<< "$entry"
+      if [[ "$kind" == cask ]]; then
+        if has_app "$probe"; then
+          summary_line "$label" "installed"
+        fi
+      elif has_command "$probe"; then
+        summary_line "$label" "$(get_version "$probe" --version)"
+      fi
+    done
   fi
 
   echo ""
   info "Next steps:"
-  echo "  - Sign in to $(csa_core_app_labels ', and ')"
+  echo "  - Sign in to $(csa_labels ', and ' "${CSA_CORE_APPS[@]}")"
   if has_command gh && ! gh auth status >/dev/null 2>&1; then
     echo "  - Run 'gh auth login' to authenticate with GitHub"
   fi

@@ -92,8 +92,8 @@ step "every macOS script has a Windows counterpart with matching steps"
 check python3 tools/check-parity.py
 
 # Self-tests before it reports (exit 2 if the self-test fails); --self-test prints each case.
-step "the core app list is declared once per work-tools script, and every consumer reads it"
-check python3 tools/check-core-app-list.py
+step "each work-tools script names its app sets once, and every consumer reads them"
+check python3 tools/check-app-lists.py
 
 step "the refresh tool can still report what moved"
 check python3 tools/csa-refresh.py --self-test

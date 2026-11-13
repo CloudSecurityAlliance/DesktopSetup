@@ -614,14 +614,20 @@ Worth knowing individually:
   `PLATFORM_ONLY` or `PER_PAIR` with a reason, and **an allowlist entry matching nothing is
   itself reported** — an exception for a step that no longer exists has stopped checking without
   failing. Run against the scripts before #69 it reports exactly the three gaps that shipped.
-- **`check-core-app-list.py`** — the third kind of duplication: repeated *data* within one
-  script. Each work-tools script declares its core apps once (`CSA_CORE_APPS`,
-  `label:cask:app-bundle`, on macOS; `$CoreApps` on Windows), every consumer (menu, preflight,
-  install, summary, next steps) reads it, and no label, cask, bundle or winget Id from it appears
-  on any other code line. Adding Office on Windows in #69 updated three of six copies; `--rev
-  1115b64` reports every copy, the "install Office from your Microsoft 365 portal" line included,
-  and `--rev 36e76b4` the macOS copies #78 removed. **The dev set is not covered**: macOS installs
-  it by cask, formula and npm, which share no shape.
+- **`check-app-lists.py`** — the third kind of duplication: repeated *data* within one
+  script. Each work-tools script declares its app sets once: on macOS `CSA_CORE_APPS`
+  (`label:cask:app-bundle`) and `CSA_DEV_TOOLS` (`label:kind:package:probe`, kind
+  `cask|formula|npm`); on Windows `$CoreApps` and `$DevWingetApps`. Nothing changes a list
+  after its declaration. Every rendering (menu, plan, install, summary, next steps) is checked
+  one by one to be built from its list. The installers make no literal install calls, so a new
+  app cannot bypass the list. No listed value appears on any other code line, except the
+  `ALLOWED` lines, which each give a reason and are reported once stale. Matching is by whole
+  token, so a trailing comment or "zoom in" is reported (its docstring says how to respond).
+  Adding Office on Windows in #69 updated three of six copies. `--rev 1115b64` reports every
+  copy, including the "install Office from your Microsoft 365 portal" line, and `--rev 36e76b4`
+  reports the macOS copies #78 removed. **Windows' dev set is only partly a list:** Wrangler
+  (npm) and `Show-Summary`'s version lines sit outside `$DevWingetApps` by #73's design, and two
+  `ALLOWED` lines record that.
 - **`check-plan-covers-steps.py`** — every step `main()` runs must be named in the plan the user
   agreed to, across all six entry points. It imports `EQUIV` from `check-parity.py` so the two
   cannot disagree about what counts as a counterpart. `--rev <ref>` audits a historical commit;
