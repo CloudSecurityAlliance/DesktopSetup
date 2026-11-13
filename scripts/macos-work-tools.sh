@@ -19,12 +19,14 @@
 #  12. AWS CLI
 #  13. Wrangler (Cloudflare CLI, via npm)
 #
+# The core app list itself is CSA_CORE_APPS below; this comment is a summary.
+#
 # Usage:
 #   bash -c "$(curl -fsSL https://raw.githubusercontent.com/CloudSecurityAlliance/DesktopSetup/HEAD/scripts/macos-work-tools.sh)"
 
 set -euo pipefail
 
-SCRIPT_VERSION="2026-11-11T17:38Z"
+SCRIPT_VERSION="2026-11-12T23:54Z"
 
 # ── Output helpers ──────────────────────────────────────────────────
 
@@ -326,6 +328,45 @@ csa_brew_upgrade() {
   fi
 }
 
+# ── The core app set ────────────────────────────────────────────────
+#
+# ONE list, read by select_profile, preflight, install_core, summary and the next steps (#78).
+# It used to be written out six times in three shapes, one of them with the fields reversed
+# (`zoom.us:Zoom`). Windows had the same six copies, and adding Office there in #69 updated
+# three and missed the rest - the menu left Office out, and the next steps told people to
+# install it from their Microsoft 365 portal right after the script had installed it. #73 made
+# Windows read one $CoreApps; this is the macOS half. tools/check-core-app-list.py fails if any
+# entry's label, cask or app bundle is written out anywhere else in this script.
+#
+# label:cask:app-bundle. Three fields because they are three different values - Zoom / zoom /
+# zoom.us, and for Office the bundle checked for presence is Microsoft Word. A colon-separated
+# string because bash 3.2, which macOS ships, has no associative arrays. Never empty: under
+# `set -u`, bash 3.2 treats "${CSA_CORE_APPS[@]}" of an empty array as unbound and exits.
+CSA_CORE_APPS=(
+  "1Password:1password:1Password"
+  "Slack:slack:Slack"
+  "Zoom:zoom:zoom.us"
+  "Google Chrome:google-chrome:Google Chrome"
+  "Microsoft Office:microsoft-office:Microsoft Word"
+)
+
+# The labels, comma-separated, for prose. $1 replaces the separator before the last label
+# (default ", "), so the next steps can say "…, Google Chrome, and Microsoft Office".
+csa_core_app_labels() {
+  local last_sep="${1:-, }" out="" entry i=0 n=${#CSA_CORE_APPS[@]}
+  for entry in "${CSA_CORE_APPS[@]}"; do
+    i=$((i + 1))
+    if [[ $i -eq 1 ]]; then
+      out="${entry%%:*}"
+    elif [[ $i -eq $n ]]; then
+      out="${out}${last_sep}${entry%%:*}"
+    else
+      out="${out}, ${entry%%:*}"
+    fi
+  done
+  printf '%s' "$out"
+}
+
 # ── Profile selection ───────────────────────────────────────────────
 
 INSTALL_DEV=false
@@ -339,7 +380,7 @@ select_profile() {
   echo ""
   info "Select a profile:"
   echo ""
-  echo "  1) Core — 1Password, Slack, Zoom, Chrome, Microsoft Office, Git, GitHub CLI"
+  echo "  1) Core — $(csa_core_app_labels), Git, GitHub CLI"
   echo "  2) Core + Developer — adds VS Code, AWS CLI, Wrangler"
   echo ""
 
@@ -403,15 +444,8 @@ preflight() {
   fi
 
   # Cask apps — check both brew cask and /Applications
-  local -a cask_apps=(
-    "1Password:1password:1Password"
-    "Slack:slack:Slack"
-    "Zoom:zoom:zoom.us"
-    "Google Chrome:google-chrome:Google Chrome"
-    "Microsoft Office:microsoft-office:Microsoft Word"
-  )
-
-  for entry in "${cask_apps[@]}"; do
+  local entry label cask app_name
+  for entry in "${CSA_CORE_APPS[@]}"; do
     IFS=: read -r label cask app_name <<< "$entry"
     if has_command brew && has_cask "$cask"; then
       plan_line "$label" "installed (Homebrew)"
@@ -615,11 +649,12 @@ install_core() {
 
   install_formula "Git" "git"
   install_formula "GitHub CLI" "gh"
-  install_cask "1Password" "1password" "1Password"
-  install_cask "Slack" "slack" "Slack"
-  install_cask "Zoom" "zoom" "zoom.us"
-  install_cask "Google Chrome" "google-chrome" "Google Chrome"
-  install_cask "Microsoft Office" "microsoft-office" "Microsoft Word"
+
+  local entry label cask app_name
+  for entry in "${CSA_CORE_APPS[@]}"; do
+    IFS=: read -r label cask app_name <<< "$entry"
+    install_cask "$label" "$cask" "$app_name"
+  done
 }
 
 install_dev() {
@@ -763,10 +798,9 @@ summary() {
   fi
 
   # Check apps
-  local -a check_apps=("1Password" "Slack" "zoom.us:Zoom" "Google Chrome" "Microsoft Word:Microsoft Office")
-  for entry in "${check_apps[@]}"; do
-    IFS=: read -r app_name label <<< "$entry"
-    label="${label:-$app_name}"
+  local entry label app_name
+  for entry in "${CSA_CORE_APPS[@]}"; do
+    IFS=: read -r label _ app_name <<< "$entry"
     if has_app "$app_name"; then
       echo "  $label ............ installed"
     fi
@@ -786,7 +820,7 @@ summary() {
 
   echo ""
   info "Next steps:"
-  echo "  - Sign in to 1Password, Slack, Zoom, Chrome, and Microsoft Office"
+  echo "  - Sign in to $(csa_core_app_labels ', and ')"
   if has_command gh && ! gh auth status >/dev/null 2>&1; then
     echo "  - Run 'gh auth login' to authenticate with GitHub"
   fi

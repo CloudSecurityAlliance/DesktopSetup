@@ -87,7 +87,7 @@ scripts/
   csa-plugins-internal.txt   # CSA-internal plugin list, same
 tools/
   check-all.sh               # everything CI runs, locally, in one command
-  check-*.py                 # thirteen repo-specific checks; all thirteen also run in CI
+  check-*.py                 # fourteen repo-specific checks; all fourteen also run in CI
   sweep-csa-sources.sh       # weekly drift sweep (network + gh; NOT in check-all.sh)
 tests/
   test_*.py                  # thirteen standalone executables — run one directly with python3
@@ -595,7 +595,7 @@ every file that uses it** — `check-duplication.py` enforces byte-identical beh
 
 ## The guard layer
 
-Thirteen checkers in `tools/` and sixteen test files in `tests/`. **`./tools/check-all.sh` mirrors CI
+Fourteen checkers in `tools/` and sixteen test files in `tests/`. **`./tools/check-all.sh` mirrors CI
 exactly** — run it before pushing.
 
 A guard here is added only for a mistake that actually shipped, names its issue in the file, and
@@ -614,6 +614,14 @@ Worth knowing individually:
   `PLATFORM_ONLY` or `PER_PAIR` with a reason, and **an allowlist entry matching nothing is
   itself reported** — an exception for a step that no longer exists has stopped checking without
   failing. Run against the scripts before #69 it reports exactly the three gaps that shipped.
+- **`check-core-app-list.py`** — the third kind of duplication: repeated *data* within one
+  script. Each work-tools script declares its core apps once (`CSA_CORE_APPS`,
+  `label:cask:app-bundle`, on macOS; `$CoreApps` on Windows), every consumer (menu, preflight,
+  install, summary, next steps) reads it, and no label, cask, bundle or winget Id from it appears
+  on any other code line. Adding Office on Windows in #69 updated three of six copies; `--rev
+  1115b64` reports every copy, the "install Office from your Microsoft 365 portal" line included,
+  and `--rev 36e76b4` the macOS copies #78 removed. **The dev set is not covered**: macOS installs
+  it by cask, formula and npm, which share no shape.
 - **`check-plan-covers-steps.py`** — every step `main()` runs must be named in the plan the user
   agreed to, across all six entry points. It imports `EQUIV` from `check-parity.py` so the two
   cannot disagree about what counts as a counterpart. `--rev <ref>` audits a historical commit;
