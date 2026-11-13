@@ -20,7 +20,7 @@
 
 set -euo pipefail
 
-SCRIPT_VERSION="2026-11-12T21:58Z"
+SCRIPT_VERSION="2026-11-13T00:03Z"
 
 # ── CSA plugin marketplaces ─────────────────────────────────────────
 # Each update run will add any entries from this list that aren't yet
@@ -449,9 +449,21 @@ preflight() {
     info "Checking Homebrew for outdated packages..."
     echo ""
 
+    # `brew outdated` refreshes a stale Homebrew index itself before it answers: it is one of
+    # Homebrew's auto-update commands (since 4.0.7, 2023), so this list is not read from an old
+    # cache although update_brew's `brew update` runs later. Measured 2026-11-12 on Homebrew
+    # 7.0.13, with an index two days old: the first call below fetched and refreshed it, and its
+    # update report went to stderr, never into the list. HOMEBREW_NO_AUTO_UPDATE turns that off,
+    # while update_brew's explicit `brew update` still runs - so then the plan says so.
     local outdated_formulas outdated_casks
     outdated_formulas=$(brew outdated --formula --verbose 2>/dev/null || true)
     outdated_casks=$(brew outdated --cask --verbose 2>/dev/null || true)
+
+    if [[ -n "${HOMEBREW_NO_AUTO_UPDATE:-}" ]]; then
+      echo "  (HOMEBREW_NO_AUTO_UPDATE is set, so this is from Homebrew's cached index; the update"
+      echo "   runs \`brew update\` first and may upgrade more than is listed here.)"
+      echo ""
+    fi
 
     if [[ -n "$outdated_formulas" ]]; then
       echo "  Homebrew formulas to upgrade:"
