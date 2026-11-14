@@ -862,7 +862,8 @@ until the CINO answers D5, so a rerun launches nothing.
 
 - **What it launches:** a registration whose command is a direct executable that works (A12).
   It never launches these, and says why:
-  - a launcher form (`uv run`, `uvx`, `npx`, …): `not checked: launcher form`;
+  - a launcher form (`uv run`, `uvx`, `npx`, …, or a link to one under another name):
+    `not checked: launcher form`;
   - a dead registration, or a dead standard binary: `does not start: <reason>`;
   - a registration whose env holds an interpreter-shaping key, whose env or args use
     `$`-expansion, or that sets its own working directory: `not checked: …`.
@@ -870,8 +871,9 @@ until the CINO answers D5, so a rerun launches nothing.
   Identical launches are made once, and the line names every client that shares one.
 - **How:** one launch at a time, each in a fresh empty directory, in a session and process group
   of its own. After the answer, or 20 s, its stdin is closed and it has 2 s to exit. Then its
-  group gets SIGTERM and 2 s, then SIGKILL, and the server is reaped. A stop signal runs the same
-  teardown.
+  group gets SIGTERM and 2 s, then SIGKILL, and the server is reaped. A child it leaves in its
+  group is stopped with it. A stop signal runs the same teardown. A process that leaves the group
+  (`setsid`) is outside it; no CSA server does that.
 - **Its launch env approximates each client's,** from M3 in
   [the measurement record](plans/reviews/2026-11-12-registration-repair-measurements.md). So the
   output says "launched with its registered command and settings", never "as <client> launches
@@ -890,13 +892,26 @@ until the CINO answers D5, so a rerun launches nothing.
     (inferred), so they are left to them. `PATH` is the installer's: M3's one-Mac Desktop `PATH`
     is not applied (the A8 ruling of 2026-11-13). A Desktop entry the check launches has an
     absolute command, so `PATH` does not choose the binary.
-- **What it prints:** the server's name and version, an error's code (never its message), and
-  at most 200 characters of its last stderr line. Every env value of four characters or more is
-  masked as `<KEY>` first, then the `csa_redact` credential shapes. No env value is printed.
+- **What it prints: only fixed lines it composes itself.** None of a server's own text is
+  printed: not its stdout or stderr, its name or version, or an error's message.
+  - Only integers of the server's reach a line: an exit code or signal number, a JSON-RPC error
+    code in the range the spec reserves (any other code is not printed), and a count of stdout
+    lines that were not JSON.
+  - A to-do for a server that did not answer names its command, never its args or env, to run
+    in a terminal to see its own messages.
+  - Masking the server's text was tried first. The review of `bbb6f82` got values past it four
+    ways: an arg, a value split over two lines, an escaped value, and a value cut at the end of
+    the stderr tail kept. A deny-list cannot be made complete, so nothing is shown.
 - **Run time:** M4 measured 0.35–0.61 s to an answer warm, and up to about 3 s cold. M5, with
   real credentials, measured at most 1.84 s, and each server exited about 0.1 s after its stdin
-  closed. A launch is bounded at 24 s: 20 s, then 2 s and 2 s. A process that outlives SIGKILL
-  adds 2 s more. While D5 holds, a rerun adds nothing.
+  closed.
+  - One launch is bounded at 24 s: 20 s, then 2 s and 2 s. A process that outlives SIGKILL adds
+    2 s more.
+  - The number of launches has no bound of its own. Per-client envs can defeat de-duplication,
+    and each Claude Code local-scope entry can add one. So the launches together are held to
+    `VERIFY_BUDGET`, 120 s. A launch that could run past it is not started, and is reported
+    `not checked`.
+  - While D5 holds, a rerun adds nothing.
 
 ---
 
