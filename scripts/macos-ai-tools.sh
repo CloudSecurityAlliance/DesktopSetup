@@ -32,7 +32,7 @@
 
 set -euo pipefail
 
-SCRIPT_VERSION="2026-11-14T05:43Z"
+SCRIPT_VERSION="2026-11-14T06:16Z"
 
 # ── CSA plugin marketplaces ─────────────────────────────────────────
 # Plugin marketplaces to register with Claude Code. Each entry is an
@@ -466,7 +466,10 @@ wait_for_app_exit() {
 confirm() {
   if [[ -n "${NONINTERACTIVE-}" ]]; then return 0; fi
   local reply
-  read -r -p "$1 [Y/n] " reply
+  # End of input (Ctrl-D, or closed stdin) is not consent: without `|| return 1` the empty
+  # reply fell through to the default, yes, and a run went on to write configs (review of
+  # f18337c, M2). Confirm-Step in the .ps1 scripts answers no the same way.
+  read -r -p "$1 [Y/n] " reply || return 1
   case "${reply:-Y}" in
     [Yy]*) return 0 ;;
     *)     return 1 ;;
@@ -2654,6 +2657,12 @@ csa_registrations_preview() {
     echo "                       registration audit skipped: couldn't fetch csa-mcp-registrations.py; nothing will be changed"
     return 0
   fi
+  # A network sign-in page can answer the fetch with HTML and a 200: run as Python, it would
+  # print a traceback for each step. Parsed first, which runs none of it.
+  if ! "$python" -I -c 'import ast, sys; ast.parse(open(sys.argv[1], "rb").read(), sys.argv[1])' "$py" </dev/null >/dev/null 2>&1; then
+    echo "                       registration audit skipped: csa-mcp-registrations.py is not Python (a network sign-in page in its place?); nothing will be changed"
+    return 0
+  fi
   # --out must be a new file. This directory is this run's own, so a leftover is ours to remove.
   rm -f "$CSA_REG_DIR/plan.json"
   out="$("$python" -I "$py" plan --out "$CSA_REG_DIR/plan.json" </dev/null)" || rc=$?
@@ -2695,6 +2704,8 @@ repair_csa_registrations() {
       py="$(csa_registrations_py)" || py=""
       if [[ -z "$py" ]]; then
         why="couldn't get csa-mcp-registrations.py"
+      elif ! "$python" -I -c 'import ast, sys; ast.parse(open(sys.argv[1], "rb").read(), sys.argv[1])' "$py" </dev/null >/dev/null 2>&1; then
+        why="csa-mcp-registrations.py is not Python (a network sign-in page in its place?)"
       fi
     fi
   fi

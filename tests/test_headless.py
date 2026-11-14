@@ -22,6 +22,12 @@ Two properties, checked against the real code in every script:
      what does not. The test proves stdin was untouched by leaving a sentinel on it and
      asserting it is still there afterwards.
 
+And one property of the interactive side, because it decides consent: when `confirm` does read,
+end of input (Ctrl-D at `Proceed? [Y/n]`, or a stdin that closes) answers NO. It used to fall
+through to the empty reply's default, yes, and a run went on to re-point a config (the review of
+f18337c, M2). A control proves the check would catch that: the shipping `confirm` with its
+`|| return 1` removed must be seen to answer yes.
+
     python3 tests/test_headless.py
 """
 from __future__ import annotations
@@ -110,6 +116,13 @@ def run(body: str, *, stdin: str, tty: bool = False, env_extra: dict | None = No
     return (p.stdout + p.stderr), p.returncode
 
 
+def eof_body(confirm: str) -> str:
+    """confirm, asked with NONINTERACTIVE unset and no auto-detect, as for a person at a
+    terminal; prints which way it answered."""
+    return ('warn() { echo "WARN: $*"; }\n' + confirm +
+            '\nif confirm "Proceed?"; then echo "CONFIRMED"; else echo "DECLINED"; fi\n')
+
+
 def main() -> int:
     failures: list[str] = []
 
@@ -158,6 +171,14 @@ def main() -> int:
                       stdin="", env_extra={"CI": "true"})
         check("$CI is set" in out, "$CI is honoured, and named as the reason")
 
+        # 5. When confirm does read (no auto-detect here, as with a person at a terminal), end of
+        #    input answers no; Enter alone is still the default, yes; n is no.
+        for stdin, want, label in (("", "DECLINED", "end of input answers no, not the default yes"),
+                                   ("\n", "CONFIRMED", "Enter alone is still the default, yes"),
+                                   ("n\n", "DECLINED", "n answers no")):
+            out, rc = run(eof_body(confirm), stdin=stdin)
+            check(want in out and rc == 0, f"{label} (got {out.strip()[-40:]!r})")
+
     print("\ncontrol: a confirm that reads stdin unconditionally must be caught")
     naive = ('confirm() { local r; read -r -p "$1 [Y/n] " r; case "${r:-Y}" in [Yy]*) return 0;; '
              '*) return 1;; esac; }')
@@ -166,6 +187,16 @@ def main() -> int:
                   stdin="SENTINEL\n")
     check("STDIN_LEFT=[SENTINEL]" not in out,
           f"a prompting confirm eats stdin (regression detectable) — got {out.strip()[-40:]!r}")
+
+    print("\ncontrol: a confirm that takes end of input for the default yes must be caught")
+    guard = ' reply || return 1\n'
+    for source in SCRIPTS:
+        shipped = extract_fn(source.read_text(encoding="utf-8"), "confirm")
+        check(shipped.count(guard) == 1, f"{source.name}: confirm reads with `|| return 1`, once")
+        out, rc = run(eof_body(shipped.replace(guard, ' reply\n')), stdin="")
+        check("CONFIRMED" in out,
+              f"{source.name}: without the guard, end of input answers yes, so check 5 can fail "
+              f"(got {out.strip()[-40:]!r})")
 
     print()
     if failures:

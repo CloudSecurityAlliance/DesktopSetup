@@ -110,7 +110,7 @@ import tempfile
 import time
 import unicodedata
 
-SCRIPT_VERSION = "2026-11-14T02:18Z"
+SCRIPT_VERSION = "2026-11-14T06:16Z"
 
 # ── The plan's decisions (D1-D5). Each is pinned by one test; an answer changes the constant. ──
 
@@ -1347,8 +1347,14 @@ OK_LINE = "{name} re-pointed in {where} at ~/.local/bin/{entry}; its {settings} 
 OK_CLAUDE_CODE = "; Claude Code sessions started after this use it"
 
 
+# What this run has printed, cleaned: a to-do already on the screen as a warning is not printed a
+# second time as an `info` line when there is no ledger (review of f18337c, L1). Cleared by main().
+SHOWN = set()
+
+
 def emit(kind, text):
     show([(kind, text)])
+    SHOWN.add(clean(text))
 
 
 def hook(point, path):
@@ -1461,7 +1467,9 @@ class Todos(object):
             except OSError:
                 pass
         for _, title in items:
-            emit("info", title)
+            # Once on the screen is enough: with no ledger there is no closing list to put it in.
+            if title not in SHOWN:
+                emit("info", title)
 
 
 # ── Writing a config: the same steps for every client ───────────────────────────────────────
@@ -2367,11 +2375,13 @@ JSONRPC_RESERVED = (-32768, -32000)
 
 TODO_CHECK = 45
 # Not the plan's "server check held until its effect on tokens is measured": M5 has measured it
-# (2026-11-13), and what holds the check now is D5's answer. Reworded under P2, honesty.
-I_HELD = ('server check held: whether a rerun launches the CSA servers to check them is not '
-          'decided yet (#179, D5); run "verify --run" to check by hand')
-I_HELD_SOME = ('server check held for {names}: whether a rerun launches them to check them is '
-               'not decided yet (#179, D5); run "verify --run" to check by hand')
+# (2026-11-13), and what holds the check now is D5's answer. Reworded under P2, honesty. It names
+# no command to run by hand: the entry scripts fetch this file into a directory removed at exit,
+# so the person would have nothing to run (review of f18337c, M1). ENGINEERING.md says how.
+I_HELD = ("server check held: this run launched no CSA server; whether a rerun should is not "
+          "decided yet (#179, D5)")
+I_HELD_SOME = ("server check held for {names}: this run launched none of them; whether a rerun "
+               "should is not decided yet (#179, D5)")
 I_NOTHING = "no CSA MCP server registration to check"
 I_CLIENT = "{client}: {status}; nothing there was checked"
 OK_CHECK = ("{name} answers an MCP initialize handshake, launched with its registered command "
@@ -2764,6 +2774,7 @@ def verify(args):
 
 
 def main(argv=None):
+    SHOWN.clear()  # one run's screen: the tests call main() more than once in one process
     if hasattr(sys.stdout, "reconfigure"):
         sys.stdout.reconfigure(encoding="utf-8", errors="replace")
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])

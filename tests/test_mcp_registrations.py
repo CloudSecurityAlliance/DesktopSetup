@@ -2846,6 +2846,32 @@ def todo_printed_without_ledger():
 
 
 @case
+def left_finding_printed_once_without_ledger():
+    """With no ledger (-update, -plugins), a finding apply does not act on is said once, as the
+    warning; its to-do is not printed again beneath it as an info line with the same text
+    (review of f18337c, L1). With a ledger it is still recorded there, for the closing list."""
+    with world() as w:
+        w.std("csa-zendesk")
+        w.claude(user={})
+        w.run().ok()
+        w.claude(user={"csa-zendesk": reg(gone(w, "csa-zendesk"))})
+        a = w.apply(ledger=False)
+        a.ok()
+        expect(a.warned(R_UNAPPROVED), f"no warning: {a.warns}")
+        twice = [t for t in a.warns if t in a.infos]
+        expect(not twice, f"printed twice, as a warning and as an info line: {twice}")
+    with world() as w:
+        w.std("csa-zendesk")
+        w.claude(user={})
+        w.run().ok()
+        w.claude(user={"csa-zendesk": reg(gone(w, "csa-zendesk"))})
+        a = w.apply()
+        a.ok()
+        expect([t for t in a.todo_titles() if R_UNAPPROVED in t],
+               f"the ledger lost the to-do: {a.todos}")
+
+
+@case
 def second_run_noop():
     with world() as w:
         four_dead(w)
@@ -3721,9 +3747,10 @@ def no_answer(name, client=None):
     return T_NO_ANSWER.format(name=name, client=client or "Claude Code (user scope)",
                               command=f"~/.local/bin/{SPEC[name][0]}")
 # Not the plan's "...held until its effect on tokens is measured": M5 has measured it
-# (2026-11-13), and the hold now waits on D5's answer. Reworded under P2, honesty.
-HELD = ('server check held: whether a rerun launches the CSA servers to check them is not '
-        'decided yet (#179, D5); run "verify --run" to check by hand')
+# (2026-11-13), and the hold now waits on D5's answer. Reworded under P2, honesty. It names no
+# command: the entry scripts' copy of the .py is gone when the run ends (review of f18337c, M1).
+HELD = ("server check held: this run launched no CSA server; whether a rerun should is not "
+        "decided yet (#179, D5)")
 CC_USER = "Claude Code (user scope)"
 
 
@@ -4345,7 +4372,8 @@ def rerun_checks_only_allowed_servers():
         expect(a.oks == [ok_line("csa-zendesk", CC_USER)],
                f"oks {a.oks}, warns {a.warns}")
         expect([s["server"] for s in w.starts()] == ["csa-zendesk-stub"], f"{w.starts()}")
-        expect([i for i in a.infos if "held for csa-skilljar" in i], f"infos {a.infos}")
+        expect("server check held for csa-skilljar: this run launched none of them; whether a "
+               "rerun should is not decided yet (#179, D5)" in a.infos, f"infos {a.infos}")
 
 
 @case
@@ -4536,6 +4564,9 @@ REG_FAILED = INDENT + "registration audit failed; nothing will be changed"
 WHY_NO_PY = "no Python 3.9 or later was found"
 WHY_FETCH = "couldn't fetch csa-mcp-registrations.py"
 WHY_OVERRIDE = "CSA_REGISTRATIONS_PY is not a readable file"
+WHY_NOT_PY = "csa-mcp-registrations.py is not Python (a network sign-in page in its place?)"
+# How the entry scripts check a download parses as Python before running it (review of f18337c).
+PARSE = 'import ast, sys; ast.parse(open(sys.argv[1], "rb").read(), sys.argv[1])'
 EACH_PRINTS = "each prints what it may do before it is used"
 PROBE = "import sys, json; sys.exit(sys.version_info < (3, 9))"
 STUB_ROW = "csa-zendesk in Claude Code (user): STUB-PLAN-ROW"
@@ -4590,12 +4621,17 @@ exit 0
 
 CURL_STUB = '''#!/bin/sh
 echo "curl $*" >> "$STUB_CALLS"
-if [ "$STUB_CURL" != ok ]; then exit 22; fi
+if [ "$STUB_CURL" != ok ] && [ "$STUB_CURL" != html ]; then exit 22; fi
 out=""
 while [ $# -gt 0 ]; do
   if [ "$1" = -o ]; then out="$2"; shift; fi
   shift
 done
+if [ "$STUB_CURL" = html ]; then
+  # A network sign-in page: status 200, so curl -f succeeds, and HTML where the file should be.
+  printf '<!DOCTYPE html>\\n<html><head><title>Sign in to the network</title></head></html>\\n' > "$out"
+  exit 0
+fi
 cp "$STUB_PY_SOURCE" "$out"
 '''
 
@@ -4847,7 +4883,8 @@ def wiring_repair_uses_the_previewed_plan():
         planned = calls[0]["argv"][calls[0]["argv"].index("--out") + 1]
         expect(calls[1]["argv"] == ["apply", "--approved", planned],
                f"{name}: apply got {calls[1]['argv']}, not the plan file {planned}")
-        expect(all(f" -I {rig.fake_py} " in r for r in runs if PROBE not in r) and len(runs) >= 3,
+        steps = [r for r in runs if PROBE not in r and PARSE not in r]
+        expect(len(steps) == 3 and all(f" -I {rig.fake_py} " in r for r in steps),
                f"{name}: the .py was not run with -I: {runs}")
         for want, where in (("OK STUB-APPLY-OK", out), ("INFO STUB-APPLY-INFO", out),
                             ("WARN STUB-APPLY-WARN", err), ("INFO STUB-VERIFY-HELD", out)):
@@ -4972,6 +5009,30 @@ def wiring_fetch_failure_says_skipped():
     expect(rc == 0 and d and calls and calls[0]["file"] == str(
         Path(d.group(1)) / "csa-mcp-registrations.py"),
         f"the fetched copy did not run: {calls} {out} {err[-300:]}")
+
+
+@case
+def wiring_download_not_python_skipped():
+    """A network sign-in page answers the fetch with HTML and a 200. It is parsed, never run: one
+    skip row in the plan, one line at the repair, no traceback, and no step of it is run (review
+    of f18337c, L2)."""
+    for name in MAC_ENTRY:
+        with rig_dir() as t:
+            rig = Rig(t, curl="html")
+            rc, out, err = rig.run(name, "csa_registrations_preview\nrepair_csa_registrations\n"
+                                         "echo AFTER")
+            runs = rig.log("python path")
+        lines = out.split("\n")
+        expect(rc == 0 and "AFTER" in out, f"{name}: exited {rc}: {err[-300:]}")
+        expect(REG_SKIPPED.format(why=WHY_NOT_PY) in lines,
+               f"{name}: no skip row for a download that is not Python: {out}")
+        said = [ln for ln in err.split("\n") if ln.startswith("WARN ")]
+        expect(said == [f"WARN CSA MCP registrations were not checked: {WHY_NOT_PY}; nothing was "
+                        "changed"], f"{name}: the repair did not say it once: {said}")
+        expect("Traceback" not in out + err, f"{name}: a traceback reached the screen: {err}")
+        steps = [r for r in runs if PROBE not in r and PARSE not in r]
+        expect(not steps and [r for r in runs if PARSE in r],
+               f"{name}: it was run rather than parsed: {runs}")
 
 
 @case
@@ -5556,6 +5617,12 @@ MUTATIONS = [
     ("signal_during_check_leaves_no_server", "stop the server without holding the stop signals",
      "                with signals_held():\n                    stopped = end(p)\n",
      "                stopped = end(p)\n"),
+    # ── the review of f18337c ──
+    ("verify_held_by_default", "tell the person to run a copy the run deletes (M1)",
+     '"decided yet (#179, D5)")', '"decided yet (#179, D5); run \\"verify --run\\" to check by hand")'),
+    ("left_finding_printed_once_without_ledger", "print a to-do again under its own warning (L1)",
+     '            if title not in SHOWN:\n                emit("info", title)',
+     '            if True:\n                emit("info", title)'),
 ]
 
 # Task 4 Step 1's guards, each broken on purpose in the entry scripts (ADR-005): (the case that
@@ -5602,6 +5669,14 @@ WIRING_MUTATIONS = [
      "unset CSA_REG_DIR\ntrap csa_on_exit EXIT\n", "trap csa_on_exit EXIT\n", EXIT_HOOKED),
     ("wiring_fetch_failure_says_skipped", "take a failed fetch for a fetched file",
      '      rm -f "$dest.part"\n      return 0\n', '      rm -f "$dest.part"\n', MAC_ENTRY),
+    ("wiring_download_not_python_skipped", "run the preview's download without parsing it",
+     "  # print a traceback for each step. Parsed first, which runs none of it.\n"
+     f"  if ! \"$python\" -I -c '{PARSE}' \"$py\" </dev/null >/dev/null 2>&1; then\n",
+     "  # print a traceback for each step. Parsed first, which runs none of it.\n"
+     "  if false; then\n", MAC_ENTRY),
+    ("wiring_download_not_python_skipped", "run the repair's download without parsing it",
+     f"      elif ! \"$python\" -I -c '{PARSE}' \"$py\" </dev/null >/dev/null 2>&1; then\n",
+     "      elif false; then\n", MAC_ENTRY),
     ("wiring_py_failure_survives_set_e", "let the plan's exit status reach set -e",
      '</dev/null)" || rc=$?\n', '</dev/null)"\n', MAC_ENTRY),
     ("wiring_py_failure_survives_set_e", "keep a failed audit's plan file",

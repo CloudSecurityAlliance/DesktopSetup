@@ -24,7 +24,7 @@
 
 set -euo pipefail
 
-SCRIPT_VERSION="2026-11-14T05:43Z"
+SCRIPT_VERSION="2026-11-14T06:16Z"
 
 # ── Output helpers ──────────────────────────────────────────────────
 
@@ -266,7 +266,10 @@ get_version() {
 confirm() {
   if [[ -n "${NONINTERACTIVE-}" ]]; then return 0; fi
   local reply
-  read -r -p "$1 [Y/n] " reply
+  # End of input (Ctrl-D, or closed stdin) is not consent: without `|| return 1` the empty
+  # reply fell through to the default, yes, and a run went on to write configs (review of
+  # f18337c, M2). Confirm-Step in the .ps1 scripts answers no the same way.
+  read -r -p "$1 [Y/n] " reply || return 1
   case "${reply:-Y}" in
     [Yy]*) return 0 ;;
     *)     return 1 ;;
