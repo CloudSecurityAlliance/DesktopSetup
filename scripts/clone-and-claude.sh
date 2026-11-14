@@ -18,7 +18,7 @@
 
 set -euo pipefail
 
-SCRIPT_VERSION="2026-10-26T15:12Z"
+SCRIPT_VERSION="2026-11-14T05:43Z"
 
 # ── Output helpers ──────────────────────────────────────────────────
 
@@ -171,9 +171,17 @@ csa_on_exit() {
       warn "no debug log was written — re-run with CSA_DEBUG=1 to get one."
     fi
   fi
+  # The registration audit's working directory (csa_registrations_dir) holds its plan file. It is
+  # removed on every exit path: a declined plan and a run stopped early as well as a finished one.
+  if [[ -n "${CSA_REG_DIR:-}" && -d "$CSA_REG_DIR" ]]; then
+    rm -rf "$CSA_REG_DIR" || true
+  fi
   csa_debug_hint
   return $status
 }
+# csa_on_exit removes CSA_REG_DIR with rm -rf, so it is never taken from the environment: only
+# csa_registrations_dir sets it, to a directory mktemp made for this run.
+unset CSA_REG_DIR
 trap csa_on_exit EXIT
 
 

@@ -8,7 +8,13 @@ its command, through Claude Code's own lock, with no backup left by a write it a
 time, with each client's env as M3 measured it, asks for an MCP `initialize`, and stops its
 whole process group, bounded, within a total budget; it never launches a dead or launcher-form
 registration, prints none of a server's own text (only fixed lines of its own), and launches
-nothing at all without `--run` while D5 holds. Its servers are stubs.
+nothing at all without `--run` while D5 holds. Its servers are stubs. And the three macOS entry
+scripts' wiring (Task 4, the `wiring_` cases): the preflight shows the audit's rows before the
+person agrees, `apply` gets exactly the plan file that preview wrote, `verify` runs without
+`--run`, the run's directory is mktemp's and gone on every exit, and the Python that runs the
+audit is chosen without ever opening Apple's install dialog. Those cases run the shipping shell
+functions in /bin/bash against a stand-in .py; `wiring_windows_twin_exists` SKIPs, by name, until
+#184's Task 4W lands the Windows twins.
 
 What matters most about an auditor that will later drive a repair is what it refuses to
 claim: a dead standard binary is never a re-point aimed at itself; a launcher form, an
@@ -4506,6 +4512,708 @@ def servers_match_internal_setups():
 
 
 # ═════════════════════════════════════════════════════════════════════════════════════════════
+# Task 4 (macOS): the entry scripts show the repairs in the plan, then apply them after the
+# setups. Each wiring_ case extracts the shipping functions from the scripts and runs them in
+# /bin/bash under `set -euo pipefail`, on a PATH of stubs (gh, curl, uv, xcode-select, python3)
+# and of system tools linked one by one, so no real Python, gh, network or HOME is reached. The
+# .py they run is a stand-in that logs its argv; the real one is what the cases above test.
+# ═════════════════════════════════════════════════════════════════════════════════════════════
+
+SCRIPTS_DIR = Path(os.environ.get("CSA_TEST_SCRIPTS_DIR") or ROOT / "scripts")
+MAC_ENTRY = ("macos-ai-tools.sh", "macos-update.sh", "macos-plugins.sh")
+# Every script with a csa_on_exit, which check-duplication.py holds identical in all five.
+EXIT_HOOKED = MAC_ENTRY + ("macos-work-tools.sh", "clone-and-claude.sh")
+REG_FUNCS = ("csa_registrations_dir", "csa_registrations_py", "csa_registrations_python",
+             "csa_registrations_log", "csa_registrations_preview", "repair_csa_registrations")
+SHELL = "/bin/bash"
+INDENT = " " * 23
+# The plan's header row, verbatim (Task 4, Interfaces).
+REG_HEADER = [INDENT + "then audit their registrations in Claude Code (user and local scopes), "
+                       "Claude Desktop, Codex and Gemini,",
+              INDENT + "and re-point a dead one at ~/.local/bin keeping every setting"]
+REG_SKIPPED = INDENT + "registration audit skipped: {why}; nothing will be changed"
+REG_FAILED = INDENT + "registration audit failed; nothing will be changed"
+WHY_NO_PY = "no Python 3.9 or later was found"
+WHY_FETCH = "couldn't fetch csa-mcp-registrations.py"
+WHY_OVERRIDE = "CSA_REGISTRATIONS_PY is not a readable file"
+EACH_PRINTS = "each prints what it may do before it is used"
+PROBE = "import sys, json; sys.exit(sys.version_info < (3, 9))"
+STUB_ROW = "csa-zendesk in Claude Code (user): STUB-PLAN-ROW"
+STUB_COUNT = "1 CSA registration in 1 client; 0 need nothing"
+# The candidates csa_registrations_python names by absolute path. Each is rewritten to a fixture
+# path in the extracted function, so no case ever runs this machine's own Pythons.
+ABS_PYTHONS = {"brew": "/opt/homebrew/bin/python3", "local": "/usr/local/bin/python3",
+               "apple": "/usr/bin/python3"}
+SYS_TOOLS = ("mktemp", "rm", "mv", "cp", "sed", "sleep", "cat", "tr", "grep", "base64",
+             "mkdir", "chmod", "head", "tail", "awk", "sort", "cut", "ls")
+
+# What the entry scripts are handed in place of csa-mcp-registrations.py. It logs each call (its
+# argv, its own path, and the approved file's text) and answers in the real one's line format.
+FAKE_PY = r'''import json, os, sys
+argv = sys.argv[1:]
+cmd = argv[0] if argv else ""
+entry = {"argv": argv, "file": os.path.abspath(__file__), "approved": None}
+if cmd == "apply" and "--approved" in argv:
+    try:
+        with open(argv[argv.index("--approved") + 1], encoding="utf-8") as fh:
+            entry["approved"] = fh.read()
+    except OSError:
+        entry["approved"] = "<unreadable>"
+with open(os.environ["STUB_PY_LOG"], "a", encoding="utf-8") as fh:
+    fh.write(json.dumps(entry) + "\n")
+if cmd == "plan":
+    with open(argv[argv.index("--out") + 1], "x", encoding="utf-8") as fh:  # new, as the real one
+        fh.write('{"tool": "csa-mcp-registrations", "findings": []}\n')
+    print("log\tSTUB-PLAN-LOG-ONLY")
+    print("row\tcsa-zendesk in Claude Code (user): STUB-PLAN-ROW")
+    print("row\t1 CSA registration in 1 client; 0 need nothing")
+elif cmd == "apply":
+    print("log\tSTUB-APPLY-LOG-ONLY")
+    print("log\tclient_secret=STUB-NOT-A-REAL-SECRET")
+    print("ok\tSTUB-APPLY-OK")
+    print("warn\tSTUB-APPLY-WARN")
+    print("info\tSTUB-APPLY-INFO")
+elif cmd == "verify":
+    print("info\tSTUB-VERIFY-HELD")
+sys.stdout.flush()
+sys.exit(int(os.environ.get("STUB_PY_EXIT_" + cmd.upper()) or 0))
+'''
+
+GH_STUB = '''#!/bin/sh
+echo "gh $*" >> "$STUB_CALLS"
+case "$STUB_GH" in
+  noauth) if [ "$1" = auth ]; then exit 1; fi ;;
+  nonmember) if [ "$1" = api ]; then exit 1; fi ;;
+esac
+exit 0
+'''
+
+CURL_STUB = '''#!/bin/sh
+echo "curl $*" >> "$STUB_CALLS"
+if [ "$STUB_CURL" != ok ]; then exit 22; fi
+out=""
+while [ $# -gt 0 ]; do
+  if [ "$1" = -o ]; then out="$2"; shift; fi
+  shift
+done
+cp "$STUB_PY_SOURCE" "$out"
+'''
+
+CLT_STUB = '''#!/bin/sh
+echo "xcode-select $*" >> "$STUB_CALLS"
+if [ "$STUB_CLT" = 1 ]; then echo /Library/Developer/CommandLineTools; exit 0; fi
+exit 2
+'''
+
+UV_STUB = '''#!/bin/sh
+echo "uv $*" >> "$STUB_CALLS"
+if [ "$1 $2" = "python find" ]; then echo "{path}"; exit 0; fi
+exit 2
+'''
+
+# Plain helpers the extracted functions call, so a case can tell success, info and warn apart.
+SH_HELPERS = r'''info()    { printf 'INFO %s\n' "$*"; }
+success() { printf 'OK %s\n' "$*"; }
+warn()    { printf 'WARN %s\n' "$*" >&2; }
+error()   { printf 'ERROR %s\n' "$*" >&2; }
+abort()   { error "$@"; exit 1; }
+CSA_SED_UNBUF=""
+SCRIPT_LABEL="test.sh"
+CSA_RAW_BASE="https://example.invalid/scripts"
+'''
+
+
+class Skipped(Exception):
+    pass
+
+
+def sh_text(name):
+    return (SCRIPTS_DIR / name).read_text(encoding="utf-8")
+
+
+def sh_fn(text, name, script="the script"):
+    """A function's text out of a shipping script: a one-liner, or `name() {` to the first `}`
+    in column 0. A missing one fails the case."""
+    m = (re.search(rf"^{re.escape(name)}\(\)\s*\{{.*\}}$", text, re.M)
+         or re.search(rf"^{re.escape(name)}\(\)\s*\{{\n.*?^\}}", text, re.S | re.M))
+    if not m:
+        raise Failed(f"{script} defines no {name}()")
+    return m.group(0)
+
+
+def sh_const(text, name):
+    m = re.search(rf'^{re.escape(name)}="[^"]*"$', text, re.M)
+    return m.group(0) if m else ""
+
+
+def code_only(block):
+    """Full-line comments removed, so a check cannot be satisfied by prose about the code."""
+    return "\n".join(ln for ln in block.split("\n") if not ln.lstrip().startswith("#"))
+
+
+def internal_block(text, script):
+    """The Internal MCP servers rows of a script's preflight, as a function: from its first row
+    to the `each prints what it may do` row."""
+    lines = sh_fn(text, "preflight", script).split("\n")
+    start = next((i for i, ln in enumerate(lines) if "Internal MCP servers install/upgrade" in ln),
+                 None)
+    end = next((i for i, ln in enumerate(lines)
+                if start is not None and i > start and EACH_PRINTS in ln), None)
+    if start is None or end is None:
+        raise Failed(f"{script}: preflight has no Internal MCP servers block")
+    return "__internal_block() {\n" + "\n".join(lines[start:end + 1]) + "\n}"
+
+
+class Rig(object):
+    """A fixture machine for the shell wiring, under one temporary directory."""
+
+    def __init__(self, tmp, gh="member", clt=False, curl="ok", pythons=("path",)):
+        r = self.root = Path(tmp)
+        self.stub, self.sys, self.home = r / "stub", r / "sys", r / "home"
+        self.tmp, self.fix = r / "tmp", r / "fix"
+        for d in (self.stub, self.sys, self.home, self.tmp, self.fix):
+            d.mkdir(parents=True)
+        for tool in SYS_TOOLS:
+            found = shutil.which(tool, path="/usr/bin:/bin")
+            if found:
+                (self.sys / tool).symlink_to(found)
+        self.calls = r / "calls.log"
+        self.py_log = r / "py.log"
+        self.debug_log = r / "debug.log"
+        self.fake_py = r / "src" / "csa-mcp-registrations.py"
+        self.fake_py.parent.mkdir()
+        self.fake_py.write_text(FAKE_PY, encoding="utf-8")
+        self.path = [self.stub, self.sys]
+        self.env = {"HOME": str(self.home), "TMPDIR": str(self.tmp) + "/",
+                    "STUB_CALLS": str(self.calls), "STUB_PY_LOG": str(self.py_log),
+                    "STUB_PY_SOURCE": str(self.fake_py), "STUB_GH": str(gh),
+                    "STUB_CURL": curl, "STUB_CLT": "1" if clt else "0"}
+        if gh is not None:
+            write_exec(self.stub / "gh", GH_STUB)
+        write_exec(self.stub / "curl", CURL_STUB)
+        write_exec(self.stub / "xcode-select", CLT_STUB)
+        for which in pythons:
+            self.add_python(which)
+
+    def python_path(self, which):
+        if which == "path":
+            return self.stub / "python3"
+        return self.fix / which / "python3"
+
+    def add_python(self, which, kind="good"):
+        """A python3 that logs each run: `good` is the Python running this test, `old` fails the
+        version probe, `hangs` never answers."""
+        p = self.python_path(which)
+        body = {"good": f'exec "{sys.executable}" "$@"\n',
+                "old": "exit 1\n",
+                "hangs": f'echo $$ > "{self.root}/hung.pid"\nexec /bin/sleep 30\n'}[kind]
+        write_exec(p, f'#!/bin/sh\necho "python {which} $*" >> "$STUB_CALLS"\n' + body)
+        if which == "uv":
+            write_exec(self.stub / "uv", UV_STUB.format(path=p))
+        return p
+
+    def override(self):
+        self.env["CSA_REGISTRATIONS_PY"] = str(self.fake_py)
+        return self
+
+    def log(self, prefix=""):
+        if not self.calls.exists():
+            return []
+        return [ln for ln in self.calls.read_text(encoding="utf-8").splitlines()
+                if ln.startswith(prefix)]
+
+    def py_calls(self):
+        if not self.py_log.exists():
+            return []
+        return [json.loads(ln) for ln in self.py_log.read_text(encoding="utf-8").splitlines()]
+
+    def program(self, script, body, block=False, extra=(), stubs=""):
+        text = sh_text(script)
+        parts = ["set -euo pipefail", SH_HELPERS]
+        for const in ("CSA_MCP_GATE_REPO", "CSA_PYTHON_PREFERRED", "CSA_RAW_BASE",
+                      "SCRIPT_LABEL"):
+            parts.append(sh_const(text, const))
+        m = re.search(r"^CSA_INTERNAL_SETUPS=\(\n.*?^\)$", text, re.S | re.M)
+        if m:
+            parts.append(m.group(0))
+        names = ["csa_debug_hint", "csa_on_exit"]
+        if script in MAC_ENTRY:
+            names += ["has_command", "confirm", "csa_debug_requested", "csa_redact"]
+            names += list(REG_FUNCS)
+        for name in names + list(extra):
+            fn = sh_fn(text, name, script)
+            if name == "csa_registrations_python":
+                for which, literal in ABS_PYTHONS.items():
+                    expect(fn.count(literal) == 1,
+                           f"{script}: csa_registrations_python names {literal} "
+                           f"{fn.count(literal)} times, not once")
+                    fn = fn.replace(literal, str(self.python_path(which)))
+            parts.append(fn)
+        if block:
+            parts.append(internal_block(text, script))
+        parts.append(stubs)
+        parts.append(body)
+        return "\n".join(parts) + "\n"
+
+    def run(self, script, body, stdin="", env=None, timeout=60, path_first=(), **kw):
+        prog = self.root / "run.sh"
+        prog.write_text(self.program(script, body, **kw), encoding="utf-8")
+        e = dict(self.env)
+        e["PATH"] = ":".join(str(p) for p in list(path_first) + self.path)
+        e.update(env or {})
+        p = subprocess.Popen([SHELL, str(prog)], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                             stderr=subprocess.PIPE, env=e, cwd=str(self.root), text=True,
+                             start_new_session=True)
+        try:
+            out, err = p.communicate(stdin, timeout=timeout)
+        except subprocess.TimeoutExpired:
+            os.killpg(p.pid, signal.SIGKILL)
+            p.communicate()
+            raise Failed(f"{script}: the shell run did not finish within {timeout}s")
+        return p.returncode, out, err
+
+
+def rig_dir():
+    return tempfile.TemporaryDirectory(prefix="csa-reg-wiring-")
+
+
+def line_index(lines, text, what):
+    expect(text in lines, f"{what}: no line {text.strip()!r} in {lines}")
+    return lines.index(text)
+
+
+@case
+def wiring_preview_rows_under_internal_mcp_servers():
+    """The audit's rows sit in the Internal MCP servers block: after the servers it installs (and
+    in -ai-tools after the tool rebuilds), with the plan's header, before `each prints ...`."""
+    repairs = "csa_tool_repairs() { printf '%s\\n' 'csa-zendesk: it is Python 3.10'; }\n"
+    for name in MAC_ENTRY:
+        block = internal_block(sh_text(name), name)
+        expect(re.search(r"^\s*csa_registrations_preview\s*$", code_only(block), re.M),
+               f"{name}: the Internal MCP servers block does not call csa_registrations_preview")
+        with rig_dir() as t:
+            rig = Rig(t).override()
+            rc, out, err = rig.run(name, "__internal_block", block=True, stubs=repairs)
+        expect(rc == 0, f"{name}: exited {rc}: {err[-300:]}")
+        lines = out.split("\n")
+        first = next((i for i, ln in enumerate(lines) if "Internal MCP servers" in ln), -1)
+        h0 = line_index(lines, REG_HEADER[0], name)
+        expect(lines[h0 + 1] == REG_HEADER[1], f"{name}: the header's second line is missing")
+        row = line_index(lines, INDENT + STUB_ROW, name)
+        count = line_index(lines, INDENT + STUB_COUNT, name)
+        last = next((i for i, ln in enumerate(lines) if EACH_PRINTS in ln), -1)
+        expect(0 <= first < h0 < row < count and last == count + 1,
+               f"{name}: the rows are out of place: {lines}")
+        servers = [i for i, ln in enumerate(lines) if ln.strip() in
+                   ("csa-google-workspace", "csa-google-gmail-calendar", "csa-skilljar",
+                    "csa-zendesk")]
+        expect(len(servers) == 4 and max(servers) < h0,
+               f"{name}: the header does not follow the servers it audits: {lines}")
+        rebuild = [i for i, ln in enumerate(lines) if "rebuild csa-zendesk" in ln]
+        if name == "macos-ai-tools.sh":
+            expect(rebuild and rebuild[0] < h0, f"{name}: the audit precedes the tool rebuilds")
+        expect("STUB-PLAN-LOG-ONLY" not in out + err, f"{name}: a log line reached the screen")
+
+
+@case
+def wiring_repair_uses_the_previewed_plan():
+    """main() runs preflight and setup_csa_internal_tools in its own shell; the repair is the
+    setup's last step, and `apply --approved` gets the very file the preview's `plan --out` wrote,
+    then `verify` runs. ok, info and warn lines become success, info and warn."""
+    for name in MAC_ENTRY:
+        text = sh_text(name)
+        main = [ln.strip() for ln in code_only(sh_fn(text, "main", name)).split("\n")]
+        expect("preflight" in main and "setup_csa_internal_tools" in main
+               and main.index("preflight") < main.index("setup_csa_internal_tools"),
+               f"{name}: main() does not call preflight, then setup_csa_internal_tools, directly")
+        setup = [ln.strip() for ln in
+                 code_only(sh_fn(text, "setup_csa_internal_tools", name)).split("\n")
+                 if ln.strip()]
+        expect(setup[-2:] == ["repair_csa_registrations", "}"],
+               f"{name}: repair_csa_registrations is not the last step of "
+               f"setup_csa_internal_tools")
+        with rig_dir() as t:
+            rig = Rig(t).override()
+            rc, out, err = rig.run(name, "__internal_block >/dev/null\nsetup_csa_internal_tools\n"
+                                         "echo DONE", block=True,
+                                   extra=("setup_csa_internal_tools",),
+                                   stubs="csa_tool_repairs() { :; }")
+            calls = rig.py_calls()
+            runs = rig.log("python path")
+            dirs_left = [str(p) for p in rig.tmp.iterdir()]
+        expect(rc == 0 and "DONE" in out, f"{name}: exited {rc}: {err[-300:]}")
+        expect([c["argv"][0] for c in calls] == ["plan", "apply", "verify"],
+               f"{name}: the .py ran {[c['argv'] for c in calls]}")
+        planned = calls[0]["argv"][calls[0]["argv"].index("--out") + 1]
+        expect(calls[1]["argv"] == ["apply", "--approved", planned],
+               f"{name}: apply got {calls[1]['argv']}, not the plan file {planned}")
+        expect(all(f" -I {rig.fake_py} " in r for r in runs if PROBE not in r) and len(runs) >= 3,
+               f"{name}: the .py was not run with -I: {runs}")
+        for want, where in (("OK STUB-APPLY-OK", out), ("INFO STUB-APPLY-INFO", out),
+                            ("WARN STUB-APPLY-WARN", err), ("INFO STUB-VERIFY-HELD", out)):
+            expect(want in where, f"{name}: {want!r} is missing: {out} {err}")
+        expect(not dirs_left, f"{name}: the repair left its directory: {dirs_left}")
+
+
+@case
+def wiring_reg_dir_set_in_caller_shell():
+    for name in MAC_ENTRY:
+        with rig_dir() as t:
+            rig = Rig(t).override()
+            rc, out, err = rig.run(name, 'csa_registrations_preview >/dev/null\n'
+                                         'printf "DIR=%s\\n" "${CSA_REG_DIR:-}"\n'
+                                         'if [[ -d "${CSA_REG_DIR:-}" ]]; then echo EXISTS; fi')
+            tmp = rig.tmp
+        got = re.search(r"^DIR=(.*)$", out, re.M)
+        expect(rc == 0 and got and "EXISTS" in out,
+               f"{name}: CSA_REG_DIR is not set in the caller's shell: {out} {err[-300:]}")
+        d = Path(got.group(1))
+        expect(d.parent == tmp and re.fullmatch(r"csa-registrations\.[A-Za-z0-9]{6}", d.name),
+               f"{name}: the directory is not mktemp's, under TMPDIR: {d}")
+
+
+@case
+def wiring_reg_dir_created_under_override():
+    for name in MAC_ENTRY:
+        with rig_dir() as t:
+            rig = Rig(t).override()
+            rc, out, err = rig.run(name, 'csa_registrations_preview >/dev/null\n'
+                                         'if [[ -f "${CSA_REG_DIR:-}/plan.json" ]]; then '
+                                         'echo PLAN_KEPT; fi')
+        expect(rc == 0 and "PLAN_KEPT" in out,
+               f"{name}: under CSA_REGISTRATIONS_PY there is no directory or plan file: "
+               f"{out} {err[-300:]}")
+
+
+@case
+def wiring_preview_no_py_under_set_u():
+    for name in MAC_ENTRY:
+        for override in (False, True):
+            with rig_dir() as t:
+                rig = Rig(t, pythons=())
+                if override:
+                    rig.override()
+                rc, out, err = rig.run(name, "csa_registrations_preview\necho AFTER")
+                calls, curls = rig.py_calls(), rig.log("curl")
+            expect(rc == 0 and "AFTER" in out, f"{name}: no Python stopped the run: {err[-300:]}")
+            expect(REG_SKIPPED.format(why=WHY_NO_PY) in out.split("\n"),
+                   f"{name}: no skip row for a missing Python: {out}")
+            expect(not calls and not curls, f"{name}: something ran without a Python")
+
+
+@case
+def wiring_reg_dir_removed_when_declined():
+    """Declined at confirm, or stopped early: csa_on_exit removes the directory either way."""
+    for name in MAC_ENTRY:
+        for stop, rc_want in (('if ! confirm "Proceed?"; then abort "Aborted."; fi', 1),
+                              ("exit 3", 3)):
+            with rig_dir() as t:
+                rig = Rig(t).override()
+                rc, out, err = rig.run(name, "trap csa_on_exit EXIT\n"
+                                             "csa_registrations_preview >/dev/null\n"
+                                             'printf "DIR=%s\\n" "${CSA_REG_DIR:-}"\n'
+                                             f"{stop}\necho NOT_REACHED", stdin="n\n")
+                got = re.search(r"^DIR=(.+)$", out, re.M)
+                # Looked at here, while the fixture still exists: after it, nothing would.
+                left = bool(got) and Path(got.group(1)).exists()
+            expect(rc == rc_want and got and "NOT_REACHED" not in out,
+                   f"{name}: {stop!r} exited {rc}: {out} {err[-300:]}")
+            expect(not left, f"{name}: the directory outlived {stop!r}: {got.group(1)}")
+
+
+@case
+def wiring_inherited_reg_dir_never_removed():
+    """csa_on_exit removes CSA_REG_DIR with rm -rf, so every script that carries it drops an
+    inherited value before it sets the trap: a CSA_REG_DIR in the environment is never removed,
+    nor used."""
+    for name in EXIT_HOOKED:
+        text = sh_text(name)
+        trap = re.search(r"^trap csa_on_exit EXIT$", text, re.M)
+        expect(trap, f"{name}: no `trap csa_on_exit EXIT`")
+        resets = re.findall(r"^(?:unset CSA_REG_DIR|CSA_REG_DIR=.*)$", text[:trap.start()], re.M)
+        expect(resets, f"{name}: an inherited CSA_REG_DIR is not dropped before the exit trap")
+        body = "\n".join(resets) + "\ntrap csa_on_exit EXIT\n"
+        if name in MAC_ENTRY:
+            body += 'csa_registrations_dir\nprintf "DIR=%s\\n" "${CSA_REG_DIR:-}"\n'
+        with rig_dir() as t:
+            rig = Rig(t)
+            victim = rig.root / "somebody-elses"
+            victim.mkdir()
+            (victim / "keep").write_text("x", encoding="utf-8")
+            rc, out, err = rig.run(name, body + "exit 0", env={"CSA_REG_DIR": str(victim)})
+            kept = (victim / "keep").exists()
+        expect(rc == 0 and kept, f"{name}: an inherited CSA_REG_DIR was removed: {err[-300:]}")
+        if name in MAC_ENTRY:
+            expect(f"DIR={victim}" not in out, f"{name}: an inherited CSA_REG_DIR was used")
+
+
+@case
+def wiring_fetch_failure_says_skipped():
+    for name in MAC_ENTRY:
+        with rig_dir() as t:
+            rig = Rig(t, curl="fail")
+            rc, out, err = rig.run(name, "csa_registrations_preview\necho AFTER")
+            calls, curls = rig.py_calls(), rig.log("curl")
+            base = sh_const(sh_text(name), "CSA_RAW_BASE").split('"')[1]
+        expect(rc == 0 and "AFTER" in out, f"{name}: a failed fetch stopped the run: {err[-300:]}")
+        expect(REG_SKIPPED.format(why=WHY_FETCH) in out.split("\n"),
+               f"{name}: no skip row for a failed fetch: {out}")
+        expect(not calls, f"{name}: something ran though the fetch failed")
+        expect(len(curls) == 1 and curls[0].endswith(f" {base}/csa-mcp-registrations.py")
+               and "-H Cache-Control: no-cache" in curls[0],
+               f"{name}: not one no-cache fetch from HEAD: {curls}")
+    # And when it works, the copy fetched into this run's directory is what runs.
+    with rig_dir() as t:
+        rig = Rig(t)
+        rc, out, err = rig.run(MAC_ENTRY[0], 'csa_registrations_preview >/dev/null\n'
+                                             'printf "DIR=%s\\n" "$CSA_REG_DIR"')
+        calls = rig.py_calls()
+    d = re.search(r"^DIR=(.+)$", out, re.M)
+    expect(rc == 0 and d and calls and calls[0]["file"] == str(
+        Path(d.group(1)) / "csa-mcp-registrations.py"),
+        f"the fetched copy did not run: {calls} {out} {err[-300:]}")
+
+
+@case
+def wiring_py_failure_survives_set_e():
+    """The .py exits 2 at every step: the run goes on, the failed plan's file is removed, and
+    apply is handed a plan with no findings, so nothing it finds is acted on."""
+    fail = {"STUB_PY_EXIT_PLAN": "2", "STUB_PY_EXIT_APPLY": "2", "STUB_PY_EXIT_VERIFY": "2"}
+    for name in MAC_ENTRY:
+        with rig_dir() as t:
+            rig = Rig(t).override()
+            rc, out, err = rig.run(name, "csa_registrations_preview\n"
+                                         'if [[ -e "$CSA_REG_DIR/plan.json" ]]; then '
+                                         "echo PLAN_LEFT; else echo PLAN_GONE; fi\n"
+                                         "repair_csa_registrations\necho AFTER", env=fail)
+            calls = rig.py_calls()
+        expect(rc == 0 and "AFTER" in out, f"{name}: a failing .py stopped the run: {err[-300:]}")
+        expect(REG_FAILED in out.split("\n") and "PLAN_GONE" in out,
+               f"{name}: a failed audit's plan file was kept, or not said: {out}")
+        expect([c["argv"][0] for c in calls] == ["plan", "apply", "verify"],
+               f"{name}: {[c['argv'] for c in calls]}")
+        approved = calls[1]["argv"][-1]
+        try:
+            agreed = json.loads(calls[1]["approved"] or "")
+        except ValueError:
+            agreed = None
+        expect(Path(approved).name != "plan.json"
+               and agreed == {"tool": "csa-mcp-registrations", "findings": []},
+               f"{name}: apply was not handed a plan with no findings: {calls[1]}")
+        expect(err.count("exited 2") == 2, f"{name}: the two failures were not said: {err}")
+
+
+@case
+def wiring_no_fixed_temp_path():
+    allowed = '"${TMPDIR:-/tmp}/csa-registrations.XXXXXX"'
+    for name in MAC_ENTRY:
+        text = sh_text(name)
+        expect(f"mktemp -d {allowed}" in sh_fn(text, "csa_registrations_dir", name),
+               f"{name}: csa_registrations_dir does not use mktemp -d")
+        for fn in REG_FUNCS + ("csa_on_exit",):
+            code = code_only(sh_fn(text, fn, name)).replace(allowed, "")
+            expect("/tmp" not in code, f"{name}: {fn} names a fixed temporary path")
+    with rig_dir() as t:
+        rig = Rig(t).override()
+        dirs = []
+        for _ in range(2):
+            rc, out, err = rig.run(MAC_ENTRY[0], 'csa_registrations_preview >/dev/null\n'
+                                                 'printf "DIR=%s\\n" "$CSA_REG_DIR"\n'
+                                                 "repair_csa_registrations >/dev/null 2>&1")
+            d = re.search(r"^DIR=(.+)$", out, re.M)
+            expect(rc == 0 and d, f"no directory: {out} {err[-300:]}")
+            dirs.append(Path(d.group(1)))
+        left = [str(p) for p in rig.tmp.iterdir()]
+    expect(dirs[0] != dirs[1], f"two runs shared one directory: {dirs}")
+    expect(not left, f"a run left its directory behind: {left}")
+
+
+@case
+def wiring_non_member_silent():
+    """No gh, gh signed out, or no CSA-Internal access: the header alone, no audit, no repair."""
+    for gh in (None, "noauth", "nonmember"):
+        for name in MAC_ENTRY:
+            with rig_dir() as t:
+                rig = Rig(t, gh=gh).override()
+                rc, out, err = rig.run(name, "__internal_block\nsetup_csa_internal_tools\n"
+                                             'printf "DIR=%s\\n" "${CSA_REG_DIR:-}"',
+                                       block=True, extra=("setup_csa_internal_tools",),
+                                       stubs="csa_tool_repairs() { :; }")
+                calls, curls = rig.py_calls(), rig.log("curl")
+            lines = out.split("\n")
+            expect(rc == 0, f"{name} ({gh}): exited {rc}: {err[-300:]}")
+            h0 = line_index(lines, REG_HEADER[0], f"{name} ({gh})")
+            expect(EACH_PRINTS in lines[h0 + 2], f"{name} ({gh}): rows past the header: {lines}")
+            expect(not calls and not curls and "DIR=\n" in out + "\n",
+                   f"{name} ({gh}): the audit ran: {calls} {curls}")
+
+
+@case
+def wiring_override_env_used():
+    for name in MAC_ENTRY:
+        with rig_dir() as t:
+            rig = Rig(t).override()
+            rc, out, err = rig.run(name, "csa_registrations_preview >/dev/null")
+            calls, curls = rig.py_calls(), rig.log("curl")
+        expect(rc == 0 and calls and calls[0]["file"] == str(rig.fake_py) and not curls,
+               f"{name}: CSA_REGISTRATIONS_PY was not what ran: {calls} {curls}")
+        # One that is not a readable file is said, never quietly replaced by HEAD's.
+        with rig_dir() as t:
+            rig = Rig(t)
+            rc, out, err = rig.run(name, "csa_registrations_preview",
+                                   env={"CSA_REGISTRATIONS_PY": str(rig.root / "missing.py")})
+            calls, curls = rig.py_calls(), rig.log("curl")
+        expect(rc == 0 and REG_SKIPPED.format(why=WHY_OVERRIDE) in out.split("\n")
+               and not calls and not curls,
+               f"{name}: a missing override was not said, or HEAD's ran: {out} {curls}")
+
+
+@case
+def wiring_python_candidates_in_order():
+    """PATH's python3, uv's 3.14, Homebrew's two prefixes, then Apple's: the first that answers
+    the probe, and none after it is run. One that is too old is passed over."""
+    order = ("path", "uv", "brew", "local", "apple")
+    for name in MAC_ENTRY:
+        preferred = sh_const(sh_text(name), "CSA_PYTHON_PREFERRED").split('"')[1]
+        for i, want in enumerate(order):
+            with rig_dir() as t:
+                rig = Rig(t, pythons=(), clt=True)
+                for which in order[i:]:
+                    rig.add_python(which)
+                if i:
+                    rig.add_python("path", kind="old")  # too old: passed over
+                rc, out, err = rig.run(name, "csa_registrations_python")
+                runs, uvs = rig.log("python "), rig.log("uv ")
+                got = out.strip()
+                expected = str(rig.python_path(want))
+            expect(rc == 0 and got == expected, f"{name}: chose {got!r}, not {want} ({expected})")
+            expect(all(f" -I -c {PROBE}" in r for r in runs),
+                   f"{name}: a candidate was run other than by the probe: {runs}")
+            ran = [r.split()[1] for r in runs]
+            expect(ran == (["path"] if i == 0 else ["path", want]),
+                   f"{name}: for {want}, the candidates run were {ran}")
+            expect(uvs == ([f"uv python find --system {preferred}"] if want == "uv" else []),
+                   f"{name}: for {want}, uv was asked {uvs}")
+
+
+@case
+def wiring_dead_path_python_skipped():
+    """The incident's shape: PATH's python3 is a venv link whose Homebrew Python is gone, and one
+    behind it whose own interpreter is gone. Neither is chosen; the next candidate is."""
+    for name in MAC_ENTRY:
+        with rig_dir() as t:
+            rig = Rig(t, pythons=())
+            dead, broken = rig.root / "venv-bin", rig.root / "broken-bin"
+            dead.mkdir()
+            (dead / "python3").symlink_to(rig.root / "Cellar" / "python3.14")
+            write_exec(broken / "python3", "#!/nonexistent/bin/python3.14\n")
+            brew = rig.add_python("brew")
+            rc, out, err = rig.run(name, "csa_registrations_python", path_first=(dead, broken))
+        expect(rc == 0 and out.strip() == str(brew),
+               f"{name}: chose {out.strip()!r}, not the working {brew}: {err[-300:]}")
+
+
+@case
+def wiring_apple_python_stub_not_invoked_without_clt():
+    """Without the Command Line Tools, /usr/bin/python3 opens an install dialog: it is never
+    run, whether PATH names it or it is the last candidate. With them it is used."""
+    for name in MAC_ENTRY:
+        for clt in (False, True):
+            with rig_dir() as t:
+                rig = Rig(t, pythons=(), clt=clt)
+                apple = rig.add_python("apple")
+                rc, out, err = rig.run(name, "csa_registrations_python",
+                                       path_first=(apple.parent,))
+                runs = rig.log("python apple")
+            if clt:
+                expect(rc == 0 and out.strip() == str(apple),
+                       f"{name}: Apple's Python was not used with the tools: {out}")
+            else:
+                expect(rc == 0 and out.strip() == "" and not runs,
+                       f"{name}: Apple's stub was run without the tools: {runs}")
+
+
+@case
+def wiring_python_probe_bounded():
+    """A python3 that never answers is stopped after 10 s, and the next candidate is used."""
+    with rig_dir() as t:
+        rig = Rig(t, pythons=())
+        rig.add_python("path", kind="hangs")
+        brew = rig.add_python("brew")
+        pid_file = rig.root / "hung.pid"
+        started = time.monotonic()
+        try:
+            rc, out, err = rig.run(MAC_ENTRY[0], "csa_registrations_python", timeout=40)
+        finally:
+            pid = int(pid_file.read_text()) if pid_file.exists() else None
+            alive = False
+            if pid:
+                try:
+                    os.kill(pid, 0)
+                    alive = True
+                    os.kill(pid, signal.SIGKILL)
+                except OSError:
+                    pass
+        took = time.monotonic() - started
+    expect(rc == 0 and out.strip() == str(brew), f"chose {out.strip()!r}: {err[-300:]}")
+    expect(9 <= took < 20, f"the probe was stopped after {took:.1f}s, not 10")
+    expect(pid and not alive, "the probe that hung is still running")
+
+
+@case
+def wiring_verify_called_without_run():
+    for name in MAC_ENTRY:
+        with rig_dir() as t:
+            rig = Rig(t).override()
+            rc, out, err = rig.run(name, "csa_registrations_preview >/dev/null\n"
+                                         "repair_csa_registrations")
+            calls = rig.py_calls()
+        verifies = [c["argv"] for c in calls if c["argv"][0] == "verify"]
+        expect(rc == 0 and verifies == [["verify"]],
+               f"{name}: verify ran as {verifies}; a rerun's check is the .py's to hold (D5)")
+
+
+@case
+def wiring_log_lines_to_debug_log_only():
+    """A `log` line is for the debug log, through the redactor, and never for the screen; with
+    no debug log asked for, nothing is written anywhere, even to an exported CSA_LOG."""
+    for name in MAC_ENTRY:
+        with rig_dir() as t:
+            rig = Rig(t).override()
+            body = "csa_registrations_preview\nrepair_csa_registrations"
+            rc, out, err = rig.run(name, body, env={"CSA_DEBUG": "1",
+                                                    "CSA_LOG": str(rig.debug_log)})
+            logged = rig.debug_log.read_text(encoding="utf-8") if rig.debug_log.exists() else ""
+            stray = rig.root / "not-a-debug-log"
+            rc2, out2, err2 = rig.run(name, body, env={"CSA_LOG": str(stray)})
+            written = stray.exists()
+        for marker in ("STUB-PLAN-LOG-ONLY", "STUB-APPLY-LOG-ONLY"):
+            expect(marker not in out + err + out2 + err2, f"{name}: {marker} reached the screen")
+            expect(marker in logged, f"{name}: {marker} is not in the debug log")
+        expect("STUB-NOT-A-REAL-SECRET" not in logged + out + err
+               and "client_secret=<redacted>" in logged,
+               f"{name}: a log line reached the debug log without the redactor")
+        expect(rc == 0 and rc2 == 0 and not written,
+               f"{name}: a log line was written with no debug log asked for")
+
+
+@case
+def wiring_windows_twin_exists():
+    """D3 ships macOS first; the Windows twins are #184's Task 4W. Until all three .ps1 define
+    them this SKIPs, by name, on every run; a twin in some scripts and not others fails."""
+    wins = ("windows-ai-tools.ps1", "windows-update.ps1", "windows-plugins.ps1")
+    want = ("Show-CsaRegistrationsPreview", "Repair-CsaRegistrations")
+    have = {}
+    for w in wins:
+        text = (ROOT / "scripts" / w).read_text(encoding="utf-8")
+        have[w] = [f for f in want if re.search(rf"^function\s+{f}\b", text, re.M)]
+    if not any(have.values()):
+        raise Skipped("Windows twin pending #184, Task 4W")
+    missing = [f"{w}: {f}" for w in wins for f in want if f not in have[w]]
+    expect(not missing, f"a partial Windows twin, missing {missing}")
+
+
+# ═════════════════════════════════════════════════════════════════════════════════════════════
 # Runner, and the mutation self-test (Task 1 Step 4)
 # ═════════════════════════════════════════════════════════════════════════════════════════════
 
@@ -4850,12 +5558,102 @@ MUTATIONS = [
      "                stopped = end(p)\n"),
 ]
 
+# Task 4 Step 1's guards, each broken on purpose in the entry scripts (ADR-005): (the case that
+# must catch it, what the mutation does, the exact text, its replacement, the scripts it is made
+# in, each of which must hold the text exactly once). The shared functions are byte-identical, so
+# a mutation of one is made in all three.
+_AI, _UP, _PL = MAC_ENTRY
+WIRING_MUTATIONS = [
+    ("wiring_preview_rows_under_internal_mcp_servers", "print the rows without the plan's indent",
+     '      row) echo "                       $text" ;;', '      row) echo "$text" ;;', MAC_ENTRY),
+    ("wiring_preview_rows_under_internal_mcp_servers", "call the preview after the last row (-ai-tools)",
+     '  csa_registrations_preview\n  echo "                       ' + EACH_PRINTS + '"',
+     '  echo "                       ' + EACH_PRINTS + '"\n  csa_registrations_preview', (_AI,)),
+    ("wiring_preview_rows_under_internal_mcp_servers",
+     "call the preview after the last row (-update, -plugins)",
+     '    csa_registrations_preview\n    echo "                       ' + EACH_PRINTS + '"',
+     '    echo "                       ' + EACH_PRINTS + '"\n    csa_registrations_preview',
+     (_UP, _PL)),
+    ("wiring_repair_uses_the_previewed_plan", "drop the repair from setup_csa_internal_tools",
+     "  # Last, behind the same gate and after every setup above: the plan's registration "
+     "repairs.\n  repair_csa_registrations\n}", "}", MAC_ENTRY),
+    ("wiring_repair_uses_the_previewed_plan", "approve a plan of the repair's own, not the one shown",
+     '    approved="$CSA_REG_DIR/plan.json"\n',
+     '    approved="$CSA_REG_DIR/plan-with-no-findings.json"\n', MAC_ENTRY),
+    ("wiring_repair_uses_the_previewed_plan", "show an ok line as info",
+     '          ok) success "$text" ;;', '          ok) info "$text" ;;', MAC_ENTRY),
+    ("wiring_repair_uses_the_previewed_plan", "leave the run's directory after the repair",
+     '    rm -rf "$CSA_REG_DIR" || true\n  fi\n  unset CSA_REG_DIR',
+     "    :\n  fi\n  unset CSA_REG_DIR", MAC_ENTRY),
+    ("wiring_reg_dir_set_in_caller_shell", "make the directory in a subshell",
+     '  csa_registrations_dir\n  if [[ -z "${CSA_REG_DIR:-}" ]]; then\n    echo ',
+     '  ( csa_registrations_dir )\n  if [[ -z "${CSA_REG_DIR:-}" ]]; then\n    echo ', MAC_ENTRY),
+    ("wiring_reg_dir_created_under_override", "make no directory under CSA_REGISTRATIONS_PY",
+     "  # First, before anything reads CSA_REG_DIR: under set -u an unset one would end the run.\n"
+     "  csa_registrations_dir\n",
+     '  if [[ -z "${CSA_REGISTRATIONS_PY:-}" ]]; then csa_registrations_dir; fi\n', MAC_ENTRY),
+    ("wiring_preview_no_py_under_set_u", "end the run when no Python is found",
+     'no Python 3.9 or later was found; nothing will be changed"\n    return 0\n',
+     'no Python 3.9 or later was found; nothing will be changed"\n    return 1\n', MAC_ENTRY),
+    ("wiring_reg_dir_removed_when_declined", "drop the exit hook's removal",
+     '    rm -rf "$CSA_REG_DIR" || true\n  fi\n  csa_debug_hint', "    :\n  fi\n  csa_debug_hint",
+     MAC_ENTRY),
+    ("wiring_inherited_reg_dir_never_removed", "take CSA_REG_DIR from the environment",
+     "unset CSA_REG_DIR\ntrap csa_on_exit EXIT\n", "trap csa_on_exit EXIT\n", EXIT_HOOKED),
+    ("wiring_fetch_failure_says_skipped", "take a failed fetch for a fetched file",
+     '      rm -f "$dest.part"\n      return 0\n', '      rm -f "$dest.part"\n', MAC_ENTRY),
+    ("wiring_py_failure_survives_set_e", "let the plan's exit status reach set -e",
+     '</dev/null)" || rc=$?\n', '</dev/null)"\n', MAC_ENTRY),
+    ("wiring_py_failure_survives_set_e", "keep a failed audit's plan file",
+     "    # No plan file, so the repair acts on nothing it finds (repair_csa_registrations).\n"
+     '    rm -f "$CSA_REG_DIR/plan.json"\n', "", MAC_ENTRY),
+    ("wiring_py_failure_survives_set_e", "hand apply an empty file, not a plan with no findings",
+     "'{\"tool\": \"csa-mcp-registrations\", \"findings\": []}'", "''", MAC_ENTRY),
+    ("wiring_py_failure_survives_set_e", "say nothing when a step fails",
+     " </dev/null || printf 'exit\\t%s\\n' \"$?\")", " </dev/null || true)", MAC_ENTRY),
+    ("wiring_no_fixed_temp_path", "use one fixed directory name",
+     'mktemp -d "${TMPDIR:-/tmp}/csa-registrations.XXXXXX"',
+     'mkdir -p "${TMPDIR:-/tmp}/csa-registrations" && echo "${TMPDIR:-/tmp}/csa-registrations"',
+     MAC_ENTRY),
+    ("wiring_non_member_silent", "drop the CSA-Internal probe from the preview",
+     '  if ! has_command gh || ! gh auth status >/dev/null 2>&1 \\\n'
+     '      || ! gh api "repos/$CSA_MCP_GATE_REPO" >/dev/null 2>&1; then\n',
+     "  if ! has_command gh || ! gh auth status >/dev/null 2>&1; then\n", MAC_ENTRY),
+    ("wiring_override_env_used", "fall back to HEAD's copy when the override is unreadable",
+     "      printf '%s\\n' \"$CSA_REGISTRATIONS_PY\"\n    fi\n    return 0\n",
+     "      printf '%s\\n' \"$CSA_REGISTRATIONS_PY\"\n      return 0\n    fi\n", MAC_ENTRY),
+    ("wiring_python_candidates_in_order", "never ask uv",
+     'cand="$(uv python find --system "$CSA_PYTHON_PREFERRED" 2>/dev/null)" || cand=""',
+     'cand=""', MAC_ENTRY),
+    ("wiring_dead_path_python_skipped", "take a candidate whatever its probe says",
+     '    if wait "$pid" 2>/dev/null; then', '    if wait "$pid" 2>/dev/null || true; then',
+     MAC_ENTRY),
+    ("wiring_apple_python_stub_not_invoked_without_clt", "drop the Command Line Tools check",
+     '    if [[ "$cand" == "$apple" ]] && ! xcode-select -p >/dev/null 2>&1; then',
+     "    if false; then", MAC_ENTRY),
+    ("wiring_python_probe_bounded", "wait for the probe however long it takes",
+     '    while kill -0 "$pid" 2>/dev/null && [[ $waited -lt 100 ]]; do',
+     '    while kill -0 "$pid" 2>/dev/null; do', MAC_ENTRY),
+    ("wiring_verify_called_without_run", "run verify --run on every rerun",
+     "        args=(verify)\n", "        args=(verify --run)\n", MAC_ENTRY),
+    ("wiring_log_lines_to_debug_log_only", "print the plan's log lines on the screen",
+     '      "") ;;\n      log) csa_registrations_log "$text" ;;',
+     '      "") ;;\n      log) echo "$text" ;;', MAC_ENTRY),
+    ("wiring_log_lines_to_debug_log_only", "write to an exported CSA_LOG with no debug log asked for",
+     '  if [[ -n "${CSA_LOG:-}" ]] && csa_debug_requested; then\n',
+     '  if [[ -n "${CSA_LOG:-}" ]]; then\n', MAC_ENTRY),
+    ("wiring_log_lines_to_debug_log_only", "write log lines past the redactor",
+     ' | csa_redact >> "$CSA_LOG" 2>/dev/null || true', ' >> "$CSA_LOG" 2>/dev/null || true',
+     MAC_ENTRY),
+]
+
 
 def run_cases(only=None):
     if not SCRIPT.exists():
         print(f"FAIL  {SCRIPT.relative_to(ROOT) if ROOT in SCRIPT.parents else SCRIPT} does not exist")
         return 1
     failed = []
+    skipped = []
     selected = [c for c in CASES if only is None or c.__name__ == only]
     if only and not selected:
         print(f"no case named {only}")
@@ -4864,6 +5662,10 @@ def run_cases(only=None):
         try:
             c()
             print(f"  ok    {c.__name__}")
+        except Skipped as e:
+            # Not a pass: named on every run, and counted apart from the passes.
+            skipped.append(c.__name__)
+            print(f"  SKIP  {c.__name__} ({e})")
         except Failed as e:
             failed.append(c.__name__)
             print(f"  FAIL  {c.__name__}: {e}")
@@ -4875,6 +5677,10 @@ def run_cases(only=None):
     if failed:
         print(f"FAILED: {len(failed)} of {len(selected)} case(s): {', '.join(failed)}")
         return 1
+    if skipped:
+        print(f"all {len(selected) - len(skipped)} case(s) run passed; {len(skipped)} SKIPPED, "
+              f"not passed: {', '.join(skipped)}")
+        return 0
     print(f"all {len(selected)} case(s) passed")
     return 0
 
@@ -4904,9 +5710,45 @@ def self_test():
             ok = False
         else:
             print(f"  ok    {what}: caught by {name}\n          {why[:150]}")
+    ok = wiring_self_test() and ok
     print()
     print("self-test " + ("passed" if ok else "FAILED"))
     return 0 if ok else 1
+
+
+def wiring_self_test():
+    """WIRING_MUTATIONS, each made in a copy of the entry scripts that the named case then reads
+    through CSA_TEST_SCRIPTS_DIR. It must FAIL there, not crash."""
+    print("\nthe entry scripts' wiring (Task 4)\n")
+    ok = True
+    for name, what, old, new, scripts in WIRING_MUTATIONS:
+        with tempfile.TemporaryDirectory(prefix="csa-reg-wiring-mutant-") as t:
+            bad = []
+            for s in EXIT_HOOKED:
+                text = sh_text(s)
+                if s in scripts:
+                    if text.count(old) != 1:
+                        bad.append(f"{s} holds it {text.count(old)} times")
+                    text = text.replace(old, new)
+                (Path(t) / s).write_text(text, encoding="utf-8")
+            if bad:
+                print(f"  FAIL  {what}: the text to mutate is not there once: {'; '.join(bad)}")
+                ok = False
+                continue
+            env = dict(os.environ, CSA_TEST_SCRIPTS_DIR=t)
+            r = subprocess.run([sys.executable, str(Path(__file__).resolve()), "--only", name],
+                               env=env, capture_output=True, text=True, timeout=300)
+        why = next((ln.strip() for ln in r.stdout.splitlines() if ln.strip().startswith("FAIL")),
+                   "")
+        if r.returncode == 0:
+            print(f"  FAIL  {what}: {name} still passes")
+            ok = False
+        elif "unexpected error" in why:
+            print(f"  FAIL  {what}: {name} crashed instead of failing its check")
+            ok = False
+        else:
+            print(f"  ok    {what}: caught by {name}\n          {why[:150]}")
+    return ok
 
 
 def main():
