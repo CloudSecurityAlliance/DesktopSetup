@@ -653,6 +653,7 @@ if mode == "silent":
         time.sleep(1)
 if mode == "junk":
     sys.stdout.write("starting up\n{not json\n")
+    sys.stdout.write("".join("noise %d\n" % i for i in range(CONF.get("junk_lines", 0))))
     say({"jsonrpc": "2.0", "method": "notifications/message", "params": {}})
     say({"jsonrpc": "2.0", "id": 7, "result": {}})
 for line in sys.stdin:
@@ -3725,28 +3726,31 @@ def ok_line(name, clients):
 
 
 # Every line verify may print, as a pattern whose only holes are this file's own words: a CSA
-# server name, a client, an integer, the timeout, and the standard binary's command. Whatever a
-# server says, of any length, has nowhere to go (review of bbb6f82).
+# server name, a client, the standard binary's command (with its pinned module), and integers
+# no wider than their channel - an exit code (0-255), a signal, a JSON-RPC error code in the
+# reserved range, a count of skipped lines capped at 1000, the timeout. Whatever a server says,
+# of any length, has nowhere to go (reviews of bbb6f82 and c2678ee).
 _NAMES = "|".join(re.escape(n) for n in SPEC)
+_MODULES = "|".join(re.escape(m) for _, m in SPEC.values())
 _CLIENT = r"Claude Code \(user scope\)|Claude Desktop|Codex|Gemini"
 _CLIENTS = rf"(?:{_CLIENT})(?:, (?:{_CLIENT}))*"
 _WHY = "|".join((
     r"did not answer within \d+(?:\.\d+)?s",
-    r"exited \((?:code|signal) \d+\) before answering",
-    r"answered with a JSON-RPC error \(code -\d+\)",
+    r"exited \((?:code \d{1,3}|signal \d{1,2})\) before answering",
+    r"answered with a JSON-RPC error \(code -32[0-7]\d\d\)",
     r"answered with a JSON-RPC error, its code outside the range JSON-RPC reserves",
     r"answered with something that is not a valid initialize result",
     r"could not be started \([A-Z0-9]+\)",
 ))
 _TODO = (rf"(?:{_NAMES}) did not answer when launched with its (?:{_CLIENT}) registration's "
-         r"command and settings; to see its own messages, run ~/\.local/bin/[a-z-]+ in a "
-         r"terminal")
+         rf"command and settings; to see its own messages, run ~/\.local/bin/[a-z-]+"
+         rf"(?: -m (?:{_MODULES}))? in a terminal")
 FIXED_LINES = [re.compile(p) for p in (
     rf"ok\t(?:{_NAMES}) {OK_CHECK} \({_CLIENTS}\)",
     rf"warn\t(?:{_NAMES}), launched with its registered command and settings \({_CLIENTS}\): "
     rf"(?:{_WHY})",
-    rf"info\t(?:{_NAMES}) \({_CLIENTS}\): \d+ lines? on its stdout (?:was|were) not JSON, and "
-    r"skipped",
+    rf"info\t(?:{_NAMES}) \({_CLIENTS}\): (?:[1-9]\d{{0,2}}|1000|more than 1000) lines? on its "
+    r"stdout (?:was|were) not JSON, and skipped",
     rf"info\t{_TODO}",
     rf"45\t{_TODO}\t-\t-",
 )]
@@ -4025,6 +4029,47 @@ def launcher_behind_another_name_left():
         a.ok()
         expect(f"csa-zendesk in {CC_USER}: {N_LAUNCHER}" in a.infos, f"infos {a.infos}")
         expect(not [ln for ln in w.stub_log() if "pipx ran" in ln], "the launcher was run")
+
+
+@case
+def interpreter_form_todo_names_its_module():
+    # `python -m <module>`: the to-do says to run the Python WITH its pinned module, which the
+    # bare Python, a prompt, would not show (review of c2678ee). The module run is a STUB: the
+    # "python" puts a stub package first and leaves site-packages out (-S), so a real CSA server
+    # installed for this Python is never what starts.
+    with world() as w:
+        stubs = w.tmp / "stub-modules" / "csa_zendesk"
+        stubs.mkdir(parents=True)
+        (stubs / "__init__.py").write_text("")
+        ran = w.tmp / "stub-module-ran"
+        (stubs / "server.py").write_text(f"open({str(ran)!r}, 'w').close()\nraise SystemExit(4)\n")
+        py = write_exec(w.tmp / "stubpy" / "bin" / "python3.14",
+                        f'#!/bin/sh\nPYTHONPATH="{stubs.parent}" exec "{sys.executable}" -S "$@"\n')
+        w.claude(user={"csa-zendesk": reg(py, ["-m", "csa_zendesk.server"], env={"K": SECRET_A})})
+        a = w.verify()
+        a.ok()
+        expect(ran.exists(), f"fixture: the stub module did not run: {a.warns}")
+        expect(a.warns == [f"csa-zendesk, launched with its registered command and settings "
+                           f"({CC_USER}): exited (code 4) before answering"], f"warns {a.warns}")
+        title = T_NO_ANSWER.format(name="csa-zendesk", client=CC_USER,
+                                   command=f"{py} -m csa_zendesk.server")
+        expect(a.has_todo(45, title), f"ledger {a.todos}")
+        expect(SECRET_A not in a.stdout + a.stderr + a.ledger_text, "a value was printed")
+
+
+@case
+def junk_count_capped():
+    # The count of lines skipped is the one number a server sets freely: above 1000 it is
+    # shown as "more than 1000" (review of c2678ee).
+    for extra, shown in ((998, "1000 lines"), (1500, "more than 1000 lines")):
+        with world() as w:
+            w.std_server("csa-zendesk", mode="junk", junk_lines=extra)
+            w.claude(user={"csa-zendesk": reg(std_bin(w, "csa-zendesk"))})
+            a = w.verify()
+            a.ok()
+            want = (f"csa-zendesk ({CC_USER}): {shown} on its stdout were not JSON, and skipped")
+            expect(a.oks and want in a.infos, f"{extra + 2} lines: infos {a.infos}")
+            expect(not not_fixed(a.stdout), f"not fixed: {not_fixed(a.stdout)}")
 
 
 @case
@@ -4733,7 +4778,12 @@ MUTATIONS = [
     ("no_server_text_printed", "print any error code, not only one JSON-RPC reserves",
      "        if type(code) is int and low <= code <= high:", "        if type(code) is int:"),
     ("exits_before_answering_masked", "name the command's args in the to-do",
-     "command=tilde(argv[0])", 'command=" ".join(argv)'),
+     "    return tilde(argv[0])\n", '    return " ".join(argv)\n'),
+    ("interpreter_form_todo_names_its_module", "tell the person to run the bare Python",
+     '        return f"{tilde(argv[0])} -m {module}"\n', "        return tilde(argv[0])\n"),
+    ("junk_count_capped", "show the count of lines skipped however large",
+     '        n = junk if junk <= JUNK_SHOWN_MAX else f"more than {JUNK_SHOWN_MAX}"\n',
+     "        n = junk\n"),
     ("orphan_child_is_stopped", "take a process group to be empty without asking",
      "    try:\n        os.killpg(pgid, 0)\n    except OSError:\n        return False\n    return True\n",
      "    return False\n"),
