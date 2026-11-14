@@ -56,14 +56,16 @@ registered env (an approximation of each client's; see launch_env). One launch a
 in a fresh empty directory and its own process group, which is stopped after the answer or 20 s,
 bounded (end). A dead or launcher-form registration, a dead standard binary, and one whose
 settings this cannot reproduce are reported and never launched. Identical launches are made
-once. It checks that a server answers when launched this way, not that it works in a client
-(#177). A rerun runs it without --run, and then checks only the servers VERIFY_ON_RERUN names:
-none, until D5 is decided.
+once, and the launches together are held to VERIFY_BUDGET. It checks that a server answers when
+launched this way, not that it works in a client (#177). A rerun runs it without --run, and then
+checks only the servers VERIFY_ON_RERUN names: none, until D5 is decided.
 
 None of them ever opens a token, OAuth state or credential file, or prints an env VALUE - only
-key names and counts; a server's own output is shown masked (mask). The values it reads stay in
-memory, and a value is written only back into the file it came from and that file's backup, or
-into the env of a server verify launches. Only verify runs a server, and what a server does at
+key names and counts. verify prints none of a server's own text either - not its output, nor
+its name, version or error message - only fixed lines this file composes (JSONRPC_RESERVED says
+what of a server can reach them). The values it reads stay in memory, and a value is written
+only back into the file it came from and that file's backup, or into the env of a server verify
+launches. Only verify runs a server, and what a server does at
 its start is the server's (M5). Its own client calls (`codex mcp list|get --json`, the probe of
 each interpreter) and the servers it launches run from a fresh, empty directory, so a project
 config in the caller's directory cannot stand in for the user's.
@@ -92,6 +94,7 @@ import argparse
 import collections
 import contextlib
 import copy
+import errno
 import hashlib
 import json
 import os
@@ -107,7 +110,7 @@ import tempfile
 import time
 import unicodedata
 
-SCRIPT_VERSION = "2026-11-13T17:53Z"
+SCRIPT_VERSION = "2026-11-13T18:24Z"
 
 # ── The plan's decisions (D1-D5). Each is pinned by one test; an answer changes the constant. ──
 
@@ -846,10 +849,14 @@ def shebang(path):
 
 
 def executable_kind(path, args, server):
-    """A12: ("interpreter", <path>), ("launcher", <basename>) or ("module", None)."""
+    """A12: ("interpreter", <path>), ("launcher", <basename>) or ("module", None). A launcher
+    is known by its own name, or by the name of the file a link to it resolves to: a link named
+    otherwise to pipx, itself a Python console script with an absolute shebang, read as a direct
+    executable and was launched (review of bbb6f82)."""
     base = os.path.basename(path)
-    if base in LAUNCHERS:
-        return "launcher", base
+    for name in (base, os.path.basename(os.path.realpath(path))):
+        if name in LAUNCHERS:
+            return "launcher", name
     if PYTHON_RE.match(base):
         if args == ["-m", server.module]:
             return "interpreter", path
@@ -2284,12 +2291,13 @@ EXIT_GRACE = 2.0
 TERM_GRACE = 2.0
 KILL_GRACE = 2.0
 POLL = 0.05
+# The launches together, in seconds: one that could run past this is not started, and is reported
+# "not checked". Per-client envs can defeat de-duplication, and every Claude Code local-scope
+# entry can add a launch, so the count of launches has no bound of its own (review of bbb6f82).
+VERIFY_BUDGET = 120.0
 # Once it has exited, how long its pipes may still be read for what it wrote before it went.
 DRAIN = 0.5
-STDERR_KEPT = 64 * 1024   # the tail of its stderr, for the last line
 LINE_MAX = 1024 * 1024    # a stdout line longer than this is skipped, not held
-SHOWN_MAX = 200           # characters of its last stderr line shown
-NAME_MAX = 100            # characters of its own name and version shown
 PROTOCOL_VERSION = "2025-06-18"
 CHECK_CLIENT = "csa-desktopsetup-check"
 # What may be launched: a registration that is a direct executable (A12) and works. A launcher
@@ -2346,18 +2354,14 @@ GEMINI_SECRET_VALUE = re.compile("|".join((
     r"xox[abpr]-[a-zA-Z0-9-]+",
 )), re.I)
 
-# Masking (mask): an env value this long or longer is shown as `<KEY>`; then the gate scripts'
-# csa_redact patterns, for credential shapes no value covers, keeping the key.
-MASK_MIN = 4
-REDACTIONS = (
-    (re.compile(r"\x1b\[[0-9;]*m"), ""),
-    (re.compile(r'(oauth_token|client_secret|refresh_token|access_token|private_key)'
-                r'("?\s*[:=]\s*"?)[^\s,}"]+', re.I), r"\1\2<redacted>"),
-    (re.compile(r"(gh[pousr]_[A-Za-z0-9]{16,}|github_pat_[A-Za-z0-9_]{20,})"), "<redacted>"),
-    (re.compile(r'("?temp_clone_token"?\s*[:=]\s*"?)[A-Za-z0-9]{16,}'), r"\1<redacted>"),
-    (re.compile(r"(Bearer\s+)\S{16,}"), r"\1<redacted>"),
-    (re.compile(r"ya29\.[A-Za-z0-9._-]{20,}"), "<redacted>"),
-)
+# What verify prints is ONLY the fixed text below, composed by this file: never a server's
+# stdout or stderr, nor its own name, version or error message (review of bbb6f82, the
+# coordinator's ruling under P1). Masking a server's text was tried and is a deny-list that
+# cannot be made complete: an arg, a value split over lines, an escaped value, or a cut tail
+# got through it. What a server can still put into a line is an exit code (0-255) or signal
+# number, a JSON-RPC error code in the range the spec reserves, and a count of lines skipped -
+# integers, never its text. To see a server's own messages, the to-do names its command to run.
+JSONRPC_RESERVED = (-32768, -32000)
 
 TODO_CHECK = 45
 # Not the plan's "server check held until its effect on tokens is measured": M5 has measured it
@@ -2369,12 +2373,23 @@ I_HELD_SOME = ('server check held for {names}: whether a rerun launches them to 
 I_NOTHING = "no CSA MCP server registration to check"
 I_CLIENT = "{client}: {status}; nothing there was checked"
 OK_CHECK = ("{name} answers an MCP initialize handshake, launched with its registered command "
-            "and settings ({clients}; {server})")
+            "and settings ({clients})")
 W_CHECK = "{name}, launched with its registered command and settings ({clients}): {why}"
 I_JUNK = "{name} ({clients}): {n} line{s} on its stdout {were} not JSON, and skipped"
+I_BUDGET = ("{name} ({clients}): not checked: the launches together are held to {secs:g}s, and "
+            "this one could run past that")
 W_STUCK = "{name} ({clients}): its process group could not be stopped, even by SIGKILL"
+# The command only, never its args or env: those can hold values.
 T_NO_ANSWER = ("{name} did not answer when launched with its {client} registration's command "
-               "and settings")
+               "and settings; to see its own messages, run {command} in a terminal")
+F_SILENT = "did not answer within {secs:g}s"
+F_EXITED = "exited (code {code}) before answering"
+F_KILLED = "exited (signal {code}) before answering"
+F_ERROR = "answered with a JSON-RPC error (code {code})"
+F_ERROR_OTHER = "answered with a JSON-RPC error, its code outside the range JSON-RPC reserves"
+F_INVALID = "answered with something that is not a valid initialize result"
+F_NOT_STARTED = "could not be started ({errno})"
+F_CHECK_FAILED = "the check failed ({error})"
 N_LAUNCHER = "not checked: launcher form"
 N_DEAD = "does not start: {why}"
 N_NOT_STDIO = "not checked: it is not a stdio registration, which is all this checks"
@@ -2388,7 +2403,8 @@ N_CWD = ("not checked: it sets its own working directory, which this check does 
 
 
 def gemini_drops(key, value):
-    """Does Gemini CLI keep this inherited variable from a server it starts? (GEMINI_DROP)"""
+    """True when Gemini CLI leaves this inherited variable out of the env of a server it
+    starts; False when the server gets it (GEMINI_DROP)."""
     key = key.upper()
     if key.startswith("GEMINI_CLI_"):
         return False
@@ -2419,24 +2435,6 @@ def launch_env(reg, ctx):
     env.update({k: caller[k] for k in OS_KEYS if k in caller and k not in env})
     env.update(reg.env)
     return env
-
-
-def mask(text, env):
-    """`text` with every value in `env` of MASK_MIN characters or more shown as `<KEY>`, the
-    longest first, so a value holding another is masked whole; then the REDACTIONS. Every value
-    of the launch env, not only the registration's: the caller's can hold a secret too."""
-    for key, value in sorted(env.items(), key=lambda kv: (-len(kv[1]), kv[0])):
-        if len(value) >= MASK_MIN:
-            text = text.replace(value, f"<{key}>")
-    for pattern, repl in REDACTIONS:
-        text = pattern.sub(repl, text)
-    return text
-
-
-def shown(text, env, limit):
-    """What of a server's own text may be printed: masked first, so a cut can never leave half
-    a value unmasked, then cleaned, then cut."""
-    return clean(mask(text, env))[:limit]
 
 
 def check_of(f, ctx):
@@ -2496,30 +2494,30 @@ def parse_line(line):
     return "other", None
 
 
-def answered(msg, env):
-    """(passed, what to say) for the response to the initialize request."""
+def answered(msg):
+    """(passed, what to say) for the response to the initialize request. It passes when
+    `result.serverInfo.name` is present. What it says is fixed text: of the answer, only a
+    JSON-RPC error code in the reserved range can reach it - never a name, version or message."""
     if "error" in msg:
         err = msg["error"]
         code = err.get("code") if isinstance(err, dict) else None
-        # The code only: an error's message is the server's own text, and can carry a value.
-        return False, ("answered with error %d" % code if type(code) is int
-                       else "answered with an error")
+        low, high = JSONRPC_RESERVED
+        if type(code) is int and low <= code <= high:
+            return False, F_ERROR.format(code=code)
+        return False, F_ERROR_OTHER
     result = msg.get("result")
     info = result.get("serverInfo") if isinstance(result, dict) else None
     name = info.get("name") if isinstance(info, dict) else None
     if not isinstance(name, str) or not name.strip():
-        return False, "answered without a server name"
-    version = info.get("version")
-    server = shown(name, env, NAME_MAX)
-    if isinstance(version, str) and version.strip():
-        server += " " + shown(version, env, NAME_MAX)
-    return True, server
+        return False, F_INVALID
+    return True, None
 
 
-def exchange(p, env, timeout):
+def exchange(p, timeout):
     """Send the initialize request and read until its answer, the server's exit, or `timeout`:
-    (passed, what to say, lines skipped as not JSON). Bounded memory: stderr's tail only, and
-    no stdout line longer than LINE_MAX is held."""
+    (passed, what to say, lines skipped as not JSON). Its stderr is read only so it cannot
+    block on a full pipe, and dropped. Bounded memory: no stdout line longer than LINE_MAX is
+    held."""
     request = {"jsonrpc": "2.0", "id": 1, "method": "initialize",
                "params": {"protocolVersion": PROTOCOL_VERSION, "capabilities": {},
                           "clientInfo": {"name": CHECK_CLIENT, "version": SCRIPT_VERSION}}}
@@ -2527,8 +2525,8 @@ def exchange(p, env, timeout):
         p.stdin.write((json.dumps(request) + "\n").encode("utf-8"))
         p.stdin.flush()
     except OSError:
-        pass  # it has gone already: what it left says why
-    out, err, junk, skipping = b"", b"", 0, False
+        pass  # it has gone already: its exit says so
+    out, junk, skipping = b"", 0, False
     deadline = time.monotonic() + timeout
     drain = None
     sel = selectors.DefaultSelector()
@@ -2542,16 +2540,13 @@ def exchange(p, env, timeout):
             if drain is not None and (now >= drain or not sel.get_map()):
                 kind, msg = parse_line(out) if out and not skipping else ("blank", None)
                 if kind == "answer":
-                    return answered(msg, env) + (junk,)
-                lines = [ln for ln in err.decode("utf-8", "replace").splitlines() if ln.strip()]
+                    return answered(msg) + (junk,)
                 code = p.returncode
-                why = ("exited %d before answering" % code if code >= 0
-                       else "exited on signal %d before answering" % -code)
-                if lines:
-                    why += ": " + shown(lines[-1].strip(), env, SHOWN_MAX)
+                why = (F_EXITED.format(code=code) if code >= 0
+                       else F_KILLED.format(code=-code))
                 return False, why, junk + (kind == "junk")
             if now >= deadline:
-                return False, "did not answer within %gs" % timeout, junk
+                return False, F_SILENT.format(secs=timeout), junk
             wait = min(POLL, deadline - now)
             if not sel.get_map():
                 time.sleep(wait)
@@ -2562,8 +2557,7 @@ def exchange(p, env, timeout):
                     sel.unregister(key.fileobj)
                     continue
                 if key.data == "err":
-                    err = (err + data)[-STDERR_KEPT:]
-                    continue
+                    continue  # read so it cannot block, and dropped: none of it is shown
                 out += data
                 while True:
                     nl = out.find(b"\n")
@@ -2580,7 +2574,7 @@ def exchange(p, env, timeout):
                     line, out = out[:nl], out[nl + 1:]
                     kind, msg = parse_line(line)
                     if kind == "answer":
-                        return answered(msg, env) + (junk,)
+                        return answered(msg) + (junk,)
                     junk += kind == "junk"
     finally:
         sel.close()
@@ -2656,9 +2650,9 @@ def run_check(argv, env, timeout):
                 with signals_held() as found:
                     p = spawn(argv, env, cwd, found)
             except OSError as e:
-                why = e.strerror or type(e).__name__
-                return False, f"could not be started ({why})", 0, True
-            passed, text, junk = exchange(p, env, timeout)
+                why = errno.errorcode.get(e.errno, "an error") if e.errno else type(e).__name__
+                return False, F_NOT_STARTED.format(errno=why), 0, True
+            passed, text, junk = exchange(p, timeout)
         finally:
             if p is not None:
                 with signals_held():
@@ -2666,24 +2660,35 @@ def run_check(argv, env, timeout):
     return passed, text, junk, stopped
 
 
-def report(argv, env, shared, todos):
-    """Run one launch, shared by every finding in `shared`, and say what it showed."""
+def launch_max():
+    """The longest one launch can take: the timeout and the three teardown steps."""
+    return HANDSHAKE_TIMEOUT + EXIT_GRACE + TERM_GRACE + KILL_GRACE
+
+
+def sharing(shared):
+    """(the server names, the clients) of the findings one launch serves, for its lines."""
     names = []
     for f in shared:
         if f.reg.name not in names:
             names.append(f.reg.name)
-    name = " and ".join(names)
-    clients = ", ".join(f.reg.where() for f in shared)
+    return " and ".join(names), ", ".join(f.reg.where() for f in shared)
+
+
+def report(argv, env, shared, todos):
+    """Run one launch, shared by every finding in `shared`, and say what it showed - in this
+    file's own words only."""
+    name, clients = sharing(shared)
     try:
         passed, text, junk, stopped = run_check(argv, env, HANDSHAKE_TIMEOUT)
     except Exception as e:  # this launch only: the others are still checked
-        passed, text, junk, stopped = False, f"the check failed ({describe_error(e)})", 0, True
+        passed, text, junk, stopped = False, F_CHECK_FAILED.format(error=describe_error(e)), 0, True
     if passed:
-        emit("ok", OK_CHECK.format(name=name, clients=clients, server=text))
+        emit("ok", OK_CHECK.format(name=name, clients=clients))
     else:
         emit("warn", W_CHECK.format(name=name, clients=clients, why=text))
         for f in shared:
-            todos.add(TODO_CHECK, T_NO_ANSWER.format(name=f.reg.name, client=f.reg.where()))
+            todos.add(TODO_CHECK, T_NO_ANSWER.format(name=f.reg.name, client=f.reg.where(),
+                                                     command=tilde(argv[0])))
     if junk:
         emit("info", I_JUNK.format(name=name, clients=clients, n=junk, s="" if junk == 1 else "s",
                                    were="was" if junk == 1 else "were"))
@@ -2693,7 +2698,8 @@ def report(argv, env, shared, todos):
 
 def verify(args):
     """Re-audit, then check each registered server the run may check: with --run every one,
-    without it those VERIFY_ON_RERUN names (D5). One launch at a time, identical launches once."""
+    without it those VERIFY_ON_RERUN names (D5). One launch at a time, identical launches once,
+    and none that could take the launches together past VERIFY_BUDGET."""
     names = set(SERVERS) if args.run else set(VERIFY_ON_RERUN) & set(SERVERS)
     if not names:
         emit("info", I_HELD)  # and nothing else: no audit, no probe, no launch
@@ -2726,11 +2732,19 @@ def verify(args):
             order.append(("launch", key))
         launches[key][2].append(f)
     todos = Todos()
+    started = None
     for kind, item in order:
-        if kind == "launch":
-            report(*launches[item], todos=todos)
-        else:
+        if kind != "launch":
             emit(kind, item)
+            continue
+        argv, env, shared = launches[item]
+        now = time.monotonic()
+        started = now if started is None else started
+        if now - started + launch_max() > VERIFY_BUDGET:
+            name, clients = sharing(shared)
+            emit("info", I_BUDGET.format(name=name, clients=clients, secs=VERIFY_BUDGET))
+            continue
+        report(argv, env, shared, todos)
     todos.flush(ctx.environ)
     return 0
 

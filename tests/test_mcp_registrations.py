@@ -6,8 +6,9 @@ re-points only a dead registration that plan showed and that is unchanged since,
 its command, through Claude Code's own lock, with no backup left by a write it abandons. And
 `verify` (Task 3): it launches each registered server that is a direct executable, one at a
 time, with each client's env as M3 measured it, asks for an MCP `initialize`, and stops its
-whole process group, bounded; it never launches a dead or launcher-form registration, prints no
-env value, and launches nothing at all without `--run` while D5 holds. Its servers are stubs.
+whole process group, bounded, within a total budget; it never launches a dead or launcher-form
+registration, prints none of a server's own text (only fixed lines of its own), and launches
+nothing at all without `--run` while D5 holds. Its servers are stubs.
 
 What matters most about an auditor that will later drive a repair is what it refuses to
 claim: a dead standard binary is never a re-point aimed at itself; a launcher form, an
@@ -584,7 +585,11 @@ sys.exit(2)
 # CONF["last"], then exit 3 before answering), silent (ignores SIGTERM, starts a grandchild in
 # its own process group, and never answers). `lock` makes it hold an exclusive lock for its whole
 # life and give up on contention; `delay` and `linger` hold it before its answer and after stdin
-# closes.
+# closes; `orphan` starts a child in its group that outlives it. `leak` makes it put every value
+# it was given (its CSA_ and PLAN_ env values, and its args) everywhere a server's text can go,
+# in every form: raw, repr, JSON, a multi-line value on one line, an argparse error line, a
+# stderr flood past any 64 KB tail, stdout lines, a notification, and its answer (its own name
+# and version, an error's message and data, an unfinished stdout line at its exit).
 STUB_SERVER = r'''
 import fcntl, json, os, signal, subprocess, sys, time
 CONF = json.loads(CONF)
@@ -605,6 +610,25 @@ mode = CONF["mode"]
 log(ev="start", server=CONF["name"], pgid=os.getpgid(0), sid=os.getsid(0), cwd=os.getcwd(),
     listing=len(os.listdir(".")), keys=sorted(os.environ), args=sys.argv[1:],
     blocked=sorted(int(s) for s in signal.pthread_sigmask(signal.SIG_BLOCK, [])))
+vals = [v for k, v in sorted(os.environ.items()) if k.startswith(("CSA_", "PLAN_"))]
+vals += sys.argv[1:]
+forms = []
+for v in vals:
+    forms += [v, repr(v), json.dumps(v), v.replace("\n", " | ")]
+if CONF.get("leak"):
+    sys.stderr.write("usage: srv [-h]\nsrv: error: unrecognized arguments: %s\n"
+                     % " ".join(sys.argv[1:]))
+    for f in forms:
+        sys.stderr.write(f + "\n")
+    sys.stderr.write(("x" * 997 + "".join(vals)) * 70 + "\n")
+    sys.stderr.flush()
+    for f in forms:
+        sys.stdout.write("note: " + f + "\n")
+    say({"jsonrpc": "2.0", "method": "notifications/message", "params": {"data": vals}})
+    log(ev="leaked", forms=len(forms))
+if CONF.get("orphan"):
+    child = subprocess.Popen(["/bin/sleep", "60"])
+    log(ev="grandchild", child=child.pid)
 if CONF.get("lock"):
     held = open(CONF["lock"], "a")
     try:
@@ -617,6 +641,9 @@ if mode == "exit":
         sys.stderr.write("%s=%s\n" % (key, value))
     sys.stderr.write(CONF["last"] + "\n")
     sys.stderr.flush()
+    if CONF.get("leak"):
+        sys.stdout.write("fatal: " + " ".join(forms))  # no newline: left unfinished at its exit
+        sys.stdout.flush()
     sys.exit(3)
 if mode == "silent":
     signal.signal(signal.SIGTERM, signal.SIG_IGN)
@@ -634,13 +661,17 @@ for line in sys.stdin:
     log(ev="recv", method=msg.get("method"), id=msg.get("id"),
         protocolVersion=params.get("protocolVersion"), client=params.get("clientInfo"))
     time.sleep(CONF.get("delay", 0))
+    leak = CONF.get("leak")
     if mode == "error":
         say({"jsonrpc": "2.0", "id": msg["id"],
-             "error": {"code": -32602, "message": CONF.get("message", "no")}})
+             "error": {"code": CONF.get("code", -32602),
+                       "message": " ".join(forms) if leak else CONF.get("message", "no"),
+                       "data": vals if leak else None}})
     else:
         say({"jsonrpc": "2.0", "id": msg["id"],
              "result": {"protocolVersion": "2025-06-18", "capabilities": {},
-                        "serverInfo": {"name": CONF["name"], "version": CONF["version"]}}})
+                        "serverInfo": {"name": CONF["name"] + (" " + " ".join(vals) if leak else ""),
+                                       "version": repr(vals) if leak else CONF["version"]}}})
 time.sleep(CONF.get("linger", 0))
 log(ev="end")
 '''
@@ -3673,8 +3704,15 @@ OK_CHECK = ("answers an MCP initialize handshake, launched with its registered c
 N_LAUNCHER = "not checked: launcher form"
 N_DOLLAR = "not checked: its environment uses $-expansion, which this check does not reproduce"
 N_DEAD = "does not start: "
+# The plan's to-do, and how to see why: the command only, never its args or env (review of
+# bbb6f82).
 T_NO_ANSWER = ("{name} did not answer when launched with its {client} registration's command "
-               "and settings")
+               "and settings; to see its own messages, run {command} in a terminal")
+
+
+def no_answer(name, client=None):
+    return T_NO_ANSWER.format(name=name, client=client or "Claude Code (user scope)",
+                              command=f"~/.local/bin/{SPEC[name][0]}")
 # Not the plan's "...held until its effect on tokens is measured": M5 has measured it
 # (2026-11-13), and the hold now waits on D5's answer. Reworded under P2, honesty.
 HELD = ('server check held: whether a rerun launches the CSA servers to check them is not '
@@ -3682,8 +3720,47 @@ HELD = ('server check held: whether a rerun launches the CSA servers to check th
 CC_USER = "Claude Code (user scope)"
 
 
-def ok_line(name, clients, server):
-    return f"{name} {OK_CHECK} ({clients}; {server})"
+def ok_line(name, clients):
+    return f"{name} {OK_CHECK} ({clients})"
+
+
+# Every line verify may print, as a pattern whose only holes are this file's own words: a CSA
+# server name, a client, an integer, the timeout, and the standard binary's command. Whatever a
+# server says, of any length, has nowhere to go (review of bbb6f82).
+_NAMES = "|".join(re.escape(n) for n in SPEC)
+_CLIENT = r"Claude Code \(user scope\)|Claude Desktop|Codex|Gemini"
+_CLIENTS = rf"(?:{_CLIENT})(?:, (?:{_CLIENT}))*"
+_WHY = "|".join((
+    r"did not answer within \d+(?:\.\d+)?s",
+    r"exited \((?:code|signal) \d+\) before answering",
+    r"answered with a JSON-RPC error \(code -\d+\)",
+    r"answered with a JSON-RPC error, its code outside the range JSON-RPC reserves",
+    r"answered with something that is not a valid initialize result",
+    r"could not be started \([A-Z0-9]+\)",
+))
+_TODO = (rf"(?:{_NAMES}) did not answer when launched with its (?:{_CLIENT}) registration's "
+         r"command and settings; to see its own messages, run ~/\.local/bin/[a-z-]+ in a "
+         r"terminal")
+FIXED_LINES = [re.compile(p) for p in (
+    rf"ok\t(?:{_NAMES}) {OK_CHECK} \({_CLIENTS}\)",
+    rf"warn\t(?:{_NAMES}), launched with its registered command and settings \({_CLIENTS}\): "
+    rf"(?:{_WHY})",
+    rf"info\t(?:{_NAMES}) \({_CLIENTS}\): \d+ lines? on its stdout (?:was|were) not JSON, and "
+    r"skipped",
+    rf"info\t{_TODO}",
+    rf"45\t{_TODO}\t-\t-",
+)]
+
+
+def not_fixed(*texts):
+    """The lines of `texts` that are not one of verify's fixed lines."""
+    return [ln for t in texts for ln in t.splitlines()
+            if not any(p.fullmatch(ln) for p in FIXED_LINES)]
+
+
+def grams(value, n=4):
+    """Every run of `n` characters in `value`."""
+    return {value[i:i + n] for i in range(len(value) - n + 1)}
 
 
 def bare_keys():
@@ -3739,7 +3816,7 @@ def answers():
                                           env={"CSA_ZD_ALLOWLIST_WRITE": SECRET_A})})
         a = w.verify()
         a.ok()
-        want = ok_line("csa-zendesk", CC_USER, "csa-zendesk-stub 9.9.9")
+        want = ok_line("csa-zendesk", CC_USER)
         expect(a.oks == [want], f"oks {a.oks}, warns {a.warns}, infos {a.infos}")
         starts = w.starts()
         expect(len(starts) == 1, f"{len(starts)} launches")
@@ -3768,7 +3845,7 @@ def junk_before_response_tolerated():
         w.claude(user={"csa-zendesk": reg(std_bin(w, "csa-zendesk"))})
         a = w.verify()
         a.ok()
-        expect(a.oks == [ok_line("csa-zendesk", CC_USER, "csa-zendesk-stub 9.9.9")],
+        expect(a.oks == [ok_line("csa-zendesk", CC_USER)],
                f"oks {a.oks}, warns {a.warns}")
         expect([i for i in a.infos if "2 lines on its stdout were not JSON" in i],
                f"the lines skipped were not counted: {a.infos}")
@@ -3781,9 +3858,9 @@ def error_response_reported():
         w.claude(user={"csa-zendesk": reg(std_bin(w, "csa-zendesk"))})
         a = w.verify()
         a.ok()
-        expect(not a.oks and a.warned("answered with error -32602"), f"warns {a.warns}")
+        expect(not a.oks and a.warned("answered with a JSON-RPC error (code -32602)"), f"warns {a.warns}")
         expect(SECRET_A not in a.stdout + a.stderr + a.ledger_text, "the error's message was printed")
-        expect(a.has_todo(45, T_NO_ANSWER.format(name="csa-zendesk", client=CC_USER)),
+        expect(a.has_todo(45, no_answer("csa-zendesk")),
                f"ledger {a.todos}")
 
 
@@ -3808,28 +3885,146 @@ def silent_server_times_out_and_is_killed():
         expect(a.warned("did not answer within 1s"), f"warns {a.warns}")
         expect(starts and children, "fixture: the stub and its child did not start")
         expect(not left, f"left running in its process group: {left}")
-        expect(a.has_todo(45, T_NO_ANSWER.format(name="csa-zendesk", client=CC_USER)),
+        expect(a.has_todo(45, no_answer("csa-zendesk")),
                f"ledger {a.todos}")
 
 
 @case
 def exits_before_answering_masked():
+    # The plan's name. Masking was a deny-list a value could get through (review of bbb6f82),
+    # so nothing a server printed is shown at all, masked or not: the line is fixed text and its
+    # exit code, and the to-do names the command to run to see its own messages.
     with world() as w:
-        bearer = "tok" + "Q7x" * 10
-        last = f"fatal: refused {SECRET_A} with Authorization: Bearer {bearer} " + "x" * 300
-        w.std_server("csa-zendesk", mode="exit", last=last)
-        w.claude(user={"csa-zendesk": reg(std_bin(w, "csa-zendesk"),
+        w.std_server("csa-zendesk", mode="exit", last=f"fatal: refused {SECRET_A}", leak=True)
+        w.claude(user={"csa-zendesk": reg(std_bin(w, "csa-zendesk"), ["--token", SECRET_C],
                                           env={"CSA_ZD_ALLOWLIST_WRITE": SECRET_A,
                                                "CSA_ZD_ALLOWLIST_READ": SECRET_B})})
         a = w.verify()
         a.ok()
-        warns = a.warned("exited 3 before answering: fatal: refused <CSA_ZD_ALLOWLIST_WRITE> "
-                         "with Authorization: Bearer <redacted> ")
-        expect(warns, f"warns {a.warns}")
-        shown = warns[0].split("before answering: ", 1)[1]
-        expect(len(shown) == 200, f"the stderr line shown is {len(shown)} characters, not 200")
-        for s in SECRETS + (bearer,):
+        expect(a.warns == [f"csa-zendesk, launched with its registered command and settings "
+                           f"({CC_USER}): exited (code 3) before answering"], f"warns {a.warns}")
+        expect(a.has_todo(45, no_answer("csa-zendesk")), f"ledger {a.todos}")
+        for s in SECRETS:
             expect(s not in a.stdout + a.stderr + a.ledger_text, "a value reached the output")
+
+
+@case
+def no_server_text_printed():
+    # Each value a server is given - its registration's env (a multi-line one, one with quote and
+    # backslash, a short one), an inherited one, and an arg - comes back from it everywhere and
+    # in every form (STUB_SERVER `leak`), from a server that answers, one that answers with an
+    # error, one that exits, and one that never answers. What verify prints is fixed lines only,
+    # and holds no run of four characters from any of those values.
+    #
+    # A value shorter than four characters could appear in fixed text by chance, so absence is
+    # not what guards it: FIXED_LINES is, which leaves a server's text nowhere to go.
+    s_env, s_multi = "QZXJ7W3KVPQ9", "QJ8ZKXVW\nWV4QZPJK"
+    s_esc, s_short = 'QW"ZK\\X7QJV', "Q7Z"
+    s_arg, s_inherited = "ZKQ4XW8JVQ7P", "XQZW9KJ4VPZ7"
+    s_code = 73914286  # an error code JSON-RPC does not reserve: a number of the server's own
+    leaked = (s_env, s_multi, s_esc, s_arg, s_inherited, str(s_code))
+    for ledger in (False, True):
+        with world() as w:
+            mod = load_module()
+            mod.HANDSHAKE_TIMEOUT = 1
+            mod.EXIT_GRACE = mod.TERM_GRACE = 0.3
+            w.extra_env["PLAN_INHERITED"] = s_inherited
+            env = {"CSA_LEAK_ENV": s_env, "CSA_LEAK_MULTI": s_multi, "CSA_LEAK_ESC": s_esc,
+                   "CSA_LEAK_SHORT": s_short}
+            user = {}
+            for name, mode in (("csa-google-workspace", "answer"), ("csa-google-gmail-calendar", "error"),
+                               ("csa-skilljar", "exit"), ("csa-zendesk", "silent")):
+                w.std_server(name, mode=mode, leak=True, last="fatal", code=s_code)
+                user[name] = reg(std_bin(w, name), ["--token", s_arg], env=env)
+            w.claude(user=user)
+            try:
+                a = w.verify_inproc(mod, ledger=ledger)
+            finally:
+                kill_stub_groups(w)
+            a.ok()
+            said = [e for e in w.server_log() if e["ev"] == "leaked"]
+            expect(len(said) == 4, f"fixture: {len(said)} of 4 stubs put their values out")
+            expect(len(a.oks) == 1 and len(a.warns) == 3, f"oks {a.oks}, warns {a.warns}")
+            text = a.stdout + a.stderr + a.ledger_text
+            expect(not a.stderr, f"stderr: {a.stderr!r}")
+            stray = not_fixed(a.stdout, a.ledger_text)
+            expect(not stray, f"lines that are not verify's fixed text: {stray}")
+            found = sorted(g for v in leaked for g in grams(v) if g in text)
+            expect(not found, f"runs of a value in the output: {found}")
+            expect(s_short not in text, "a short value reached the output")
+
+
+@case
+def orphan_child_is_stopped():
+    # A server that exits by itself on its stdin closing, but leaves a child in its process
+    # group: the child is stopped too, not only the server.
+    with world() as w:
+        w.std_server("csa-zendesk", orphan=True)
+        w.claude(user={"csa-zendesk": reg(std_bin(w, "csa-zendesk"))})
+        try:
+            a = w.verify()
+            events = w.server_log()
+            starts = [e for e in events if e["ev"] == "start"]
+            children = [e["child"] for e in events if e["ev"] == "grandchild"]
+            left = group_members(starts[0]["pgid"]) if starts else []
+        finally:
+            kill_stub_groups(w)
+        a.ok()
+        expect(a.oks == [ok_line("csa-zendesk", CC_USER)], f"oks {a.oks}, warns {a.warns}")
+        expect(children and any(e["ev"] == "end" for e in events),
+               "fixture: the stub did not leave a child and exit by itself")
+        expect(not left, f"left running in its process group: {left}")
+
+
+@case
+def time_budget_bounds_the_launches():
+    # The launches together are held to VERIFY_BUDGET: one that could run past it is reported,
+    # never started (review of bbb6f82: per-client envs and local scopes made the count
+    # unbounded). Scaled down here: 1 s answers, 0.3 s grace periods, a 2.5 s budget.
+    with world() as w:
+        mod = load_module()
+        expect(mod.VERIFY_BUDGET == 120, f"VERIFY_BUDGET {mod.VERIFY_BUDGET}")
+        mod.HANDSHAKE_TIMEOUT = 1
+        mod.EXIT_GRACE = mod.TERM_GRACE = mod.KILL_GRACE = 0.3
+        mod.VERIFY_BUDGET = 2.5
+        user = {}
+        for name in ("csa-google-workspace", "csa-skilljar", "csa-zendesk"):
+            w.std_server(name, mode="silent")
+            user[name] = reg(std_bin(w, name))
+        w.claude(user=user)
+        try:
+            a = w.verify_inproc(mod)
+        finally:
+            kill_stub_groups(w)
+        a.ok()
+        expect(len(w.starts()) == 1, f"{len(w.starts())} launches within a 2.5s budget")
+        held = [i for i in a.infos if i.endswith("not checked: the launches together are held "
+                                                 "to 2.5s, and this one could run past that")]
+        expect(len(held) == 2, f"infos {a.infos}")
+        expect(len(a.warns) == 1, f"warns {a.warns}")
+
+
+@case
+def launcher_behind_another_name_left():
+    # A link named otherwise to a launcher that is itself a Python console script (pipx): known
+    # by the name its link resolves to, left by the plan and never launched by the check.
+    with world() as w:
+        pipx = write_exec(w.tmp / "pipx-venv" / "bin" / "pipx",
+                          f"#!{sys.executable}\nopen({str(w.log)!r}, 'a').write('pipx ran\\n')\n")
+        link = w.home / "bin" / "zd-server"
+        link.parent.mkdir()
+        link.symlink_to(pipx)
+        w.claude(user={"csa-zendesk": reg(link)})
+        r = w.run()
+        r.ok()
+        f = r.f("csa-zendesk")
+        expect((f["state"], f["reason"]) ==
+               ("launcher", "it runs through pipx, which this does not inspect; left as it is"),
+               f"{f['state']}/{f['reason']}")
+        a = w.verify()
+        a.ok()
+        expect(f"csa-zendesk in {CC_USER}: {N_LAUNCHER}" in a.infos, f"infos {a.infos}")
+        expect(not [ln for ln in w.stub_log() if "pipx ran" in ln], "the launcher was run")
 
 
 @case
@@ -3871,7 +4066,7 @@ def deduped_launches():
         a.ok()
         expect(len(w.starts()) == 1, f"{len(w.starts())} launches of one command, args and env")
         clients = f"{CC_USER}, Claude Code (local scope, ~/GitHub/proj), Codex, Gemini"
-        expect(a.oks == [ok_line("csa-zendesk", clients, "csa-zendesk-stub 9.9.9")],
+        expect(a.oks == [ok_line("csa-zendesk", clients)],
                f"oks {a.oks}, warns {a.warns}")
 
 
@@ -3887,7 +4082,7 @@ def desktop_env_is_minimal():
                                        env={"CSA_SKILLJAR_PROFILE": "prof"})})
         a = w.verify()
         a.ok()
-        expect(a.oks == [ok_line("csa-skilljar", "Claude Desktop", "csa-skilljar-stub 9.9.9")],
+        expect(a.oks == [ok_line("csa-skilljar", "Claude Desktop")],
                f"oks {a.oks}, warns {a.warns}, infos {a.infos}")
         got = set(w.starts()[0]["keys"]) - added
         want = {"HOME", "LOGNAME", "PATH", "SHELL", "USER", "CSA_SKILLJAR_PROFILE"}
@@ -4096,7 +4291,7 @@ def rerun_checks_only_allowed_servers():
                        "csa-skilljar": reg(std_bin(w, "csa-skilljar"))})
         a = w.verify_inproc(mod, run=False)
         a.ok()
-        expect(a.oks == [ok_line("csa-zendesk", CC_USER, "csa-zendesk-stub 9.9.9")],
+        expect(a.oks == [ok_line("csa-zendesk", CC_USER)],
                f"oks {a.oks}, warns {a.warns}")
         expect([s["server"] for s in w.starts()] == ["csa-zendesk-stub"], f"{w.starts()}")
         expect([i for i in a.infos if "held for csa-skilljar" in i], f"infos {a.infos}")
@@ -4111,8 +4306,8 @@ def verify_run_flag_runs():
                        "csa-skilljar": reg(std_bin(w, "csa-skilljar"))})
         a = w.verify(run=True)
         a.ok()
-        expect(a.oks == [ok_line("csa-skilljar", CC_USER, "csa-skilljar-stub 9.9.9"),
-                         ok_line("csa-zendesk", CC_USER, "csa-zendesk-stub 9.9.9")],
+        expect(a.oks == [ok_line("csa-skilljar", CC_USER),
+                         ok_line("csa-zendesk", CC_USER)],
                f"oks {a.oks}, warns {a.warns}, infos {a.infos}")
         expect(len(w.starts()) == 2, f"{len(w.starts())} launches")
 
@@ -4122,7 +4317,7 @@ def failure_todo_and_ledger_absent_print():
     with world() as w:
         w.std_server("csa-zendesk", mode="error")
         w.claude(user={"csa-zendesk": reg(std_bin(w, "csa-zendesk"))})
-        title = T_NO_ANSWER.format(name="csa-zendesk", client=CC_USER)
+        title = no_answer("csa-zendesk")
         a = w.verify()
         a.ok()
         expect(a.has_todo(45, title), f"ledger {a.todos}")
@@ -4517,8 +4712,11 @@ MUTATIONS = [
     # ── verify: Task 3 Step 4, the plan's four ──
     ("silent_server_times_out_and_is_killed", "remove the process-group kill",
      "        os.killpg(pgid, sig)\n", "        os.kill(pgid, sig)\n"),
-    ("exits_before_answering_masked", "skip masking",
-     "    return clean(mask(text, env))[:limit]", "    return clean(text)[:limit]"),
+    # The plan's "skip masking": masking is gone (review of bbb6f82; nothing of a server's text
+    # is shown), so its mutation is the leak masking stood guard against.
+    ("exits_before_answering_masked", "print what the server left on stdout at its exit",
+     '                return False, why, junk + (kind == "junk")',
+     '                return False, why + out.decode("utf-8", "replace"), junk + (kind == "junk")'),
     ("launcher_form_not_launched", "launch launcher forms",
      'LAUNCHED_STATES = ("standard", "elsewhere")',
      'LAUNCHED_STATES = ("standard", "elsewhere", "launcher")'),
@@ -4527,14 +4725,22 @@ MUTATIONS = [
      'VERIFY_ON_RERUN = frozenset(("csa-google-workspace", "csa-google-gmail-calendar", '
      '"csa-skilljar", "csa-zendesk"))'),
     # ── verify: the guards Task 3 added, each broken on purpose (ADR-005) ──
-    ("exits_before_answering_masked", "drop the gate's token redactions",
-     "    for pattern, repl in REDACTIONS:\n        text = pattern.sub(repl, text)\n", ""),
-    ("exits_before_answering_masked", "cut a server's line before masking it",
-     "    return clean(mask(text, env))[:limit]", "    return clean(mask(text[:limit], env))"),
     ("error_response_reported", "print the error's own message",
-     '        return False, ("answered with error %d" % code if type(code) is int\n'
-     '                       else "answered with an error")',
-     '        return False, "answered with error %s: %s" % (code, err.get("message"))'),
+     "            return False, F_ERROR.format(code=code)\n",
+     '            return False, F_ERROR.format(code=code) + str(err.get("message"))\n'),
+    ("no_server_text_printed", "say the server's own name in its line",
+     "    return True, None\n", "    return False, name\n"),
+    ("no_server_text_printed", "print any error code, not only one JSON-RPC reserves",
+     "        if type(code) is int and low <= code <= high:", "        if type(code) is int:"),
+    ("exits_before_answering_masked", "name the command's args in the to-do",
+     "command=tilde(argv[0])", 'command=" ".join(argv)'),
+    ("orphan_child_is_stopped", "take a process group to be empty without asking",
+     "    try:\n        os.killpg(pgid, 0)\n    except OSError:\n        return False\n    return True\n",
+     "    return False\n"),
+    ("time_budget_bounds_the_launches", "launch past the budget",
+     "        if now - started + launch_max() > VERIFY_BUDGET:", "        if False:"),
+    ("launcher_behind_another_name_left", "know a launcher by its own name only",
+     "    for name in (base, os.path.basename(os.path.realpath(path))):", "    for name in (base,):"),
     ("dead_registration_not_launched", "launch a dead registration",
      'LAUNCHED_STATES = ("standard", "elsewhere")',
      'LAUNCHED_STATES = ("standard", "elsewhere", "dead")'),
@@ -4585,8 +4791,8 @@ MUTATIONS = [
     ("answers", "start the server with the stop signals held",
      "preexec_fn=unhold if mask_found is not None else None)", "preexec_fn=None)"),
     ("failure_todo_and_ledger_absent_print", "leave no to-do for a server that did not answer",
-     "            todos.add(TODO_CHECK, T_NO_ANSWER.format(name=f.reg.name, client=f.reg.where()))\n",
-     "            pass\n"),
+     "            todos.add(TODO_CHECK, T_NO_ANSWER.format(name=f.reg.name, client=f.reg.where(),\n",
+     "            pass\n            (TODO_CHECK, T_NO_ANSWER.format(name=f.reg.name, client=f.reg.where(),\n"),
     ("signal_during_check_leaves_no_server", "let a stop signal end verify where it stands",
      "            with exits_on_signals():\n", "            with contextlib.nullcontext():\n"),
     ("signal_during_check_leaves_no_server", "stop the server without holding the stop signals",
