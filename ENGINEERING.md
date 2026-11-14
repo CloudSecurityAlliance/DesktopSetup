@@ -896,9 +896,10 @@ until the CINO answers D5, so a rerun launches nothing.
   printed: not its stdout or stderr, its name or version, or an error's message.
   - Only integers of the server's reach a line: an exit code or signal number, a JSON-RPC error
     code in the range the spec reserves (any other code is not printed), and a count of stdout
-    lines that were not JSON.
+    lines that were not JSON, shown as "more than 1000" above that.
   - A to-do for a server that did not answer names its command, never its args or env, to run
-    in a terminal to see its own messages.
+    in a terminal to see its own messages. For the interpreter form it adds the pinned
+    `-m <module>` from the script's own table, since a bare Python would open a prompt.
   - Masking the server's text was tried first. The review of `bbb6f82` got values past it four
     ways: an arg, a value split over two lines, an escaped value, and a value cut at the end of
     the stderr tail kept. A deny-list cannot be made complete, so nothing is shown.

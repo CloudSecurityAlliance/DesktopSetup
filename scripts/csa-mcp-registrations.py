@@ -110,7 +110,7 @@ import tempfile
 import time
 import unicodedata
 
-SCRIPT_VERSION = "2026-11-13T18:24Z"
+SCRIPT_VERSION = "2026-11-14T02:18Z"
 
 # ── The plan's decisions (D1-D5). Each is pinned by one test; an answer changes the constant. ──
 
@@ -2298,6 +2298,7 @@ VERIFY_BUDGET = 120.0
 # Once it has exited, how long its pipes may still be read for what it wrote before it went.
 DRAIN = 0.5
 LINE_MAX = 1024 * 1024    # a stdout line longer than this is skipped, not held
+JUNK_SHOWN_MAX = 1000     # a count of lines skipped above this is shown as "more than 1000"
 PROTOCOL_VERSION = "2025-06-18"
 CHECK_CLIENT = "csa-desktopsetup-check"
 # What may be launched: a registration that is a direct executable (A12) and works. A launcher
@@ -2359,8 +2360,9 @@ GEMINI_SECRET_VALUE = re.compile("|".join((
 # coordinator's ruling under P1). Masking a server's text was tried and is a deny-list that
 # cannot be made complete: an arg, a value split over lines, an escaped value, or a cut tail
 # got through it. What a server can still put into a line is an exit code (0-255) or signal
-# number, a JSON-RPC error code in the range the spec reserves, and a count of lines skipped -
-# integers, never its text. To see a server's own messages, the to-do names its command to run.
+# number, a JSON-RPC error code in the range the spec reserves, and a count of lines skipped,
+# capped at JUNK_SHOWN_MAX - integers, never its text. To see a server's own messages, the to-do
+# names its command to run.
 JSONRPC_RESERVED = (-32768, -32000)
 
 TODO_CHECK = 45
@@ -2674,6 +2676,16 @@ def sharing(shared):
     return " and ".join(names), ", ".join(f.reg.where() for f in shared)
 
 
+def command_of(argv, name):
+    """What a to-do tells the person to run to see a server's own messages: its command, and
+    for the interpreter form the pinned `-m <module>` from SERVERS, without which the bare Python
+    would open a prompt. Never its other args, nor its env: those can hold values."""
+    module = SERVERS[name].module
+    if argv[1:] == ["-m", module]:
+        return f"{tilde(argv[0])} -m {module}"
+    return tilde(argv[0])
+
+
 def report(argv, env, shared, todos):
     """Run one launch, shared by every finding in `shared`, and say what it showed - in this
     file's own words only."""
@@ -2688,9 +2700,11 @@ def report(argv, env, shared, todos):
         emit("warn", W_CHECK.format(name=name, clients=clients, why=text))
         for f in shared:
             todos.add(TODO_CHECK, T_NO_ANSWER.format(name=f.reg.name, client=f.reg.where(),
-                                                     command=tilde(argv[0])))
+                                                     command=command_of(argv, f.reg.name)))
     if junk:
-        emit("info", I_JUNK.format(name=name, clients=clients, n=junk, s="" if junk == 1 else "s",
+        # Capped: the count is the one number a server sets freely (review of c2678ee).
+        n = junk if junk <= JUNK_SHOWN_MAX else f"more than {JUNK_SHOWN_MAX}"
+        emit("info", I_JUNK.format(name=name, clients=clients, n=n, s="" if junk == 1 else "s",
                                    were="was" if junk == 1 else "were"))
     if not stopped:
         emit("warn", W_STUCK.format(name=name, clients=clients))
