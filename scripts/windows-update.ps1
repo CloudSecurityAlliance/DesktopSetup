@@ -17,7 +17,7 @@
 
 $ErrorActionPreference = 'Stop'
 
-$ScriptVersion = "2026-11-10T23:51Z"
+$ScriptVersion = "2026-11-14T06:16Z"
 
 # ── Snapshot location ───────────────────────────────────────
 
@@ -553,6 +553,13 @@ function Confirm-Step {
     }
     Write-CsaLog $question 'prompt'
     $reply = Read-Host $question
+    # End of input is not consent: Read-Host returns $null there (measured on pwsh 7.6; 5.1 not
+    # measured), and it is answered no here, and logged as such, rather than left to the test
+    # below. confirm() in the .sh scripts answers no the same way (review of f18337c, M2).
+    if ($null -eq $reply) {
+        Write-CsaLog "no answer: input closed -> no" 'prompt'
+        return $false
+    }
     Write-CsaLog "answered: '$reply'" 'prompt'
     return ($reply -eq '' -or $reply -match '^[Yy]')
 }
