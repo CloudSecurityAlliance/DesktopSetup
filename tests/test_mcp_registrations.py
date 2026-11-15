@@ -4571,8 +4571,8 @@ WHY_NOT_PY = ("csa-mcp-registrations.py is not the audit this expects (a network
 
 def probe_run(run):
     """A logged python run that is a question, not a step: the interpreter probe, or the
-    interface probe (`--version`, `<sub> --help`; re-review of 8dc8699)."""
-    return PROBE in run or run.endswith(" --version") or run.endswith(" --help")
+    interface probe (`--version`, `--interface`; reviews of 8dc8699 and c5308c3)."""
+    return PROBE in run or run.endswith(" --version") or run.endswith(" --interface")
 EACH_PRINTS = "each prints what it may do before it is used"
 PROBE = "import sys, json; sys.exit(sys.version_info < (3, 9))"
 STUB_ROW = "csa-zendesk in Claude Code (user): STUB-PLAN-ROW"
@@ -4582,7 +4582,10 @@ STUB_COUNT = "1 CSA registration in 1 client; 0 need nothing"
 ABS_PYTHONS = {"brew": "/opt/homebrew/bin/python3", "local": "/usr/local/bin/python3",
                "apple": "/usr/bin/python3"}
 SYS_TOOLS = ("mktemp", "rm", "mv", "cp", "sed", "sleep", "cat", "tr", "grep", "base64",
-             "mkdir", "chmod", "head", "tail", "awk", "sort", "cut", "ls")
+             "mkdir", "chmod", "head", "tail", "awk", "sort", "cut", "ls", "perl")
+# The line the .py prints for `--interface`, and the scripts expect (review of c5308c3).
+INTERFACE = "csa-mcp-registrations interface 1: plan apply verify"
+WHY_NO_PERL = "perl, which bounds each of its checks, was not found"
 
 # What the entry scripts are handed in place of csa-mcp-registrations.py. It logs each call (its
 # argv, its own path, and the approved file's text) and answers in the real one's line format.
@@ -4593,8 +4596,8 @@ argv = sys.argv[1:]
 if argv == ["--version"]:
     print("2026-11-14T06:16Z")
     sys.exit(0)
-if len(argv) == 2 and argv[0] in ("plan", "apply", "verify") and argv[1] == "--help":
-    print("usage: csa-mcp-registrations.py " + argv[0] + " [-h]")
+if argv == ["--interface"]:
+    print("csa-mcp-registrations interface 1: plan apply verify")
     sys.exit(0)
 cmd = argv[0] if argv else ""
 entry = {"argv": argv, "file": os.path.abspath(__file__), "approved": None}
@@ -4717,13 +4720,15 @@ def internal_block(text, script):
 class Rig(object):
     """A fixture machine for the shell wiring, under one temporary directory."""
 
-    def __init__(self, tmp, gh="member", clt=False, curl="ok", pythons=("path",)):
+    def __init__(self, tmp, gh="member", clt=False, curl="ok", pythons=("path",), perl=True):
         r = self.root = Path(tmp)
         self.stub, self.sys, self.home = r / "stub", r / "sys", r / "home"
         self.tmp, self.fix = r / "tmp", r / "fix"
         for d in (self.stub, self.sys, self.home, self.tmp, self.fix):
             d.mkdir(parents=True)
         for tool in SYS_TOOLS:
+            if tool == "perl" and not perl:
+                continue
             found = shutil.which(tool, path="/usr/bin:/bin")
             if found:
                 (self.sys / tool).symlink_to(found)
@@ -4805,15 +4810,20 @@ class Rig(object):
         parts.append(body)
         return "\n".join(parts) + "\n"
 
-    def run(self, script, body, stdin="", env=None, timeout=60, path_first=(), **kw):
+    def start(self, script, body, env=None, path_first=(), **kw):
+        """The shell run, started in a session and process group of its own: a terminal's
+        foreground group, for a case that sends it a Ctrl-C."""
         prog = self.root / "run.sh"
         prog.write_text(self.program(script, body, **kw), encoding="utf-8")
         e = dict(self.env)
         e["PATH"] = ":".join(str(p) for p in list(path_first) + self.path)
         e.update(env or {})
-        p = subprocess.Popen([SHELL, str(prog)], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
-                             stderr=subprocess.PIPE, env=e, cwd=str(self.root), text=True,
-                             start_new_session=True)
+        return subprocess.Popen([SHELL, str(prog)], stdin=subprocess.PIPE,
+                                stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=e,
+                                cwd=str(self.root), text=True, start_new_session=True)
+
+    def run(self, script, body, stdin="", env=None, timeout=60, path_first=(), **kw):
+        p = self.start(script, body, env=env, path_first=path_first, **kw)
         try:
             out, err = p.communicate(stdin, timeout=timeout)
         except subprocess.TimeoutExpired:
@@ -5055,31 +5065,27 @@ def wiring_download_not_python_skipped():
         expect_skipped_once(name, "HTML", rc, out, err, runs)
 
 
-# Python files that are not the audit (re-review of 8dc8699, item 1), each refused by one check:
-# the version's form, a usage line naming the command, or knowing all three commands.
+# Python files that are not the audit (re-reviews of 8dc8699 and c5308c3), each refused by one
+# check: no version, a version of another form, or an interface line other than the audit's.
+def answers(version, interface):
+    """A file that answers the two questions as given, and does nothing else."""
+    return ("import sys\n"
+            "a = sys.argv[1:]\n"
+            f"if a == ['--version']: print({version!r})\n"
+            f"elif a == ['--interface']: print({interface!r})\n")
+
+
 NOT_THE_AUDIT = {
     "does nothing": "pass\n",
-    "another program, no commands": (
+    "another program, no --interface": (
         "import argparse\n"
         "p = argparse.ArgumentParser(prog='something-else')\n"
         "p.add_argument('--version', action='version', version='2026-11-14T06:16Z')\n"
         "p.add_argument('--name')\n"
         "p.parse_args()\n"),
-    "the same commands, another version": (
-        "import argparse\n"
-        "p = argparse.ArgumentParser(prog='csa-mcp-registrations.py')\n"
-        "p.add_argument('--version', action='version', version='1.4.2')\n"
-        "sub = p.add_subparsers(dest='command')\n"
-        "for c in ('plan', 'apply', 'verify'):\n"
-        "    sub.add_parser(c)\n"
-        "p.parse_args()\n"),
-    "plan only": (
-        "import argparse\n"
-        "p = argparse.ArgumentParser(prog='csa-mcp-registrations.py')\n"
-        "p.add_argument('--version', action='version', version='2026-11-14T06:16Z')\n"
-        "sub = p.add_subparsers(dest='command')\n"
-        "sub.add_parser('plan')\n"
-        "p.parse_args()\n"),
+    "the same interface, another version": answers("1.4.2", INTERFACE),
+    "plan only": answers("2026-11-14T06:16Z", "csa-mcp-registrations interface 1: plan"),
+    "another interface number": answers("2026-11-14T06:16Z", INTERFACE.replace(" 1:", " 2:")),
 }
 
 
@@ -5104,22 +5110,93 @@ def wiring_not_the_audit_skipped():
 
 @case
 def wiring_interface_probe_bounded():
-    """A file that hangs when it is run is stopped after 10 s by the probe, and the audit is
-    skipped in one line: the preflight, before anybody has agreed, cannot hang on it."""
+    """A file that hangs when it is asked is stopped after 10 s, at either question, and the
+    audit is skipped in one line: the preflight, before anybody has agreed, cannot hang on it,
+    and nothing of the file is left running."""
+    hangs = {
+        "at --version": "",
+        # Answers the first question as the audit does, so only the second can hang.
+        "at --interface": "import sys\nif sys.argv[1:] == ['--version']:\n"
+                          "    print('2026-11-14T06:16Z')\n    sys.exit(0)\n",
+    }
+    for where, head in hangs.items():
+        with rig_dir() as t:
+            rig = Rig(t)
+            pid_file = rig.root / "hung.pid"
+            hang = rig.root / "hang" / "csa-mcp-registrations.py"
+            hang.parent.mkdir()
+            hang.write_text(head + f"import os, time\nopen({str(pid_file)!r}, 'w')"
+                            ".write(str(os.getpid()))\ntime.sleep(30)\n", encoding="utf-8")
+            started = time.monotonic()
+            try:
+                rc, out, err = rig.run(MAC_ENTRY[0], "csa_registrations_preview\necho AFTER",
+                                       env={"CSA_REGISTRATIONS_PY": str(hang)}, timeout=40)
+            finally:
+                pid = int(pid_file.read_text()) if pid_file.exists() else None
+                alive = False
+                if pid:
+                    try:
+                        os.kill(pid, 0)
+                        alive = True
+                        os.kill(pid, signal.SIGKILL)
+                    except OSError:
+                        pass
+            took = time.monotonic() - started
+        expect(rc == 0 and "AFTER" in out
+               and REG_SKIPPED.format(why=WHY_NOT_PY) in out.split("\n"),
+               f"{where}: no skip row for a file that hangs: {out} {err[-300:]}")
+        expect(9 <= took < 20, f"{where}: the probe was stopped after {took:.1f}s, not 10")
+        expect(pid and not alive, f"{where}: the file that hung is still running")
+
+
+@case
+def wiring_real_py_passes_the_probe():
+    """The probe and the shipping .py agree: the real csa-mcp-registrations.py, run by this
+    Python, is what csa_registrations_usable expects, in any environment a person's shell may
+    export. Python 3.14's argparse colours its output under FORCE_COLOR and wraps it at COLUMNS,
+    which once skipped the real audit as "a network sign-in page" (review of c5308c3). Without
+    this, a change to the .py's version or interface would quietly skip the audit on every Mac."""
+    envs = ({}, {"FORCE_COLOR": "1"}, {"COLUMNS": "40"}, {"COLUMNS": "12"}, {"NO_COLOR": "1"},
+            {"TERM": "dumb"}, {"FORCE_COLOR": "1", "COLUMNS": "40", "TERM": "xterm-256color"})
+    for name in MAC_ENTRY:
+        for env in envs:
+            with rig_dir() as t:
+                rig = Rig(t)
+                rc, out, err = rig.run(name, f'if csa_registrations_usable "$(command -v python3)" '
+                                             f'"{SCRIPT}"; then echo USABLE; else echo REFUSED; fi',
+                                       env=env)
+            expect(rc == 0 and "USABLE" in out,
+                   f"{name} {env}: the real .py does not pass the probe: {out} {err[-300:]}")
+
+
+@case
+def wiring_ctrl_c_stops_a_hung_probe():
+    """A Ctrl-C while the probe waits on a file that hangs ends the run and the file both: the
+    probe runs in the foreground, in the run's own process group, so the interrupt reaches it.
+    A background job would ignore it and run on after the installer had gone (review of
+    c5308c3)."""
     with rig_dir() as t:
         rig = Rig(t)
+        pid_file = rig.root / "hung.pid"
         hang = rig.root / "hang" / "csa-mcp-registrations.py"
         hang.parent.mkdir()
-        hang.write_text(f"import os, time\nopen({str(rig.root / 'hung.pid')!r}, 'w')"
-                        ".write(str(os.getpid()))\ntime.sleep(30)\n", encoding="utf-8")
-        started = time.monotonic()
+        hang.write_text(f"import os, time\nopen({str(pid_file)!r}, 'w').write(str(os.getpid()))\n"
+                        "time.sleep(30)\n", encoding="utf-8")
+        p = rig.start(MAC_ENTRY[0], "csa_registrations_preview\necho AFTER",
+                      env={"CSA_REGISTRATIONS_PY": str(hang)})
+        pid, alive, out = None, False, ""
         try:
-            rc, out, err = rig.run(MAC_ENTRY[0], "csa_registrations_preview\necho AFTER",
-                                   env={"CSA_REGISTRATIONS_PY": str(hang)}, timeout=40)
+            deadline = time.monotonic() + 8
+            while not pid_file.exists() and time.monotonic() < deadline:
+                time.sleep(0.05)
+            expect(pid_file.exists(), "the file that hangs never started")
+            time.sleep(0.3)  # into its sleep
+            pid = int(pid_file.read_text())
+            os.killpg(p.pid, signal.SIGINT)  # what a Ctrl-C sends the terminal's foreground group
+            out, _ = p.communicate(timeout=8)
+        except subprocess.TimeoutExpired:
+            pass
         finally:
-            pid_file = rig.root / "hung.pid"
-            pid = int(pid_file.read_text()) if pid_file.exists() else None
-            alive = False
             if pid:
                 try:
                     os.kill(pid, 0)
@@ -5127,26 +5204,31 @@ def wiring_interface_probe_bounded():
                     os.kill(pid, signal.SIGKILL)
                 except OSError:
                     pass
-        took = time.monotonic() - started
-    expect(rc == 0 and "AFTER" in out and REG_SKIPPED.format(why=WHY_NOT_PY) in out.split("\n"),
-           f"no skip row for a file that hangs: {out} {err[-300:]}")
-    expect(9 <= took < 20, f"the probe was stopped after {took:.1f}s, not 10")
-    expect(pid and not alive, "the file that hung is still running")
+            if p.poll() is None:  # whatever happened above, nothing of this case outlives it
+                os.killpg(p.pid, signal.SIGKILL)
+                p.communicate()
+    expect(p.returncode not in (0, None) and "AFTER" not in out,
+           f"the run went on after a Ctrl-C (exit {p.returncode}): {out}")
+    expect(not alive, "the file that hung is still running after the Ctrl-C")
 
 
 @case
-def wiring_real_py_passes_the_probe():
-    """The probe and the shipping .py agree: the real csa-mcp-registrations.py, run by this
-    Python, is what csa_registrations_usable expects. Without this, a change to the .py's version
-    form or its commands would quietly skip the audit on every Mac."""
+def wiring_perl_missing_skipped():
+    """No perl, so no way to bound a check: the audit is skipped in one line before and after the
+    setups, and no Python is run at all."""
     for name in MAC_ENTRY:
         with rig_dir() as t:
-            rig = Rig(t)
-            rc, out, err = rig.run(name, 'csa_registrations_dir\n'
-                                         f'if csa_registrations_usable "$(command -v python3)" '
-                                         f'"{SCRIPT}"; then echo USABLE; else echo REFUSED; fi')
-        expect(rc == 0 and "USABLE" in out,
-               f"{name}: the real .py does not pass the probe: {out} {err[-300:]}")
+            rig = Rig(t, perl=False).override()
+            rc, out, err = rig.run(name, "csa_registrations_preview\nrepair_csa_registrations\n"
+                                         "echo AFTER")
+            runs = rig.log("python")
+        expect(rc == 0 and "AFTER" in out, f"{name}: exited {rc}: {err[-300:]}")
+        expect(REG_SKIPPED.format(why=WHY_NO_PERL) in out.split("\n"),
+               f"{name}: no skip row for a missing perl: {out}")
+        said = [ln for ln in err.split("\n") if ln.startswith("WARN ")]
+        expect(said == [f"WARN CSA MCP registrations were not checked: {WHY_NO_PERL}; nothing was "
+                        "changed"], f"{name}: the repair did not say it once: {said}")
+        expect(not runs, f"{name}: a Python was run with nothing to bound it: {runs}")
 
 
 @case
@@ -5737,6 +5819,14 @@ MUTATIONS = [
     ("left_finding_printed_once_without_ledger", "print a to-do again under its own warning (L1)",
      '            if title not in SHOWN:\n                emit("info", title)',
      '            if True:\n                emit("info", title)'),
+    # ── the review of c5308c3: the interface lines are the .py's own, whatever the environment ──
+    ("wiring_real_py_passes_the_probe", "print --interface through argparse, which wraps at COLUMNS",
+     '    if given == ["--interface"]:\n        return fixed_line(INTERFACE)\n',
+     '    if given == ["--interface"]:\n        p = argparse.ArgumentParser()\n'
+     '        p.add_argument("--interface", action="version", version=INTERFACE)\n'
+     "        p.parse_args(given)\n"),
+    ("wiring_real_py_passes_the_probe", "print --version through argparse, which wraps at COLUMNS",
+     '    if given == ["--version"]:\n        return fixed_line(SCRIPT_VERSION)\n', ""),
 ]
 
 # Task 4 Step 1's guards, each broken on purpose in the entry scripts (ADR-005): (the case that
@@ -5793,19 +5883,35 @@ WIRING_MUTATIONS = [
     ("wiring_not_the_audit_skipped", "take any --version output",
      '  [[ "$ver" =~ ^20[0-9]{2}-[01][0-9]-[0-3][0-9]T[0-2][0-9]:[0-5][0-9]Z$ ]] || return 1\n',
      "", MAC_ENTRY),
-    ("wiring_not_the_audit_skipped", "take a command's --help by its exit code alone",
-     '    [[ "$first" == "usage: "*" $sub "* ]] || return 1\n', "", MAC_ENTRY),
-    ("wiring_not_the_audit_skipped", "ask about plan only",
-     "  for sub in plan apply verify; do\n", "  for sub in plan; do\n", MAC_ENTRY),
+    ("wiring_not_the_audit_skipped", "take any --interface output",
+     '  [[ "$iface" == "csa-mcp-registrations interface 1: plan apply verify" ]] || return 1\n',
+     "", MAC_ENTRY),
     ("wiring_not_the_audit_skipped", "skip the probe in the preview",
      '  if ! csa_registrations_usable "$python" "$py"; then\n    echo ',
      "  if false; then\n    echo ", MAC_ENTRY),
     ("wiring_not_the_audit_skipped", "skip the probe in the repair",
      '      elif ! csa_registrations_usable "$python" "$py"; then\n',
      "      elif false; then\n", MAC_ENTRY),
-    ("wiring_interface_probe_bounded", "ask for the version without the bound",
-     '  csa_registrations_bounded "$out" "$python" -I "$py" --version || return 1\n',
-     '  "$python" -I "$py" --version </dev/null >"$out" 2>/dev/null || return 1\n', MAC_ENTRY),
+    # ── the review of c5308c3: each probe in the foreground, under a perl alarm ──
+    ("wiring_interface_probe_bounded", "drop the alarm",
+     "  perl -e 'alarm shift; exec", "  perl -e 'shift; exec", MAC_ENTRY),
+    ("wiring_ctrl_c_stops_a_hung_probe", "run the probe as a background job",
+     "  perl -e 'alarm shift; exec { $ARGV[0] } @ARGV or exit 127' 10 \"$@\" </dev/null 2>/dev/null\n",
+     "  perl -e 'alarm shift; exec { $ARGV[0] } @ARGV or exit 127' 10 \"$@\" </dev/null 2>/dev/null &\n"
+     "  wait \"$!\"\n", MAC_ENTRY),
+    ("wiring_dead_path_python_skipped", "take a command perl could not start for a pass",
+     " @ARGV or exit 127' 10", " @ARGV' 10", MAC_ENTRY),
+    ("wiring_perl_missing_skipped", "drop the perl check from the preview",
+     "  if ! has_command perl; then\n    echo ", "  if false; then\n    echo ", MAC_ENTRY),
+    ("wiring_perl_missing_skipped", "drop the perl check from the repair",
+     "  elif ! has_command perl; then\n", "  elif false; then\n", MAC_ENTRY),
+    ("wiring_interface_probe_bounded", "ask the version outside the bound",
+     '  ver="$(csa_registrations_bounded "$python" -I "$py" --version)" || return 1\n',
+     '  ver="$("$python" -I "$py" --version </dev/null 2>/dev/null)" || return 1\n', MAC_ENTRY),
+    ("wiring_interface_probe_bounded", "ask the interface outside the bound",
+     '  iface="$(csa_registrations_bounded "$python" -I "$py" --interface)" || return 1\n',
+     '  iface="$("$python" -I "$py" --interface </dev/null 2>/dev/null)" || return 1\n',
+     MAC_ENTRY),
     ("wiring_real_py_passes_the_probe", "expect a version form the .py does not print",
      "^20[0-9]{2}-[01][0-9]-[0-3][0-9]T[0-2][0-9]:[0-5][0-9]Z$",
      "^v20[0-9]{2}-[01][0-9]-[0-3][0-9]T[0-2][0-9]:[0-5][0-9]Z$", MAC_ENTRY),
@@ -5833,16 +5939,16 @@ WIRING_MUTATIONS = [
      'cand="$(uv python find --system "$CSA_PYTHON_PREFERRED" 2>/dev/null)" || cand=""',
      'cand=""', MAC_ENTRY),
     ("wiring_dead_path_python_skipped", "take a candidate whatever its probe says",
-     "    if csa_registrations_bounded /dev/null \"$cand\" -I -c 'import sys, json; "
-     "sys.exit(sys.version_info < (3, 9))'; then",
-     "    if csa_registrations_bounded /dev/null \"$cand\" -I -c 'import sys, json; "
-     "sys.exit(sys.version_info < (3, 9))' || true; then", MAC_ENTRY),
+     "    if csa_registrations_bounded \"$cand\" -I -c 'import sys, json; "
+     "sys.exit(sys.version_info < (3, 9))' >/dev/null; then",
+     "    if csa_registrations_bounded \"$cand\" -I -c 'import sys, json; "
+     "sys.exit(sys.version_info < (3, 9))' >/dev/null || true; then", MAC_ENTRY),
     ("wiring_apple_python_stub_not_invoked_without_clt", "drop the Command Line Tools check",
      '    if [[ "$cand" == "$apple" ]] && ! xcode-select -p >/dev/null 2>&1; then',
      "    if false; then", MAC_ENTRY),
-    ("wiring_python_probe_bounded", "wait for the probe however long it takes",
-     '  while kill -0 "$pid" 2>/dev/null && [[ $waited -lt 100 ]]; do',
-     '  while kill -0 "$pid" 2>/dev/null; do', MAC_ENTRY),
+    ("wiring_python_probe_bounded", "probe a Python candidate outside the bound",
+     "    if csa_registrations_bounded \"$cand\" -I -c",
+     "    if \"$cand\" -I -c", MAC_ENTRY),
     ("wiring_verify_called_without_run", "run verify --run on every rerun",
      "        args=(verify)\n", "        args=(verify --run)\n", MAC_ENTRY),
     ("wiring_log_lines_to_debug_log_only", "print the plan's log lines on the screen",

@@ -26,7 +26,7 @@
 
 set -euo pipefail
 
-SCRIPT_VERSION="2026-11-15T17:32Z"
+SCRIPT_VERSION="2026-11-15T18:17Z"
 
 # ── CSA plugin marketplaces ─────────────────────────────────────────
 # Registered in sync_plugin_marketplaces() regardless of whether
@@ -590,22 +590,15 @@ csa_registrations_py() {
   printf '%s\n' "$dest"
 }
 
-# Runs a command with no input, its stdout into the file $1 and its stderr nowhere, and stops it
-# after 10 s, because stock macOS has no `timeout`. Returns its exit status, non-zero when it was
-# stopped. Every run the preflight makes before the person has agreed goes through it.
+# Runs a command for at most 10 s, in the foreground, with no input and its stderr nowhere; its
+# stdout is the caller's. perl sets an alarm and execs the command in its own place, and an alarm
+# outlives exec, so SIGALRM ends the command itself, and a Ctrl-C reaches it with the rest of the
+# run: no background job, and nothing left to kill. `or exit 127`, because a bare `exec` that
+# fails lets perl run on and exit 0, which would read as a pass. Bounded this way: each Python
+# candidate's probe and each interface question, nothing else (plan, apply and verify bound their
+# own steps). A child the command starts is not stopped with it; neither question starts one.
 csa_registrations_bounded() {
-  local out="$1" pid waited=0
-  shift
-  "$@" </dev/null >"$out" 2>/dev/null &
-  pid=$!
-  while kill -0 "$pid" 2>/dev/null && [[ $waited -lt 100 ]]; do
-    sleep 0.1
-    waited=$((waited + 1))
-  done
-  if [[ $waited -ge 100 ]]; then
-    kill -9 "$pid" 2>/dev/null || true
-  fi
-  wait "$pid" 2>/dev/null
+  perl -e 'alarm shift; exec { $ARGV[0] } @ARGV or exit 127' 10 "$@" </dev/null 2>/dev/null
 }
 
 # Prints a Python that can run csa-mcp-registrations.py (stdlib only, 3.9 or later), or nothing.
@@ -636,7 +629,7 @@ csa_registrations_python() {
     if [[ "$cand" == "$apple" ]] && ! xcode-select -p >/dev/null 2>&1; then
       continue
     fi
-    if csa_registrations_bounded /dev/null "$cand" -I -c 'import sys, json; sys.exit(sys.version_info < (3, 9))'; then
+    if csa_registrations_bounded "$cand" -I -c 'import sys, json; sys.exit(sys.version_info < (3, 9))' >/dev/null; then
       printf '%s\n' "$cand"
       return 0
     fi
@@ -646,27 +639,19 @@ csa_registrations_python() {
 
 # Whether $2 is the csa-mcp-registrations.py this script runs, as Python $1 runs it, asked only
 # about its interface: `--version` prints a version of the form every script here declares, and
-# `plan`, `apply` and `verify` each answer `--help` with a usage line naming that command. The
-# usage line, not the exit code alone: argparse answers `--help` with 0 even after a word it does
-# not know. A network sign-in page's HTML fails to compile before any of it runs, a file that does
-# nothing prints no version, and another program knows none of the three, so each is one skip
-# line, not a run that fails, prints usage errors and reports it three times. Each question is
-# bounded, so a file that hangs is a skip too.
+# `--interface` prints exactly the line below. The .py writes both itself, not through argparse,
+# so colour (FORCE_COLOR), the terminal's width (COLUMNS) and TERM cannot change them; argparse's
+# own usage lines change with all three. A network sign-in page's HTML fails to compile before any
+# of it runs, a file that does nothing prints nothing, and another program, or another version of
+# this one, prints something else: each is one skip line, not a run that fails and reports it
+# three times. Each question is bounded (csa_registrations_bounded), so a file that hangs is a
+# skip too.
 csa_registrations_usable() {
-  local python="$1" py="$2" out ver sub first
-  if [[ -z "${CSA_REG_DIR:-}" || ! -d "$CSA_REG_DIR" ]]; then
-    return 1
-  fi
-  out="$CSA_REG_DIR/version.out"
-  csa_registrations_bounded "$out" "$python" -I "$py" --version || return 1
-  ver="$(cat "$out" 2>/dev/null)" || ver=""
+  local python="$1" py="$2" ver iface
+  ver="$(csa_registrations_bounded "$python" -I "$py" --version)" || return 1
   [[ "$ver" =~ ^20[0-9]{2}-[01][0-9]-[0-3][0-9]T[0-2][0-9]:[0-5][0-9]Z$ ]] || return 1
-  for sub in plan apply verify; do
-    csa_registrations_bounded "$out" "$python" -I "$py" "$sub" --help || return 1
-    first=""
-    read -r first < "$out" || true
-    [[ "$first" == "usage: "*" $sub "* ]] || return 1
-  done
+  iface="$(csa_registrations_bounded "$python" -I "$py" --interface)" || return 1
+  [[ "$iface" == "csa-mcp-registrations interface 1: plan apply verify" ]] || return 1
   return 0
 }
 
@@ -695,6 +680,10 @@ csa_registrations_preview() {
   csa_registrations_dir
   if [[ -z "${CSA_REG_DIR:-}" ]]; then
     echo "                       registration audit skipped: couldn't make a temporary directory; nothing will be changed"
+    return 0
+  fi
+  if ! has_command perl; then
+    echo "                       registration audit skipped: perl, which bounds each of its checks, was not found; nothing will be changed"
     return 0
   fi
   python="$(csa_registrations_python)" || python=""
@@ -748,6 +737,8 @@ repair_csa_registrations() {
   csa_registrations_dir
   if [[ -z "${CSA_REG_DIR:-}" ]]; then
     why="couldn't make a temporary directory"
+  elif ! has_command perl; then
+    why="perl, which bounds each of its checks, was not found"
   else
     python="$(csa_registrations_python)" || python=""
     if [[ -z "$python" ]]; then

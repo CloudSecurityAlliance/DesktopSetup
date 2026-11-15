@@ -77,10 +77,14 @@ CRLF file and a `.cmd` shim.
   - `Repair-CsaRegistrations`, the last call in `Invoke-CSAInternalSetup`;
   - the twins of the rest of what the macOS functions do. *Corrected 2026-11-15:* the macOS build has eight
     (`csa_registrations_dir`, `_py`, `_bounded`, `_python`, `_usable`, `_log`, `_preview` and
-    `repair_csa_registrations`, under "CSA MCP registrations" in each `macos-*.sh`). Its reviews added the
-    interface check (`--version` and each subcommand's `--help`, each bounded, so a sign-in page or another file
-    fetched in its place is skipped in one line), a 10 s bound on each Python and interface probe, and removal
-    of the directory on every exit path.
+    `repair_csa_registrations`, under "CSA MCP registrations" in each `macos-*.sh`). Its reviews added:
+    - an interface check: `--version` must print a version of the scripts' form, and `--interface` exactly
+      `csa-mcp-registrations interface 1: plan apply verify`. The `.py` writes both itself, so no environment
+      changes them. A sign-in page or another file fetched in its place is skipped in one line;
+    - a 10 s bound on each Python probe and each interface question. macOS uses a perl alarm, in the
+      foreground, so a Ctrl-C reaches the probe. Windows has no perl; its twin bounds them with the
+      `ProcessStartInfo` helper below;
+    - removal of the directory on every exit path.
 - **The working directory and plan file** are created once per run in the script's own scope, never inside a
   function whose output is captured (the macOS Task 4 defect the re-review found).
 - **Python:** a self-contained resolver, byte-identical in all three, as macOS's `csa_registrations_python` is.

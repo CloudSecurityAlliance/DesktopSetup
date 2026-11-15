@@ -85,6 +85,9 @@ plans/reviews/2026-11-12-registration-repair-measurements.md (M0, M1, M3-M7).
 logged. --out must be a new file: an existing one, or the path of any client's config, is
 refused and left as it is. Exit 0, or 2 on an error, in which case no plan file is left.
 
+`--version` prints SCRIPT_VERSION and `--interface` prints INTERFACE, each alone on one line and
+the same whatever the environment: the entry scripts check both before they run this file.
+
 `apply` and `verify` print `ok<TAB>`, `warn<TAB>` and `info<TAB>` lines. Their to-dos (restart a
 client, quit Claude Desktop, a registration left for somebody to fix, a server that did not
 answer) go to CSA_TODO_FILE when it is set, and are printed as `info` lines when it is not. Exit
@@ -110,7 +113,7 @@ import tempfile
 import time
 import unicodedata
 
-SCRIPT_VERSION = "2026-11-14T06:16Z"
+SCRIPT_VERSION = "2026-11-15T18:17Z"
 
 # ── The plan's decisions (D1-D5). Each is pinned by one test; an answer changes the constant. ──
 
@@ -2773,10 +2776,33 @@ def verify(args):
     return 0
 
 
+# What the entry scripts probe for before they run this file (csa_registrations_usable): with
+# `--interface` alone it prints exactly this line, and with `--version` alone exactly
+# SCRIPT_VERSION. Both are written here, not by argparse, whose output FORCE_COLOR colours and
+# COLUMNS wraps (the review of c5308c3). Change a command, or how it is called, and change the
+# number with it, and the scripts that expect it.
+INTERFACE = "csa-mcp-registrations interface 1: plan apply verify"
+
+
+def fixed_line(text):
+    """Write one fixed line and nothing else, or exit 2 when it cannot be written."""
+    try:
+        sys.stdout.write(text + "\n")
+        sys.stdout.flush()
+    except (AttributeError, OSError, ValueError):
+        return 2
+    return 0
+
+
 def main(argv=None):
     SHOWN.clear()  # one run's screen: the tests call main() more than once in one process
     if hasattr(sys.stdout, "reconfigure"):
         sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    given = list(sys.argv[1:] if argv is None else argv)
+    if given == ["--interface"]:
+        return fixed_line(INTERFACE)
+    if given == ["--version"]:
+        return fixed_line(SCRIPT_VERSION)
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     ap.add_argument("--version", action="version", version=SCRIPT_VERSION)
     sub = ap.add_subparsers(dest="command")

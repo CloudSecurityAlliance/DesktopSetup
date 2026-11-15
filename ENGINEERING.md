@@ -924,15 +924,27 @@ The measurements behind the figures and rulings below (M0–M7) are in
    Then, only if `gh` is signed in and can see the gate repo, `csa_registrations_preview`:
    - makes the run's directory with `mktemp -d` (`CSA_REG_DIR`). `csa_on_exit` removes it on every
      exit path, a declined plan included;
+   - needs `perl`, which ships with macOS, to bound its checks (below). Without it the audit is
+     skipped in one line;
    - finds a Python: the first that is a real file and answers as 3.9 or later within 10 s, of
      `python3` on `PATH`, `uv python find --system 3.14`, `/opt/homebrew/bin/python3`,
      `/usr/local/bin/python3`, and `/usr/bin/python3` only when the Command Line Tools are
      installed (without them it opens an install dialog);
    - fetches the `.py` from `HEAD` into that directory, with `Cache-Control: no-cache` and a 60 s
      limit. `CSA_REGISTRATIONS_PY=<path>` runs a local copy instead, for tests and branch runs;
-   - asks the file whether it is the audit: `--version`, and each subcommand's `--help`, each
-     bounded at 10 s. A network sign-in page or another file in its place is skipped;
+   - asks the file whether it is the audit, each question within 10 s. `--version` must print a
+     version of the form every script here declares. `--interface` must print exactly
+     `csa-mcp-registrations interface 1: plan apply verify`. The `.py` writes both lines itself,
+     not through argparse, whose usage lines Python 3.14 colours under `FORCE_COLOR` and wraps
+     at `COLUMNS`. A network sign-in page, or another file in its place, is skipped in one line;
    - runs `plan --out <dir>/plan.json` and prints its rows under the block.
+
+   **The 10 s bound** is `perl -e 'alarm shift; exec { $ARGV[0] } @ARGV or exit 127' 10 …`
+   (`csa_registrations_bounded`). The command runs in the foreground, in perl's place. The alarm
+   outlives the `exec`, so `SIGALRM` ends the command itself, and a Ctrl-C reaches it with the
+   rest of the run. There is no background job, and nothing is left to kill. `or exit 127` is
+   there because a bare `exec` that fails lets perl exit 0. A child the command starts is not
+   stopped with it; neither question starts one.
 
    A step that fails prints one line, `registration audit skipped: <why>; nothing will be
    changed`, or `registration audit failed; nothing will be changed` when `plan` exits non-zero,
@@ -956,7 +968,7 @@ The measurements behind the figures and rulings below (M0–M7) are in
 
 **Run time.** These steps are bounded. The `plan` and `apply` processes themselves are not run
 under a bound, nor are the `gh` gate calls, `uv python find` or `xcode-select -p`:
-- **Before the plan:** each Python candidate gets 10 s, the fetch 60 s, and each of the four
+- **Before the plan:** each Python candidate gets 10 s, the fetch 60 s, and each of the two
   interface questions 10 s. Inside `plan`, `codex mcp list --json` gets 30 s, each distinct
   interpreter probe 10 s, and `ps` 30 s (asked only when a Desktop entry would be re-pointed).
 - **After the setups:** the Python and interface checks again, then `apply` re-audits under the
@@ -1174,6 +1186,7 @@ to run. From a checkout of this repo, current with `main` (`git pull`):
 ```bash
 python3 -I scripts/csa-mcp-registrations.py plan             # read-only: what a run would show
 python3 -I scripts/csa-mcp-registrations.py verify --run     # check every registered server now
+python3 -I scripts/csa-mcp-registrations.py --interface      # the line the entry scripts expect
 ```
 
 - `plan` writes nothing; with `--out FILE` it writes only that new file, at `0600`.
