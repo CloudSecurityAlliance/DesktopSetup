@@ -20,7 +20,7 @@
 
 set -euo pipefail
 
-SCRIPT_VERSION="2026-11-15T17:25Z"
+SCRIPT_VERSION="2026-11-15T17:32Z"
 
 # ── CSA plugin marketplaces ─────────────────────────────────────────
 # Each update run will add any entries from this list that aren't yet
@@ -1758,7 +1758,7 @@ setup_csa_mcp_server() {
 # `apply` on exactly that file, so a registration the person was not shown is reported and never
 # changed (A4), then `verify`, which launches no server while D5 holds.
 #
-# KEEP IN SYNC: these six functions are byte-identical in macos-ai-tools.sh, macos-update.sh and
+# KEEP IN SYNC: these eight functions are byte-identical in macos-ai-tools.sh, macos-update.sh and
 # macos-plugins.sh (tools/check-duplication.py). The Windows twins are #184's Task 4W; until they
 # land, tests/test_mcp_registrations.py's wiring_windows_twin_exists reports a SKIP on every run.
 
@@ -1800,17 +1800,35 @@ csa_registrations_py() {
   printf '%s\n' "$dest"
 }
 
+# Runs a command with no input, its stdout into the file $1 and its stderr nowhere, and stops it
+# after 10 s, because stock macOS has no `timeout`. Returns its exit status, non-zero when it was
+# stopped. Every run the preflight makes before the person has agreed goes through it.
+csa_registrations_bounded() {
+  local out="$1" pid waited=0
+  shift
+  "$@" </dev/null >"$out" 2>/dev/null &
+  pid=$!
+  while kill -0 "$pid" 2>/dev/null && [[ $waited -lt 100 ]]; do
+    sleep 0.1
+    waited=$((waited + 1))
+  done
+  if [[ $waited -ge 100 ]]; then
+    kill -9 "$pid" 2>/dev/null || true
+  fi
+  wait "$pid" 2>/dev/null
+}
+
 # Prints a Python that can run csa-mcp-registrations.py (stdlib only, 3.9 or later), or nothing.
 # Self-contained, because macos-plugins.sh has no find_csa_python. The candidates, in order:
 # python3 on PATH; uv's CSA Python, any build; Homebrew's python3 under each of its two prefixes;
 # and Apple's, only with the Command Line Tools, because without them that stub opens an install
 # dialog. Each is an absolute path that must pass -f and -x, which follow links, so a dangling one
 # (a venv whose Homebrew Python was upgraded away) is never run. Then it must run, -I so neither
-# the working directory nor PYTHONPATH can stand in for the stdlib, within 10 s: stock macOS has
-# no `timeout`. So a dead ~/.default_venv activated by ~/.zshrc, or a dead Homebrew Python, no
-# longer skips the audit: the next candidate is tried.
+# the working directory nor PYTHONPATH can stand in for the stdlib, within 10 s
+# (csa_registrations_bounded). So a dead ~/.default_venv activated by ~/.zshrc, or a dead Homebrew
+# Python, no longer skips the audit: the next candidate is tried.
 csa_registrations_python() {
-  local apple=/usr/bin/python3 n cand pid waited
+  local apple=/usr/bin/python3 n cand
   for n in 1 2 3 4 5; do
     cand=""
     case "$n" in
@@ -1828,20 +1846,36 @@ csa_registrations_python() {
     if [[ "$cand" == "$apple" ]] && ! xcode-select -p >/dev/null 2>&1; then
       continue
     fi
-    "$cand" -I -c 'import sys, json; sys.exit(sys.version_info < (3, 9))' </dev/null >/dev/null 2>&1 &
-    pid=$!
-    waited=0
-    while kill -0 "$pid" 2>/dev/null && [[ $waited -lt 100 ]]; do
-      sleep 0.1
-      waited=$((waited + 1))
-    done
-    if [[ $waited -ge 100 ]]; then
-      kill -9 "$pid" 2>/dev/null || true
-    fi
-    if wait "$pid" 2>/dev/null; then
+    if csa_registrations_bounded /dev/null "$cand" -I -c 'import sys, json; sys.exit(sys.version_info < (3, 9))'; then
       printf '%s\n' "$cand"
       return 0
     fi
+  done
+  return 0
+}
+
+# Whether $2 is the csa-mcp-registrations.py this script runs, as Python $1 runs it, asked only
+# about its interface: `--version` prints a version of the form every script here declares, and
+# `plan`, `apply` and `verify` each answer `--help` with a usage line naming that command. The
+# usage line, not the exit code alone: argparse answers `--help` with 0 even after a word it does
+# not know. A network sign-in page's HTML fails to compile before any of it runs, a file that does
+# nothing prints no version, and another program knows none of the three, so each is one skip
+# line, not a run that fails, prints usage errors and reports it three times. Each question is
+# bounded, so a file that hangs is a skip too.
+csa_registrations_usable() {
+  local python="$1" py="$2" out ver sub first
+  if [[ -z "${CSA_REG_DIR:-}" || ! -d "$CSA_REG_DIR" ]]; then
+    return 1
+  fi
+  out="$CSA_REG_DIR/version.out"
+  csa_registrations_bounded "$out" "$python" -I "$py" --version || return 1
+  ver="$(cat "$out" 2>/dev/null)" || ver=""
+  [[ "$ver" =~ ^20[0-9]{2}-[01][0-9]-[0-3][0-9]T[0-2][0-9]:[0-5][0-9]Z$ ]] || return 1
+  for sub in plan apply verify; do
+    csa_registrations_bounded "$out" "$python" -I "$py" "$sub" --help || return 1
+    first=""
+    read -r first < "$out" || true
+    [[ "$first" == "usage: "*" $sub "* ]] || return 1
   done
   return 0
 }
@@ -1887,10 +1921,8 @@ csa_registrations_preview() {
     echo "                       registration audit skipped: couldn't fetch csa-mcp-registrations.py; nothing will be changed"
     return 0
   fi
-  # A network sign-in page can answer the fetch with HTML and a 200: run as Python, it would
-  # print a traceback for each step. Parsed first, which runs none of it.
-  if ! "$python" -I -c 'import ast, sys; ast.parse(open(sys.argv[1], "rb").read(), sys.argv[1])' "$py" </dev/null >/dev/null 2>&1; then
-    echo "                       registration audit skipped: csa-mcp-registrations.py is not Python (a network sign-in page in its place?); nothing will be changed"
+  if ! csa_registrations_usable "$python" "$py"; then
+    echo "                       registration audit skipped: csa-mcp-registrations.py is not the audit this expects (a network sign-in page or another file in its place?); nothing will be changed"
     return 0
   fi
   # --out must be a new file. This directory is this run's own, so a leftover is ours to remove.
@@ -1934,8 +1966,8 @@ repair_csa_registrations() {
       py="$(csa_registrations_py)" || py=""
       if [[ -z "$py" ]]; then
         why="couldn't get csa-mcp-registrations.py"
-      elif ! "$python" -I -c 'import ast, sys; ast.parse(open(sys.argv[1], "rb").read(), sys.argv[1])' "$py" </dev/null >/dev/null 2>&1; then
-        why="csa-mcp-registrations.py is not Python (a network sign-in page in its place?)"
+      elif ! csa_registrations_usable "$python" "$py"; then
+        why="csa-mcp-registrations.py is not the audit this expects (a network sign-in page or another file in its place?)"
       fi
     fi
   fi

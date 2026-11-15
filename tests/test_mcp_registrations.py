@@ -4551,8 +4551,9 @@ SCRIPTS_DIR = Path(os.environ.get("CSA_TEST_SCRIPTS_DIR") or ROOT / "scripts")
 MAC_ENTRY = ("macos-ai-tools.sh", "macos-update.sh", "macos-plugins.sh")
 # Every script with a csa_on_exit, which check-duplication.py holds identical in all five.
 EXIT_HOOKED = MAC_ENTRY + ("macos-work-tools.sh", "clone-and-claude.sh")
-REG_FUNCS = ("csa_registrations_dir", "csa_registrations_py", "csa_registrations_python",
-             "csa_registrations_log", "csa_registrations_preview", "repair_csa_registrations")
+REG_FUNCS = ("csa_registrations_dir", "csa_registrations_py", "csa_registrations_bounded",
+             "csa_registrations_python", "csa_registrations_usable", "csa_registrations_log",
+             "csa_registrations_preview", "repair_csa_registrations")
 SHELL = "/bin/bash"
 INDENT = " " * 23
 # The plan's header row, verbatim (Task 4, Interfaces).
@@ -4564,9 +4565,14 @@ REG_FAILED = INDENT + "registration audit failed; nothing will be changed"
 WHY_NO_PY = "no Python 3.9 or later was found"
 WHY_FETCH = "couldn't fetch csa-mcp-registrations.py"
 WHY_OVERRIDE = "CSA_REGISTRATIONS_PY is not a readable file"
-WHY_NOT_PY = "csa-mcp-registrations.py is not Python (a network sign-in page in its place?)"
-# How the entry scripts check a download parses as Python before running it (review of f18337c).
-PARSE = 'import ast, sys; ast.parse(open(sys.argv[1], "rb").read(), sys.argv[1])'
+WHY_NOT_PY = ("csa-mcp-registrations.py is not the audit this expects (a network sign-in page or "
+              "another file in its place?)")
+
+
+def probe_run(run):
+    """A logged python run that is a question, not a step: the interpreter probe, or the
+    interface probe (`--version`, `<sub> --help`; re-review of 8dc8699)."""
+    return PROBE in run or run.endswith(" --version") or run.endswith(" --help")
 EACH_PRINTS = "each prints what it may do before it is used"
 PROBE = "import sys, json; sys.exit(sys.version_info < (3, 9))"
 STUB_ROW = "csa-zendesk in Claude Code (user): STUB-PLAN-ROW"
@@ -4582,6 +4588,14 @@ SYS_TOOLS = ("mktemp", "rm", "mv", "cp", "sed", "sleep", "cat", "tr", "grep", "b
 # argv, its own path, and the approved file's text) and answers in the real one's line format.
 FAKE_PY = r'''import json, os, sys
 argv = sys.argv[1:]
+# The entry scripts' interface probe (csa_registrations_usable), answered as the real one does,
+# and not logged: it is not a step.
+if argv == ["--version"]:
+    print("2026-11-14T06:16Z")
+    sys.exit(0)
+if len(argv) == 2 and argv[0] in ("plan", "apply", "verify") and argv[1] == "--help":
+    print("usage: csa-mcp-registrations.py " + argv[0] + " [-h]")
+    sys.exit(0)
 cmd = argv[0] if argv else ""
 entry = {"argv": argv, "file": os.path.abspath(__file__), "approved": None}
 if cmd == "apply" and "--approved" in argv:
@@ -4883,7 +4897,7 @@ def wiring_repair_uses_the_previewed_plan():
         planned = calls[0]["argv"][calls[0]["argv"].index("--out") + 1]
         expect(calls[1]["argv"] == ["apply", "--approved", planned],
                f"{name}: apply got {calls[1]['argv']}, not the plan file {planned}")
-        steps = [r for r in runs if PROBE not in r and PARSE not in r]
+        steps = [r for r in runs if not probe_run(r)]
         expect(len(steps) == 3 and all(f" -I {rig.fake_py} " in r for r in steps),
                f"{name}: the .py was not run with -I: {runs}")
         for want, where in (("OK STUB-APPLY-OK", out), ("INFO STUB-APPLY-INFO", out),
@@ -5011,28 +5025,128 @@ def wiring_fetch_failure_says_skipped():
         f"the fetched copy did not run: {calls} {out} {err[-300:]}")
 
 
+def expect_skipped_once(name, what, rc, out, err, runs):
+    """The audit was skipped as a whole: one row in the plan, one line at the repair, nothing of
+    the file's own on the screen, and none of its steps run."""
+    expect(rc == 0 and "AFTER" in out, f"{name} ({what}): exited {rc}: {err[-300:]}")
+    expect(REG_SKIPPED.format(why=WHY_NOT_PY) in out.split("\n"),
+           f"{name} ({what}): no skip row: {out}")
+    said = [ln for ln in err.split("\n") if ln.startswith("WARN ")]
+    expect(said == [f"WARN CSA MCP registrations were not checked: {WHY_NOT_PY}; nothing was "
+                    "changed"], f"{name} ({what}): the repair did not say it once: {said}")
+    for noise in ("Traceback", "usage:", "error:", "exited", "re-pointing"):
+        expect(noise not in out + err, f"{name} ({what}): {noise!r} reached the screen: {out} {err}")
+    steps = [r for r in runs if not probe_run(r)]
+    expect(not steps and [r for r in runs if r.endswith(" --version")],
+           f"{name} ({what}): it was run, not asked about its interface: {runs}")
+
+
 @case
 def wiring_download_not_python_skipped():
-    """A network sign-in page answers the fetch with HTML and a 200. It is parsed, never run: one
-    skip row in the plan, one line at the repair, no traceback, and no step of it is run (review
-    of f18337c, L2)."""
+    """A network sign-in page answers the fetch with HTML and a 200. It fails to compile at the
+    interface probe, so none of it runs: one skip row, one line at the repair, no traceback
+    (review of f18337c, L2)."""
     for name in MAC_ENTRY:
         with rig_dir() as t:
             rig = Rig(t, curl="html")
             rc, out, err = rig.run(name, "csa_registrations_preview\nrepair_csa_registrations\n"
                                          "echo AFTER")
             runs = rig.log("python path")
-        lines = out.split("\n")
-        expect(rc == 0 and "AFTER" in out, f"{name}: exited {rc}: {err[-300:]}")
-        expect(REG_SKIPPED.format(why=WHY_NOT_PY) in lines,
-               f"{name}: no skip row for a download that is not Python: {out}")
-        said = [ln for ln in err.split("\n") if ln.startswith("WARN ")]
-        expect(said == [f"WARN CSA MCP registrations were not checked: {WHY_NOT_PY}; nothing was "
-                        "changed"], f"{name}: the repair did not say it once: {said}")
-        expect("Traceback" not in out + err, f"{name}: a traceback reached the screen: {err}")
-        steps = [r for r in runs if PROBE not in r and PARSE not in r]
-        expect(not steps and [r for r in runs if PARSE in r],
-               f"{name}: it was run rather than parsed: {runs}")
+        expect_skipped_once(name, "HTML", rc, out, err, runs)
+
+
+# Python files that are not the audit (re-review of 8dc8699, item 1), each refused by one check:
+# the version's form, a usage line naming the command, or knowing all three commands.
+NOT_THE_AUDIT = {
+    "does nothing": "pass\n",
+    "another program, no commands": (
+        "import argparse\n"
+        "p = argparse.ArgumentParser(prog='something-else')\n"
+        "p.add_argument('--version', action='version', version='2026-11-14T06:16Z')\n"
+        "p.add_argument('--name')\n"
+        "p.parse_args()\n"),
+    "the same commands, another version": (
+        "import argparse\n"
+        "p = argparse.ArgumentParser(prog='csa-mcp-registrations.py')\n"
+        "p.add_argument('--version', action='version', version='1.4.2')\n"
+        "sub = p.add_subparsers(dest='command')\n"
+        "for c in ('plan', 'apply', 'verify'):\n"
+        "    sub.add_parser(c)\n"
+        "p.parse_args()\n"),
+    "plan only": (
+        "import argparse\n"
+        "p = argparse.ArgumentParser(prog='csa-mcp-registrations.py')\n"
+        "p.add_argument('--version', action='version', version='2026-11-14T06:16Z')\n"
+        "sub = p.add_subparsers(dest='command')\n"
+        "sub.add_parser('plan')\n"
+        "p.parse_args()\n"),
+}
+
+
+@case
+def wiring_not_the_audit_skipped():
+    """A file that is Python but not the audit (one that does nothing, another program, another
+    version, one that knows only `plan`) is skipped in one line before and after the setups, and
+    never run: no usage errors, no `exited 2`, and no `re-pointing` line that checked nothing."""
+    for name in MAC_ENTRY:
+        for what, source in NOT_THE_AUDIT.items():
+            with rig_dir() as t:
+                rig = Rig(t)
+                wrong = rig.root / "wrong" / "csa-mcp-registrations.py"
+                wrong.parent.mkdir()
+                wrong.write_text(source, encoding="utf-8")
+                rc, out, err = rig.run(name, "csa_registrations_preview\n"
+                                             "repair_csa_registrations\necho AFTER",
+                                       env={"CSA_REGISTRATIONS_PY": str(wrong)})
+                runs = rig.log("python path")
+            expect_skipped_once(name, what, rc, out, err, runs)
+
+
+@case
+def wiring_interface_probe_bounded():
+    """A file that hangs when it is run is stopped after 10 s by the probe, and the audit is
+    skipped in one line: the preflight, before anybody has agreed, cannot hang on it."""
+    with rig_dir() as t:
+        rig = Rig(t)
+        hang = rig.root / "hang" / "csa-mcp-registrations.py"
+        hang.parent.mkdir()
+        hang.write_text(f"import os, time\nopen({str(rig.root / 'hung.pid')!r}, 'w')"
+                        ".write(str(os.getpid()))\ntime.sleep(30)\n", encoding="utf-8")
+        started = time.monotonic()
+        try:
+            rc, out, err = rig.run(MAC_ENTRY[0], "csa_registrations_preview\necho AFTER",
+                                   env={"CSA_REGISTRATIONS_PY": str(hang)}, timeout=40)
+        finally:
+            pid_file = rig.root / "hung.pid"
+            pid = int(pid_file.read_text()) if pid_file.exists() else None
+            alive = False
+            if pid:
+                try:
+                    os.kill(pid, 0)
+                    alive = True
+                    os.kill(pid, signal.SIGKILL)
+                except OSError:
+                    pass
+        took = time.monotonic() - started
+    expect(rc == 0 and "AFTER" in out and REG_SKIPPED.format(why=WHY_NOT_PY) in out.split("\n"),
+           f"no skip row for a file that hangs: {out} {err[-300:]}")
+    expect(9 <= took < 20, f"the probe was stopped after {took:.1f}s, not 10")
+    expect(pid and not alive, "the file that hung is still running")
+
+
+@case
+def wiring_real_py_passes_the_probe():
+    """The probe and the shipping .py agree: the real csa-mcp-registrations.py, run by this
+    Python, is what csa_registrations_usable expects. Without this, a change to the .py's version
+    form or its commands would quietly skip the audit on every Mac."""
+    for name in MAC_ENTRY:
+        with rig_dir() as t:
+            rig = Rig(t)
+            rc, out, err = rig.run(name, 'csa_registrations_dir\n'
+                                         f'if csa_registrations_usable "$(command -v python3)" '
+                                         f'"{SCRIPT}"; then echo USABLE; else echo REFUSED; fi')
+        expect(rc == 0 and "USABLE" in out,
+               f"{name}: the real .py does not pass the probe: {out} {err[-300:]}")
 
 
 @case
@@ -5669,14 +5783,32 @@ WIRING_MUTATIONS = [
      "unset CSA_REG_DIR\ntrap csa_on_exit EXIT\n", "trap csa_on_exit EXIT\n", EXIT_HOOKED),
     ("wiring_fetch_failure_says_skipped", "take a failed fetch for a fetched file",
      '      rm -f "$dest.part"\n      return 0\n', '      rm -f "$dest.part"\n', MAC_ENTRY),
-    ("wiring_download_not_python_skipped", "run the preview's download without parsing it",
-     "  # print a traceback for each step. Parsed first, which runs none of it.\n"
-     f"  if ! \"$python\" -I -c '{PARSE}' \"$py\" </dev/null >/dev/null 2>&1; then\n",
-     "  # print a traceback for each step. Parsed first, which runs none of it.\n"
-     "  if false; then\n", MAC_ENTRY),
-    ("wiring_download_not_python_skipped", "run the repair's download without parsing it",
-     f"      elif ! \"$python\" -I -c '{PARSE}' \"$py\" </dev/null >/dev/null 2>&1; then\n",
+    ("wiring_download_not_python_skipped", "run the preview's download without the probe",
+     '  if ! csa_registrations_usable "$python" "$py"; then\n    echo ',
+     "  if false; then\n    echo ", MAC_ENTRY),
+    ("wiring_download_not_python_skipped", "run the repair's download without the probe",
+     '      elif ! csa_registrations_usable "$python" "$py"; then\n',
      "      elif false; then\n", MAC_ENTRY),
+    # ── the re-review of 8dc8699, item 1: the interface probe ──
+    ("wiring_not_the_audit_skipped", "take any --version output",
+     '  [[ "$ver" =~ ^20[0-9]{2}-[01][0-9]-[0-3][0-9]T[0-2][0-9]:[0-5][0-9]Z$ ]] || return 1\n',
+     "", MAC_ENTRY),
+    ("wiring_not_the_audit_skipped", "take a command's --help by its exit code alone",
+     '    [[ "$first" == "usage: "*" $sub "* ]] || return 1\n', "", MAC_ENTRY),
+    ("wiring_not_the_audit_skipped", "ask about plan only",
+     "  for sub in plan apply verify; do\n", "  for sub in plan; do\n", MAC_ENTRY),
+    ("wiring_not_the_audit_skipped", "skip the probe in the preview",
+     '  if ! csa_registrations_usable "$python" "$py"; then\n    echo ',
+     "  if false; then\n    echo ", MAC_ENTRY),
+    ("wiring_not_the_audit_skipped", "skip the probe in the repair",
+     '      elif ! csa_registrations_usable "$python" "$py"; then\n',
+     "      elif false; then\n", MAC_ENTRY),
+    ("wiring_interface_probe_bounded", "ask for the version without the bound",
+     '  csa_registrations_bounded "$out" "$python" -I "$py" --version || return 1\n',
+     '  "$python" -I "$py" --version </dev/null >"$out" 2>/dev/null || return 1\n', MAC_ENTRY),
+    ("wiring_real_py_passes_the_probe", "expect a version form the .py does not print",
+     "^20[0-9]{2}-[01][0-9]-[0-3][0-9]T[0-2][0-9]:[0-5][0-9]Z$",
+     "^v20[0-9]{2}-[01][0-9]-[0-3][0-9]T[0-2][0-9]:[0-5][0-9]Z$", MAC_ENTRY),
     ("wiring_py_failure_survives_set_e", "let the plan's exit status reach set -e",
      '</dev/null)" || rc=$?\n', '</dev/null)"\n', MAC_ENTRY),
     ("wiring_py_failure_survives_set_e", "keep a failed audit's plan file",
@@ -5701,14 +5833,16 @@ WIRING_MUTATIONS = [
      'cand="$(uv python find --system "$CSA_PYTHON_PREFERRED" 2>/dev/null)" || cand=""',
      'cand=""', MAC_ENTRY),
     ("wiring_dead_path_python_skipped", "take a candidate whatever its probe says",
-     '    if wait "$pid" 2>/dev/null; then', '    if wait "$pid" 2>/dev/null || true; then',
-     MAC_ENTRY),
+     "    if csa_registrations_bounded /dev/null \"$cand\" -I -c 'import sys, json; "
+     "sys.exit(sys.version_info < (3, 9))'; then",
+     "    if csa_registrations_bounded /dev/null \"$cand\" -I -c 'import sys, json; "
+     "sys.exit(sys.version_info < (3, 9))' || true; then", MAC_ENTRY),
     ("wiring_apple_python_stub_not_invoked_without_clt", "drop the Command Line Tools check",
      '    if [[ "$cand" == "$apple" ]] && ! xcode-select -p >/dev/null 2>&1; then',
      "    if false; then", MAC_ENTRY),
     ("wiring_python_probe_bounded", "wait for the probe however long it takes",
-     '    while kill -0 "$pid" 2>/dev/null && [[ $waited -lt 100 ]]; do',
-     '    while kill -0 "$pid" 2>/dev/null; do', MAC_ENTRY),
+     '  while kill -0 "$pid" 2>/dev/null && [[ $waited -lt 100 ]]; do',
+     '  while kill -0 "$pid" 2>/dev/null; do', MAC_ENTRY),
     ("wiring_verify_called_without_run", "run verify --run on every rerun",
      "        args=(verify)\n", "        args=(verify --run)\n", MAC_ENTRY),
     ("wiring_log_lines_to_debug_log_only", "print the plan's log lines on the screen",
