@@ -74,16 +74,27 @@ CRLF file and a `.cmd` shim.
 - **Add, byte-identical in all three:**
   - `Get-CsaRegistrationsPy`;
   - `Show-CsaRegistrationsPreview`, called from each `Show-Preflight`;
-  - `Repair-CsaRegistrations`, the last call in `Invoke-CSAInternalSetup`.
+  - `Repair-CsaRegistrations`, the last call in `Invoke-CSAInternalSetup`;
+  - the twins of the rest of what the macOS functions do. *Corrected 2026-11-15:* the macOS build has eight
+    (`csa_registrations_dir`, `_py`, `_bounded`, `_python`, `_usable`, `_log`, `_preview` and
+    `repair_csa_registrations`, under "CSA MCP registrations" in each `macos-*.sh`). Its reviews added the
+    interface check (`--version` and each subcommand's `--help`, each bounded, so a sign-in page or another file
+    fetched in its place is skipped in one line), a 10 s bound on each Python and interface probe, and removal
+    of the directory on every exit path.
 - **The working directory and plan file** are created once per run in the script's own scope, never inside a
   function whose output is captured (the macOS Task 4 defect the re-review found).
-- **Python** is the CSA Python from Plan 1's Task 4W, `Find-CsaPython`, which must land first.
+- **Python:** a self-contained resolver, byte-identical in all three, as macOS's `csa_registrations_python` is.
+  *Corrected 2026-11-15:* this said "the CSA Python from Plan 1's Task 4W, `Find-CsaPython`", but Plan 1 adds
+  `Find-CsaPython` to `windows-ai-tools.ps1` only, so `windows-update.ps1` and `windows-plugins.ps1` would have
+  none: the gap macOS's spec review M1 found for `-plugins`. The `.py` is stdlib-only, so any Python 3.9 or later
+  will do.
 - **The `.py` runs through a bounded `ProcessStartInfo` helper** that captures stdout. Its arguments are paths and
   flags only, quoted for paths with spaces.
 - **Temp directories:** `[IO.Path]::GetTempPath()` plus a GUID directory.
 
-**Tests:** Pester cases that mirror the `wiring_` cases. Once these land, `windows_twin_exists` passes instead of
-skipping. Then run PSScriptAnalyzer, `check-powershell-native.py` and `check-duplication.py`.
+**Tests:** Pester cases that mirror the `wiring_` cases. Once these land in all three, `wiring_windows_twin_exists`
+passes instead of skipping; in some but not all, it fails. Then run PSScriptAnalyzer, `check-powershell-native.py`
+and `check-duplication.py`.
 
 **PR:** a draft.
 

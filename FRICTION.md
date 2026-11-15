@@ -11,6 +11,9 @@ annoyance, log it. The papercuts worth acting on are the ones that repeat.
 | FRICTION-004 | The authoring machine is not a clean machine, in a way that matters | Open | Technology | 2026-10-02 |
 | FRICTION-005 | A verification step that fails silently reads as a pass | Open | AI-inefficient | 2026-10-02 |
 | FRICTION-006 | `main` is the release, so there is nowhere to be wrong | Accepted | Process overhead | 2026-10-02 |
+| FRICTION-007 | macOS shows every account's command lines, so a secret never goes on one | Accepted | Technology | 2026-11-12 |
+| FRICTION-008 | Claude Code's narrowest scope wins, so a dead entry outlives the repair of the user's | Accepted | Technology | 2026-11-12 |
+| FRICTION-009 | A check that launches a server can act on its account | Open | Process overhead | 2026-11-13 |
 
 ---
 
@@ -107,3 +110,62 @@ that CI gates the PR and the version check refuses a changed script that did not
 person can at least say what they ran — which is
 [#113](https://github.com/CloudSecurityAlliance/DesktopSetup/issues/113), and is why that issue
 existed.
+
+## FRICTION-007 — macOS shows every account's command lines, so a secret never goes on one
+
+**Accepted.** Measured on the CINO's Mac on 2026-11-12: as a standard user, `ps -axo user,args`
+printed the full arguments of root's processes and of system daemons. A value put on a command
+line is readable by every local account for as long as that process runs. That is the operating
+system, not a bug to fix, so the rule is ours: **no secret goes into an argv.**
+
+What it rules out, and where it bit:
+- **Client CLI writes.** `claude mcp add -e KEY=value` and `codex mcp add --env KEY=value` take
+  env values as arguments, so `scripts/csa-mcp-registrations.py` never uses them. It edits each
+  client's own file instead (Plan 2, A3), and passes a launched server's env through
+  `subprocess`'s `env`, never its argv.
+- **A gate script piping a secret through argv.** `csa-skilljar-setup.sh` passed the
+  `claude mcp get` output it parses secret values from as an argument to `python3`. Fixed in
+  CloudSecurityAlliance-Internal/CSA-Plugins#213 (Plan 2's G3).
+
+The cost is that every repair is a hand edit of a config file, with its own lock, backup and
+read-back, where a CLI call would have been one line.
+
+## FRICTION-008 — Claude Code's narrowest scope wins, so a dead entry outlives the repair of the user's
+
+**Accepted.** Claude Code merges three scopes, and the narrowest wins: a project's local entry
+(inside `~/.claude.json`), then an approved `.mcp.json`, then the user's. Measured on 2026-11-12
+(M7): `claude mcp get` from a project with a local entry reports, and starts, the local one.
+
+So repairing the user entry did not end #179's incident. On the CINO's Mac the user registration
+of csa-zendesk had been corrected, but one project's local entry still pointed at the same dead
+checkout venv, carrying a write allowlist. Plan 1's acceptance checked user scope only, and missed
+it. Anything that reads "the" registration has to say which scope it read.
+
+Mitigated, not removed:
+- **The registration audit reads local scope too,** and reports a dead local entry with a to-do
+  (Plan 2, D2): rebuild that checkout's venv, or remove the local entry. It does not re-point it,
+  because that would move the checkout's policy onto the release binary.
+- **The gate's probes now ask from an empty directory**
+  (CloudSecurityAlliance-Internal/CSA-Plugins#215), so a project entry where the installer
+  stands cannot stand in for the user's.
+
+## FRICTION-009 — A check that launches a server can act on its account
+
+**Open.** #179 asks for a check that each server answers an MCP `initialize` handshake. To launch
+a server with its registered settings is to launch it under the real `HOME`, with its real token
+and, for csa-skilljar, the client credentials in its env. A server might refresh a token, rewrite
+its token file or call its service before it answers. Then a check run on every rerun would act on
+the person's accounts every time.
+
+So the check was measured before it was allowed to run by default (Plan 2, M5, with the CINO's
+go-ahead, 2026-11-13). Each of the four servers was launched once, as the check launches it. Its
+token files were `stat`ed before and after, never opened, and its network connections were
+sampled. **For all four: no token file changed, and no connection was seen.** The record says
+what that does not show: work a server does later in a session, a connection shorter than the
+sampling interval, and whether a server *read* its token.
+
+It stays open because the decision is not made: `verify` is built and tested, but a rerun
+launches nothing until the CINO answers D5. Until then, `verify --run` checks by hand
+([ENGINEERING.md → Running it by hand](ENGINEERING.md#running-it-by-hand)). The general cost: a
+check that exercises a real integration has to be measured against the real account before it
+becomes a default, and that measurement needs a go-ahead.
