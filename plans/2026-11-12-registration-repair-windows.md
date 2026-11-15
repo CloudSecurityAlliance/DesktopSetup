@@ -11,7 +11,9 @@ servers as D5 allows. A second rerun changes nothing.
 
 **When this runs:** only in a session on a real Windows machine (#184), after its measurements. These tasks keep the
 platforms from drifting. They are specified now so the macOS half is built with them in view. Whether macOS waits for
-them is the macOS plan's D3. A green `windows-latest` CI run is not a Windows run (R5).
+them was the macOS plan's D3, answered 2026-11-13: the CINO chose, verbatim, *"Ship macOS first (Recommended)"*.
+So macOS ships without them, and the gap is on #184 and `TODO.md` P1. A green `windows-latest` CI run is not a
+Windows run (R5).
 
 **Branches:**
 
@@ -45,15 +47,22 @@ measurement below still applies.
 - **Bare names.** How does each client resolve a bare name: `PATHEXT`, and Desktop's environment?
 - **The env Desktop passes** to a stdio server.
 - **Locking.** Does `os.replace` fail while Desktop or a Claude Code session holds the file?
-- **Config encodings.** Does any client write its config with a UTF-8 BOM or CRLF line endings? The reader must parse
-  both, and a write must keep the file's own BOM and line endings.
+- **M1 on Windows.** Does Claude Code take `<config>.lock` around its writes there, as it does on macOS, and does it
+  honour one somebody else holds? `ClaudeLock` assumes so.
+- **Config encodings.** Does any client write its config with a UTF-8 BOM or CRLF line endings? *Today the `.py`
+  reports a file that starts with a BOM `not audited` and never writes it; it keeps CRLF when it writes.* If a
+  client writes a BOM, the reader must parse it, and a write must keep the file's own BOM and line endings.
 - **`.cmd` shims.** `codex` and `gemini` are npm globals, so on Windows they are `.cmd` shims, which `subprocess` does
   not find or run without a shell. Resolve them with `shutil.which` (which honours `PATHEXT`), and pass arguments so
   `cmd.exe`'s quoting cannot alter them.
 - **ACLs after `os.replace`,** for the `.py`'s own writes as well as the gate's: does the replaced file keep a
   user-only ACL, or inherit the directory's?
 - **Argv visibility.** Can another account on Windows read a process's command line? A3's rule holds either way; the
-  answer goes into FRICTION.md.
+  answer goes into FRICTION.md (FRICTION-007 is macOS's).
+- **`Confirm-Step` under Windows PowerShell 5.1.** `tests/ConfirmStep.Tests.ps1` pins that end of input at the
+  consent prompt is a no. `Read-Host` returning `$null` at end of input was measured on pwsh 7.6 only.
+- **M5 on Windows,** before D5 lets any server check run by default there: one launch per server, as `verify`
+  makes it, with its token files `stat`ed (never opened) before and after, and its connections sampled.
 
 **Then:**
 - Replace the `win32` "not audited" stubs with real readers and classifiers. The reasons stay verbatim, except that
@@ -62,9 +71,21 @@ measurement below still applies.
 - **Running-client detection** is by path, never by process name. Claude Code's updater renames its running image
   (AGENTS.md trap).
 - **A locked file** gives `in use by <client>; not written — close it and run again`.
+- **The POSIX-only parts of the `.py` as built,** each to work on Windows or refuse in one line:
+  - `run_bounded`, `spawn` and `end` use `start_new_session`, `os.killpg` and `preexec_fn`: on Windows,
+    `CREATE_NEW_PROCESS_GROUP` and `taskkill /T /F /PID` (above);
+  - `exchange` reads a server through `selectors`, which on Windows works on sockets only, not pipes;
+  - `desktop_running` reads `ps -axo comm=`. With no `ps` it answers "could not tell", so Desktop's config is
+    never written: safe, but it needs the path-based detection above;
+  - `write_temp` calls `os.fchmod`, which Windows has only from Python 3.13;
+  - `run_alive` answers "alive" on Windows, so `sweep_temps` never removes a stopped run's temp file there:
+    decide whether that stands;
+  - `signals_held` and `exits_on_signals` already fall back where there are no signal masks: check what a Ctrl-C
+    does mid-write.
 
 **Tests:** the same test file's Windows cases, run on `windows-latest` CI and on the machine, including a BOM file, a
-CRLF file and a `.cmd` shim.
+CRLF file and a `.cmd` shim. `tests/test_mcp_registrations.py` runs only in the ubuntu and macOS jobs today; add it
+to the `windows-latest` job.
 
 **PR:** a draft, listing the measurements.
 
@@ -108,7 +129,8 @@ and `check-duplication.py`.
   a fresh empty temp directory. Use `Push-Location`/`Pop-Location` in `try`/`finally`, inside `Invoke-CsaNative`'s
   scriptblock. Apply the macOS plan's M7, repeated on Windows.
 - **G2W:** measure whether a new file in Desktop's config directory inherits a user-only ACL. Change code only if it
-  is wider than the file it replaces. Fold in CSA-Plugins#198, which is the same files.
+  is wider than the file it replaces. Fold in CloudSecurityAlliance-Internal/CSA-Plugins#198, which is the same
+  files.
 
 **PRs:** drafts.
 

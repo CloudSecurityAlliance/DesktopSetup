@@ -1091,15 +1091,15 @@ name in Desktop's config is left `not checked`, never re-pointed.
 
 #### The decisions, at their safe defaults
 
-D1, D2, D4 and D5 are unanswered. Each is one constant at the top of the `.py`, pinned by one test;
-an answer changes the constant and its test.
+D1, D2, D4 and D5 are unanswered. Each is one constant at the top of the `.py`, pinned by a test
+(D5 by two); an answer changes the constant and its tests.
 
 | Decision | Constant | In force | Pinned by |
 |---|---|---|---|
 | D1. A registration that works but is not the standard binary | `REPOINT_WORKING_ELSEWHERE = False` | left byte-identical and warned, with the to-do `… points at <path>, not ~/.local/bin/<entry>; if that is not deliberate, re-point it` | `working_elsewhere_left_and_warned` |
 | D2. A dead Claude Code local-scope entry | `LOCAL_SCOPE_ACTION = "todo"` | left, with the to-do `rebuild that checkout's venv, or remove the local entry so your user entry applies there; removing it drops its settings (<keys>)` | `dead_local_scope_todo_names_rebuild_or_remove` |
 | D4. Claude Desktop is running | `WRITE_DESKTOP_WHILE_RUNNING = False` | Desktop's config is not written while Desktop runs, or while that cannot be told (below) | `desktop_running_skipped_with_quit_todo` |
-| D5. The server check on a rerun | `VERIFY_ON_RERUN = frozenset()` | a rerun launches no server, and the plan prints no check row | `verify_held_by_default` |
+| D5. The server check on a rerun | `VERIFY_ON_RERUN = frozenset()` | a rerun launches no server, and the plan prints no check row | `verify_held_by_default`, `no_check_rows_while_held` |
 
 M5 has since measured each server's start: no token file changed and no connection was seen, for
 all four. That makes each a candidate for D5's option (c), but the answer is still the CINO's.
@@ -1163,8 +1163,9 @@ M2 did not settle D4 (below).
     the write is then abandoned. Only a replace that reads back as written prunes.
   - A read-back that differs restores the config from the backup:
     `its config did not read back as written, so it was restored from its backup; not changed`.
-- **The write:** a temp file beside the config, at the config's mode from its creation
-  (`.csa-registrations-<pid>-<8 characters>`), then fsync, then `os.replace`. That keeps the
+- **The write:** a temp file beside the config (`.csa-registrations-<pid>-<8 characters>`),
+  created `0600` and set to the config's mode before any byte is written, then fsync, then
+  `os.replace`. That keeps the
   mode, but **drops the file's extended attributes and ACLs.**
 - **Stopped:** SIGTERM, SIGHUP or Ctrl-C runs the clean-ups (the temp file, an unused backup, the
   lock). A run killed outright can leave a temp file holding the config's secrets; the next
