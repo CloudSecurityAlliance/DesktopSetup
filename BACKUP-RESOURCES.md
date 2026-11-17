@@ -69,6 +69,22 @@ review rather than being folded into a documentation pass. The shape of the fix:
    right — worth asserting rather than relying on, since the whole point is that this file is
    sensitive.
 
+## Since then: #143 is fixed, and a second tool writes the same backups
+
+**#143 closed on 2026-10-03.** `csa-claude-connectors.py` now prunes its own backups to the three
+most recent of each file, checks each one's mode against the file's and warns if it is wider, and
+its closing line says the copies hold credentials and should be deleted.
+
+**`scripts/csa-mcp-registrations.py` (2026-11, macOS only) writes the same kind of backup.** Before
+it re-points a dead CSA MCP registration, it copies that client's config (`~/.claude.json`, Claude
+Desktop's `claude_desktop_config.json`, Codex's `config.toml` or Gemini's `settings.json`) to
+`<file>.bak-<YYYYmmddHHMMSS>`. That is deliberately the same name and the same three-copy prune
+as `csa-claude-connectors.py`, so one cap bounds both tools' copies of `~/.claude.json`. Each copy
+holds the config's secrets, at the config's mode and never looser. A write it abandons leaves no
+backup. The prune touches only that exact name, so Claude Code's own copies in
+`~/.claude/backups/` are neither removed nor counted. The details are in
+[`ENGINEERING.md` → Registration audit and repair](ENGINEERING.md#registration-audit-and-repair).
+
 ## Housekeeping for anyone reading this on their own machine
 
 The two `client_secret.json.*.bak` files above are safe to delete, and should be. Rotation, if

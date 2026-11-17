@@ -20,7 +20,7 @@
 
 set -euo pipefail
 
-SCRIPT_VERSION="2026-11-13T02:35Z"
+SCRIPT_VERSION="2026-11-17T15:41Z"
 
 # ── CSA plugin marketplaces ─────────────────────────────────────────
 # Each update run will add any entries from this list that aren't yet
@@ -248,9 +248,17 @@ csa_on_exit() {
       warn "no debug log was written — re-run with CSA_DEBUG=1 to get one."
     fi
   fi
+  # The registration audit's working directory (csa_registrations_dir) holds its plan file. It is
+  # removed on every exit path: a declined plan and a run stopped early as well as a finished one.
+  if [[ -n "${CSA_REG_DIR:-}" && -d "$CSA_REG_DIR" ]]; then
+    rm -rf "$CSA_REG_DIR" || true
+  fi
   csa_debug_hint
   return $status
 }
+# csa_on_exit removes CSA_REG_DIR with rm -rf, so it is never taken from the environment: only
+# csa_registrations_dir sets it, to a directory mktemp made for this run.
+unset CSA_REG_DIR
 trap csa_on_exit EXIT
 
 
@@ -316,7 +324,10 @@ csa_npm() {
 confirm() {
   if [[ -n "${NONINTERACTIVE-}" ]]; then return 0; fi
   local reply
-  read -r -p "$1 [Y/n] " reply
+  # End of input (Ctrl-D, or closed stdin) is not consent: without `|| return 1` the empty
+  # reply fell through to the default, yes, and a run went on to write configs (review of
+  # f18337c, M2). Confirm-Step in the .ps1 scripts answers no the same way.
+  read -r -p "$1 [Y/n] " reply || return 1
   case "${reply:-Y}" in
     [Yy]*) return 0 ;;
     *)     return 1 ;;
@@ -558,6 +569,9 @@ preflight() {
     for setup_name in "${CSA_INTERNAL_SETUPS[@]}"; do
       echo "                       ${setup_name%-setup.sh}"
     done
+    # Then every registration of those servers, and the dead ones it will re-point (#179, Plan 2).
+    # Called directly: it sets CSA_REG_DIR, where the plan file waits for repair_csa_registrations.
+    csa_registrations_preview
     echo "                       each prints what it may do before it is used"
     echo ""
     # Windows's plan has named this file since the snapshot was added; macOS's did
@@ -1735,6 +1749,256 @@ setup_csa_mcp_server() {
   fi
 }
 
+# ── CSA MCP registrations: audited in the plan, repaired after the setups (#179, Plan 2) ──
+# scripts/csa-mcp-registrations.py finds every registration of the four CSA MCP servers in Claude
+# Code, Claude Desktop, Codex and Gemini. It is fetched from HEAD, as the plugin lists are, into a
+# mktemp directory that lives for one run: CSA_REG_DIR, which csa_on_exit removes on every exit.
+# The preflight runs its read-only `plan`, which records what it showed in plan.json. The last step
+# of setup_csa_internal_tools, after the gate setups have installed or rebuilt each binary, runs
+# `apply` on exactly that file, so a registration the person was not shown is reported and never
+# changed (A4), then `verify`, which launches no server while D5 holds.
+#
+# KEEP IN SYNC: these eight functions are byte-identical in macos-ai-tools.sh, macos-update.sh and
+# macos-plugins.sh (tools/check-duplication.py). The Windows twins are #184's Task 4W; until they
+# land, tests/test_mcp_registrations.py's wiring_windows_twin_exists reports a SKIP on every run.
+
+# Makes this run's working directory in the CALLER's shell, so call it directly and never inside
+# $(...): there it would set CSA_REG_DIR in a subshell, and lose it. Reused once made; empty when
+# mktemp fails.
+csa_registrations_dir() {
+  if [[ -z "${CSA_REG_DIR:-}" || ! -d "$CSA_REG_DIR" ]]; then
+    CSA_REG_DIR="$(mktemp -d "${TMPDIR:-/tmp}/csa-registrations.XXXXXX" 2>/dev/null)" || CSA_REG_DIR=""
+  fi
+  return 0
+}
+
+# Prints the csa-mcp-registrations.py to run, or nothing. It sets nothing, so it is safe inside
+# $(...). CSA_REGISTRATIONS_PY names a local copy, for tests and branch runs; one that is not a
+# readable file prints nothing, so a typo is said rather than quietly running HEAD's copy instead.
+csa_registrations_py() {
+  local dest
+  if [[ -n "${CSA_REGISTRATIONS_PY:-}" ]]; then
+    if [[ -f "$CSA_REGISTRATIONS_PY" && -r "$CSA_REGISTRATIONS_PY" ]]; then
+      printf '%s\n' "$CSA_REGISTRATIONS_PY"
+    fi
+    return 0
+  fi
+  if [[ -z "${CSA_REG_DIR:-}" || ! -d "$CSA_REG_DIR" ]] || ! has_command curl; then
+    return 0
+  fi
+  dest="$CSA_REG_DIR/csa-mcp-registrations.py"
+  if [[ ! -s "$dest" ]]; then
+    rm -f "$dest.part"
+    if curl -fsSL --max-time 60 -H 'Cache-Control: no-cache' -o "$dest.part" \
+        "$CSA_RAW_BASE/csa-mcp-registrations.py" 2>/dev/null && [[ -s "$dest.part" ]]; then
+      mv -f "$dest.part" "$dest"
+    else
+      rm -f "$dest.part"
+      return 0
+    fi
+  fi
+  printf '%s\n' "$dest"
+}
+
+# Runs a command for at most 10 s, in the foreground, with no input and its stderr nowhere; its
+# stdout is the caller's. perl sets an alarm and execs the command in its own place, and an alarm
+# outlives exec, so SIGALRM ends the command itself, and a Ctrl-C reaches it with the rest of the
+# run: no background job, and nothing left to kill. `or exit 127`, because a bare `exec` that
+# fails lets perl run on and exit 0, which would read as a pass. Bounded this way: each Python
+# candidate's probe and each interface question, nothing else (plan, apply and verify bound their
+# own steps). A child the command starts is not stopped with it; neither question starts one.
+csa_registrations_bounded() {
+  perl -e 'alarm shift; exec { $ARGV[0] } @ARGV or exit 127' 10 "$@" </dev/null 2>/dev/null
+}
+
+# Prints a Python that can run csa-mcp-registrations.py (stdlib only, 3.9 or later), or nothing.
+# Self-contained, because macos-plugins.sh has no find_csa_python. The candidates, in order:
+# python3 on PATH; uv's CSA Python, any build; Homebrew's python3 under each of its two prefixes;
+# and Apple's, only with the Command Line Tools, because without them that stub opens an install
+# dialog. Each is an absolute path that must pass -f and -x, which follow links, so a dangling one
+# (a venv whose Homebrew Python was upgraded away) is never run. Then it must run, -I so neither
+# the working directory nor PYTHONPATH can stand in for the stdlib, within 10 s
+# (csa_registrations_bounded). So a dead ~/.default_venv activated by ~/.zshrc, or a dead Homebrew
+# Python, no longer skips the audit: the next candidate is tried.
+csa_registrations_python() {
+  local apple=/usr/bin/python3 n cand
+  for n in 1 2 3 4 5; do
+    cand=""
+    case "$n" in
+      1) cand="$(command -v python3 2>/dev/null)" || cand="" ;;
+      2) if has_command uv; then
+           cand="$(uv python find --system "$CSA_PYTHON_PREFERRED" 2>/dev/null)" || cand=""
+         fi ;;
+      3) cand=/opt/homebrew/bin/python3 ;;
+      4) cand=/usr/local/bin/python3 ;;
+      5) cand="$apple" ;;
+    esac
+    if [[ "$cand" != /* || ! -f "$cand" || ! -x "$cand" ]]; then
+      continue
+    fi
+    if [[ "$cand" == "$apple" ]] && ! xcode-select -p >/dev/null 2>&1; then
+      continue
+    fi
+    if csa_registrations_bounded "$cand" -I -c 'import sys, json; sys.exit(sys.version_info < (3, 9))' >/dev/null; then
+      printf '%s\n' "$cand"
+      return 0
+    fi
+  done
+  return 0
+}
+
+# Whether $2 is the csa-mcp-registrations.py this script runs, as Python $1 runs it, asked only
+# about its interface: `--version` prints a version of the form every script here declares, and
+# `--interface` prints exactly the line below. The .py writes both itself, not through argparse,
+# so colour (FORCE_COLOR), the terminal's width (COLUMNS) and TERM cannot change them; argparse's
+# own usage lines change with all three. A network sign-in page's HTML fails to compile before any
+# of it runs, a file that does nothing prints nothing, and another program, or another version of
+# this one, prints something else: each is one skip line, not a run that fails and reports it
+# three times. Each question is bounded (csa_registrations_bounded), so a file that hangs is a
+# skip too.
+csa_registrations_usable() {
+  local python="$1" py="$2" ver iface
+  ver="$(csa_registrations_bounded "$python" -I "$py" --version)" || return 1
+  [[ "$ver" =~ ^20[0-9]{2}-[01][0-9]-[0-3][0-9]T[0-2][0-9]:[0-5][0-9]Z$ ]] || return 1
+  iface="$(csa_registrations_bounded "$python" -I "$py" --interface)" || return 1
+  [[ "$iface" == "csa-mcp-registrations interface 1: plan apply verify" ]] || return 1
+  return 0
+}
+
+# A `log` line of csa-mcp-registrations.py is for the debug log only, never the screen. It goes
+# into the file through the same redactor as everything else there, and only when CSA_DEBUG made
+# one: an exported CSA_LOG alone is not a debug log, and nothing is written to it.
+csa_registrations_log() {
+  if [[ -n "${CSA_LOG:-}" ]] && csa_debug_requested; then
+    printf '  [csa-mcp-registrations] %s\n' "$1" | csa_redact >> "$CSA_LOG" 2>/dev/null || true
+  fi
+  return 0
+}
+
+# The plan's rows for the registrations, inside the Internal MCP servers block. Read-only: the
+# .py's `plan` writes nothing but its plan file, kept for repair_csa_registrations. Past its header
+# it is silent for an account without CSA-Internal access, as the block's other rows are.
+csa_registrations_preview() {
+  local python py out rc=0 kind text
+  echo "                       then audit their registrations in Claude Code (user and local scopes), Claude Desktop, Codex and Gemini,"
+  echo "                       and re-point a dead one at ~/.local/bin keeping every setting"
+  if ! has_command gh || ! gh auth status >/dev/null 2>&1 \
+      || ! gh api "repos/$CSA_MCP_GATE_REPO" >/dev/null 2>&1; then
+    return 0
+  fi
+  # First, before anything reads CSA_REG_DIR: under set -u an unset one would end the run.
+  csa_registrations_dir
+  if [[ -z "${CSA_REG_DIR:-}" ]]; then
+    echo "                       registration audit skipped: couldn't make a temporary directory; nothing will be changed"
+    return 0
+  fi
+  if ! has_command perl; then
+    echo "                       registration audit skipped: perl, which bounds each of its checks, was not found; nothing will be changed"
+    return 0
+  fi
+  python="$(csa_registrations_python)" || python=""
+  if [[ -z "$python" ]]; then
+    echo "                       registration audit skipped: no Python 3.9 or later was found; nothing will be changed"
+    return 0
+  fi
+  py="$(csa_registrations_py)" || py=""
+  if [[ -z "$py" && -n "${CSA_REGISTRATIONS_PY:-}" ]]; then
+    echo "                       registration audit skipped: CSA_REGISTRATIONS_PY is not a readable file; nothing will be changed"
+    return 0
+  fi
+  if [[ -z "$py" ]]; then
+    echo "                       registration audit skipped: couldn't fetch csa-mcp-registrations.py; nothing will be changed"
+    return 0
+  fi
+  if ! csa_registrations_usable "$python" "$py"; then
+    echo "                       registration audit skipped: csa-mcp-registrations.py is not the audit this expects (a network sign-in page or another file in its place?); nothing will be changed"
+    return 0
+  fi
+  # --out must be a new file. This directory is this run's own, so a leftover is ours to remove.
+  rm -f "$CSA_REG_DIR/plan.json"
+  out="$("$python" -I "$py" plan --out "$CSA_REG_DIR/plan.json" </dev/null)" || rc=$?
+  while IFS=$'\t' read -r kind text; do
+    case "$kind" in
+      row) echo "                       $text" ;;
+      "") ;;
+      log) csa_registrations_log "$text" ;;
+      *) csa_registrations_log "$kind${text:+ $text}" ;;
+    esac
+  done <<< "$out"
+  if [[ $rc -ne 0 ]]; then
+    # No plan file, so the repair acts on nothing it finds (repair_csa_registrations).
+    rm -f "$CSA_REG_DIR/plan.json"
+    csa_registrations_log "plan exited $rc"
+    echo "                       registration audit failed; nothing will be changed"
+  fi
+  return 0
+}
+
+# The last step of setup_csa_internal_tools, so it runs behind the same gh gate, and after the
+# gate setups have installed or rebuilt each standard binary. `apply` re-points only what the plan
+# showed and is unchanged since. With no plan file (the audit was skipped or failed before the
+# person agreed) it is handed a plan with no findings, so every finding is reported and none is
+# acted on. Then `verify`, without --run: the .py decides, by D5, whether anything is launched.
+# Each line is shown as the .py prints it, so a server check, once D5 allows one, is not a silent
+# wait. It never fails the run.
+repair_csa_registrations() {
+  local python="" py="" why="" approved step kind text
+  local args=()
+  csa_registrations_dir
+  if [[ -z "${CSA_REG_DIR:-}" ]]; then
+    why="couldn't make a temporary directory"
+  elif ! has_command perl; then
+    why="perl, which bounds each of its checks, was not found"
+  else
+    python="$(csa_registrations_python)" || python=""
+    if [[ -z "$python" ]]; then
+      why="no Python 3.9 or later was found"
+    else
+      py="$(csa_registrations_py)" || py=""
+      if [[ -z "$py" ]]; then
+        why="couldn't get csa-mcp-registrations.py"
+      elif ! csa_registrations_usable "$python" "$py"; then
+        why="csa-mcp-registrations.py is not the audit this expects (a network sign-in page or another file in its place?)"
+      fi
+    fi
+  fi
+  if [[ -n "$why" ]]; then
+    warn "CSA MCP registrations were not checked: $why; nothing was changed"
+  else
+    info "CSA MCP registrations: re-pointing what the plan showed, if anything (csa-mcp-registrations.py)"
+    approved="$CSA_REG_DIR/plan.json"
+    if [[ ! -f "$approved" ]]; then
+      # The preview could not audit, so nothing was shown to agree to: "audited": false makes
+      # apply approve nothing, and say why it found a dead entry only now.
+      approved="$CSA_REG_DIR/plan-with-no-findings.json"
+      printf '%s\n' '{"tool": "csa-mcp-registrations", "audited": false, "findings": []}' > "$approved" 2>/dev/null || true
+    fi
+    for step in apply verify; do
+      if [[ "$step" == apply ]]; then
+        args=(apply --approved "$approved")
+      else
+        args=(verify)
+      fi
+      while IFS=$'\t' read -r kind text; do
+        case "$kind" in
+          ok) success "$text" ;;
+          info|row) info "$text" ;;
+          warn) warn "$text" ;;
+          exit) warn "csa-mcp-registrations.py $step exited $text" ;;
+          "") ;;
+          log) csa_registrations_log "$text" ;;
+          *) csa_registrations_log "$kind${text:+ $text}" ;;
+        esac
+      done < <("$python" -I "$py" "${args[@]}" </dev/null || printf 'exit\t%s\n' "$?")
+    done
+  fi
+  if [[ -n "${CSA_REG_DIR:-}" ]]; then
+    rm -rf "$CSA_REG_DIR" || true
+  fi
+  unset CSA_REG_DIR
+  return 0
+}
+
 # Run CSA-internal setup that cannot live in this public repo (it carries CSA's OAuth
 # client). Gated the same way as setup_csa_mcp_server: gh-probe CloudSecurityAlliance-Internal,
 # and silently do nothing for anyone without access — external users of this public repo see
@@ -1792,6 +2056,8 @@ setup_csa_internal_tools() {
     # gives two different instructions for the same thing ("<this script>" vs "the same command").
     CSA_NESTED=1 CSA_PYTHON_PREFERRED="${CSA_PYTHON_PREFERRED:-}" bash -c "$script" || warn "CSA internal setup ($name) reported a problem (see above)"
   done
+  # Last, behind the same gate and after every setup above: the plan's registration repairs.
+  repair_csa_registrations
 }
 
 # ── Plugin install ──────────────────────────────────────────────────

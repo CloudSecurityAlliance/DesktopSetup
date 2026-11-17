@@ -49,6 +49,14 @@ profile; Node, Python (via uv), `pandoc` and `typst`; a curated set of Claude Co
 | `csa-google-workspace` | read and write Docs, Sheets and Slides, and their comment threads |
 | `csa-skilljar` | manage courses, lessons, quizzes, learners and enrolment |
 
+**On a Mac, a rerun also checks how they are registered** — in Claude Code, Claude Desktop, Codex
+and Gemini. If a registration points at something that can no longer start (as when Homebrew
+upgraded away the Python under a developer's copy of a server), the plan says so, and once you
+agree the run points it at the standard install instead, keeping every setting. One that still
+works is left as it is. So is a dead one that Claude Code keeps for a single project, or one in
+Claude Desktop while it is open; the run says what to do about those. Windows does not do this yet
+([#184](https://github.com/CloudSecurityAlliance/DesktopSetup/issues/184)).
+
 ### Sign in to the two Google servers
 
 Setup installs and registers them, but it deliberately does not sign you in. **Until you do, they
@@ -145,15 +153,19 @@ The last thing on screen is a short numbered list of what still needs *you*. It 
 you have to act on, and it is deliberately last — it used to be buried under ~140 lines of
 install output.
 
-Three kinds of item show up:
+Four kinds of item show up:
 
-1. **Restart Claude Desktop.** A newly registered MCP server is invisible to it until then.
+1. **Restart Claude Desktop** (or another client). A newly registered or repaired MCP server is
+   invisible to it until then.
 2. **Sign in.** Three of the four servers can do this *in the conversation* — just say
    "sign me in to Gmail" in Claude Code and follow the link. A terminal command is listed as the
    fallback; for the two Google servers it is the pair under
    [Sign in to the two Google servers](#sign-in-to-the-two-google-servers).
 3. **Something only another person can do** — for example, Skilljar needs a credential issued to
    you.
+4. **A CSA server registration it left alone** (macOS) — for example a dead one Claude Code
+   keeps for a single project, or one it could not change because Claude Desktop was open. The
+   item says what to do, such as "Quit Claude Desktop and run again".
 
 If a server does not appear in Claude Code afterwards, the usual cause is item 1.
 
@@ -496,11 +508,16 @@ Ten scripts, five macOS/Windows pairs — each self-contained and idempotent.
   servers are used instead. Report-only unless `--apply`. Each file it changes is copied to
   `.bak-<stamp>` first, and **those copies hold your Claude credentials** — the three most
   recent of each are kept, so delete them once you are happy (#143)
+- **`csa-mcp-registrations.py`** — finds every registration of the four CSA MCP servers in
+  Claude Code, Claude Desktop, Codex and Gemini, and re-points a dead one at the standard install,
+  keeping every setting. The macOS scripts fetch and run it; Windows does not yet (#184). Before
+  each change it copies the config to `.bak-<stamp>`, under the same name and three-copy limit
+  as `csa-claude-connectors.py`, and **those copies hold the config's secrets**
 - **`csa-plugins.txt`** / **`csa-plugins-internal.txt`** — the plugin lists, fetched at runtime
 
 ### `tools/` and `tests/`
 
-Fourteen repo-specific checks and nineteen test files. **`./tools/check-all.sh` mirrors CI exactly** —
+Fourteen repo-specific checks and twenty-one test files. **`./tools/check-all.sh` mirrors CI exactly** —
 run it before opening a pull request. See [`ENGINEERING.md`](ENGINEERING.md) for what it proves
 and what it does not.
 

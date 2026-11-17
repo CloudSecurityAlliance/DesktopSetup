@@ -209,6 +209,10 @@ jobs:
         run: python3 tests/test_survives_tool_failure.py
       - name: claude.ai connector tool changes only what it says
         run: python3 tests/test_claude_connectors.py
+      - name: The CSA registration audit says what is wrong with each registration, and apply re-points only a planned dead one (#179)
+        run: |
+          python3 tests/test_mcp_registrations.py
+          python3 tests/test_mcp_registrations.py --self-test
       - name: The summary names one interpreter and reports its pip (#100)
         run: python3 tests/test_summary_interpreter.py
       - name: A desktop app is replaced only after it is quit, and never mistaken for a look-alike
@@ -246,6 +250,12 @@ jobs:
     # second; here neither is, and CSA_TEST_REQUIRE_REAL_UV turns a skip into a failure.
     name: venv on macOS (BSD mv, real uv)
     runs-on: macos-latest
+    # A hang fails here, with its log, rather than running to the 6-hour default. It took about
+    # 6 minutes at fc9614d, and tests/test_mcp_registrations.py also stops any one case at 120 s
+    # and names it (PR #201). This limit does not cover a job that never starts: on bfa2aa6 none
+    # did, twice, "not acquired by Runner of type hosted" for macOS arm64 capacity, and GitHub
+    # cancelled each after 15 minutes in the queue.
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
 
@@ -271,6 +281,13 @@ jobs:
         env:
           CSA_TEST_REQUIRE_REAL_UV: "1"
         run: python3 tests/test_csa_python.py
+
+      # The audit runs on whatever python3 the entry scripts find, and on a stock Mac that is
+      # Apple's /usr/bin/python3, 3.9, with no tomllib. Both are run, so 3.9 is not assumed.
+      - name: The CSA registration audit, under python3 and Apple's /usr/bin/python3 (#179)
+        run: |
+          python3 tests/test_mcp_registrations.py
+          /usr/bin/python3 tests/test_mcp_registrations.py
 
       # tools/check-doc-deps-resolve.py (CSA_DOC_PY_DEPS resolved against PyPI) is NOT here: it is
       # .github/workflows/doc-deps.yml, so a PyPI outage cannot hide this job's results.

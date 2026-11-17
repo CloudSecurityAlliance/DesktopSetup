@@ -93,7 +93,8 @@ says where each went. Decisions go to the CINO one at a time (K2).
 
 ## Decisions
 
-D1, D2, D4 and D5 are each one named constant in the `.py`, pinned by one test. D3 is a merge decision. D6 is decided.
+D1, D2, D4 and D5 are each one named constant in the `.py`, pinned by one test. D3 is a merge decision, answered by
+the CINO on 2026-11-13 (below). D6 is decided.
 Until the CINO decides, the build ships the safe default.
 
 ### D1. A registration that works but does not point at the standard binary
@@ -151,6 +152,10 @@ Until the CINO decides, the build ships the safe default.
 
 ### D3. Ship macOS first, or hold it until the Windows halves have run
 
+> **Answered 2026-11-13: (a).** The CINO's choice, verbatim: *"Ship macOS first (Recommended)"*. Recorded on #179
+> the same day. The safe default below no longer applies: each macOS PR merges once reviewed and green, and the
+> Windows halves are on #184.
+
 - **Context.**
   - AGENTS.md: *"Both platforms, or neither."*
   - **D3 covers every macOS-only behaviour change in this plan, in either repo:** DesktopSetup Tasks 1–4 and
@@ -158,7 +163,7 @@ Until the CINO decides, the build ships the safe default.
   - The Windows halves (the companion's 1W, 4W, 6W, G1W, G2W) need a session on a real Windows machine (#184), which
     is not scheduled.
   - The repair runs inside `setup_csa_internal_tools`, so `check-parity.py` does not see it (A6). Only this decision,
-    #184 and `windows_twin_exists`'s per-case SKIP keep the gap visible.
+    #184 and `wiring_windows_twin_exists`'s per-case SKIP keep the gap visible.
   - Plan 1's D5 (*"Hold as drafts for a Windows session"*, 2026-11-10) was his decision for Plan 1. It does not
     decide this plan.
   - D6's gate PR is outside D3: it changes the `.sh` and the `.ps1` together.
@@ -281,7 +286,8 @@ Until the CINO decides, the build ships the safe default.
   - It is held by D5 until M5.
 - **A6. No new `main()` step.** The repair runs inside `setup_csa_internal_tools`, behind its `gh` gate. That
   placement is for the gate. It also means `check-parity.py` does not see the change, which is not a parity pass:
-  shipping it one-sided is D3's call. The gap is tracked by a per-case SKIP in `windows_twin_exists` and by #184.
+  shipping it one-sided is D3's call. The gap is tracked by a per-case SKIP in `wiring_windows_twin_exists` and by
+  #184.
 - **A7. Codex is read through `codex mcp list --json`,** because Apple's Python 3.9 has no `tomllib`. A Codex whose CLI
   lacks `--json` is reported "not audited", never "fine".
 - **A8. A bare command name is resolved on the client's own `PATH`, as M3 measured it.** Until Claude Desktop's is
@@ -930,6 +936,9 @@ lift D5's safe default.
   - **Each must pass `[[ -x ]]` first,** which follows links, so a dangling one is never executed. It must then run
     `-I -c 'import sys, json; sys.exit(sys.version_info < (3, 9))'` within a 10 s watchdog (stock macOS has no
     `timeout`).
+  - *Superseded by `548c18d` (2026-11-15):* the bound is a 10 s `perl` alarm in the foreground, not a background
+    watchdog, so a Ctrl-C reaches the probe. The `.py` is then asked `--version` and `--interface`, two lines it
+    writes itself, before it is run; `c5308c3`'s `--help` questions are gone. ENGINEERING.md describes the result.
   - So a dead `~/.default_venv` activated by `~/.zshrc`, or a dead Homebrew Python, no longer skips the preview: the
     next candidate is tried.
 - **`csa_registrations_preview`:**
@@ -959,7 +968,7 @@ lift D5's safe default.
 
   The per-finding rows follow it, and the `.py`'s check rows only for servers D5 allows.
 
-- [ ] **Step 1: Failing tests:**
+- [ ] **Step 1: Failing tests** (*as built, each carries a `wiring_` prefix, e.g. `wiring_windows_twin_exists`*):
   - `preview_rows_under_internal_mcp_servers`, for each of the three scripts;
   - `repair_uses_the_previewed_plan`: the same plan file reaches `--approved`, through each script's real call path
     from `preflight` to `setup_csa_internal_tools`;

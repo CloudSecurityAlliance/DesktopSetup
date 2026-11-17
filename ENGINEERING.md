@@ -23,7 +23,7 @@ This file is *how*.
 | [The guard layer](#the-guard-layer) | adding a check, or wondering what `check-all.sh` proves |
 | [Script execution flow, and the plan](#script-execution-flow-and-the-plan) | adding a step to `main()`. The to-do ledger is here |
 | [Debug mode](#debug-mode) | diagnosing a user's run, or adding output |
-| [The CSA contracts](#the-csa-contracts) | anything touching plugins or MCP servers |
+| [The CSA contracts](#the-csa-contracts) | anything touching plugins or MCP servers, or what a rerun does to a registration |
 | [Periodic source sweep](#periodic-source-sweep) | weekly, by hand |
 | [Bootstrap commands](#bootstrap-commands) | copying a one-liner — keep the `no-cache` header |
 | [Three habits](#three-habits-that-would-have-prevented-most-of-this-repos-defects) | always |
@@ -71,6 +71,13 @@ Calendar, Google Drive by default) in Claude Code everywhere, so the CSA Google 
 used instead. Report-only unless `--apply`; backs up and writes atomically
 ([#129](https://github.com/CloudSecurityAlliance/DesktopSetup/issues/129)).
 
+And `scripts/csa-mcp-registrations.py` — finds every registration of the four CSA MCP servers in
+Claude Code, Claude Desktop, Codex and Gemini, re-points a dead one at the standard binary after
+consent, and can check that a server answers. The three macOS entry points fetch it from `HEAD`
+at run time; no Windows script runs it yet
+([#184](https://github.com/CloudSecurityAlliance/DesktopSetup/issues/184)). See
+[Registration audit and repair](#registration-audit-and-repair).
+
 **`*-plugins` is named badly on purpose.** It installs and upgrades every CSA MCP server, not
 just plugins. The filename stays because it is in documented one-liners that fetch `HEAD`; the
 strings were all corrected to say "CSA plugins **and MCP servers**"
@@ -85,15 +92,17 @@ AI skills, MCP server catalogues and per-project tooling live in other repositor
 scripts/
   csa-plugins.txt            # public plugin list, fetched from HEAD at runtime
   csa-plugins-internal.txt   # CSA-internal plugin list, same
+  csa-mcp-registrations.py   # CSA MCP registration audit and repair, fetched from HEAD at runtime (macOS)
 tools/
   check-all.sh               # everything CI runs, locally, in one command
   check-*.py                 # fourteen repo-specific checks; all fourteen also run in CI
   sweep-csa-sources.sh       # weekly drift sweep (network + gh; NOT in check-all.sh)
 tests/
-  test_*.py                  # sixteen standalone executables — run one directly with python3
+  test_*.py                  # seventeen standalone executables — run one directly with python3
   NativeWrappers.Tests.ps1   # Pester; the only suite that needs real 5.1 to mean anything
   DesktopApps.Tests.ps1      # Pester; windows-update.ps1's wait before replacing a running app
   NpmGlobals.Tests.ps1       # Pester; the npm installers run install -g <pkg>@latest (#153)
+  ConfirmStep.Tests.ps1      # Pester; end of input at the consent prompt is a no
 docs/
   desktop-ai-apps.md         # where each desktop AI app comes from, and how it stays current
   periodic-sweep.md          # the weekly sweep runbook
@@ -570,6 +579,11 @@ says in its own docstring what it cannot do: compare them against the private ga
 installer closes that half at run time, reporting drift in both directions
 ([#95](https://github.com/CloudSecurityAlliance/DesktopSetup/issues/95)).
 
+**A seventh copy of the server list is `SERVERS` in `scripts/csa-mcp-registrations.py`:** each
+server's name, entry point and module. `tests/test_mcp_registrations.py`'s
+`servers_match_internal_setups` fails until it names the same servers, in the same order, as
+the six `CSA_INTERNAL_SETUPS`.
+
 **`CSA_PYTHON_PREFERRED` / `$CsaPythonPreferred` is declared in all six scripts** (`3.14`), not
 only the two `*-ai-tools` ones: `-update` and `-plugins` hand it to the private gate repo's
 setup scripts, and an undeclared value reached them empty, so the interpreter was guessed.
@@ -597,7 +611,7 @@ every file that uses it** — `check-duplication.py` enforces byte-identical beh
 
 ## The guard layer
 
-Fourteen checkers in `tools/` and nineteen test files in `tests/`. **`./tools/check-all.sh` mirrors CI
+Fourteen checkers in `tools/` and twenty-one test files in `tests/`. **`./tools/check-all.sh` mirrors CI
 exactly** — run it before pushing.
 
 A guard here is added only for a mistake that actually shipped, names its issue in the file, and
@@ -863,9 +877,398 @@ private gate repo because they carry CSA's OAuth client.** That repository must 
 public.
 
 Wire a server up by appending its `<name>-setup.{sh,ps1}` to `CSA_INTERNAL_SETUPS` — in all six
-scripts, with a version bump each. The loop uses `continue`, not `return`, so an absent setup
-script cannot disable the servers listed after it — which is also why a stale list produced **no
-output at all** until the drift report was added.
+scripts, with a version bump each — and adding it to `SERVERS` in
+`scripts/csa-mcp-registrations.py`, bumping its own `SCRIPT_VERSION`. The loop uses `continue`,
+not `return`, so an absent setup script cannot disable the servers listed after it — which is
+also why a stale list produced **no output at all** until the drift report was added.
+
+### Registration audit and repair
+
+**Why it exists.** The gate setups leave a working registration alone, which protects policy,
+and so they also left a dead one dead. In
+[#179](https://github.com/CloudSecurityAlliance/DesktopSetup/issues/179)'s incident a Claude Code
+registration of csa-zendesk pointed into a source checkout whose venv had lost its Homebrew
+Python, and a rerun changed nothing. `scripts/csa-mcp-registrations.py`
+([Plan 2](plans/2026-11-12-registration-repair.md)) finds every registration of the four servers
+in four clients and says what is wrong with each. After consent it re-points a dead one at the
+standard binary, and it can check that a server answers. It lives in this public repo because it
+carries no credential, and is Python because the same file is to serve Windows: stdlib only,
+3.9 to 3.14 (Apple's `/usr/bin/python3` is 3.9), always run with `-I`. **This repo now re-points
+existing CSA registrations; it still never creates one.**
+
+**macOS only, for now.** Shipping macOS first was D3, the CINO's call, and he chose, verbatim,
+*"Ship macOS first (Recommended)"* (2026-11-13). On Windows no `.ps1` runs the `.py`, and its four
+readers each answer `not audited: Windows support is #184 (Task 1W)`, so a dead registration on
+Windows stays dead and unreported, as before. `check-parity.py` cannot see this gap: the calls sit
+inside `setup_csa_internal_tools`, not in `main()` (A6). What keeps it visible is
+[#184](https://github.com/CloudSecurityAlliance/DesktopSetup/issues/184),
+[`TODO.md`](TODO.md) P1, and the SKIP `tests/test_mcp_registrations.py` prints for
+`wiring_windows_twin_exists` on every run. The Windows tasks are in
+[`plans/2026-11-12-registration-repair-windows.md`](plans/2026-11-12-registration-repair-windows.md).
+
+The measurements behind the figures and rulings below (M0–M7) are in
+[the measurement record](plans/reviews/2026-11-12-registration-repair-measurements.md).
+
+#### What a macOS run does
+
+`macos-ai-tools.sh`, `macos-update.sh` and `macos-plugins.sh` carry the same eight functions,
+`csa_registrations_*` and `repair_csa_registrations`, byte-identical (`check-duplication.py`).
+
+1. **In the plan, before you agree.** Inside the `Internal MCP servers` block, two header lines:
+
+   ```
+   then audit their registrations in Claude Code (user and local scopes), Claude Desktop, Codex and Gemini,
+   and re-point a dead one at ~/.local/bin keeping every setting
+   ```
+
+   Then, only if `gh` is signed in and can see the gate repo, `csa_registrations_preview`:
+   - makes the run's directory with `mktemp -d` (`CSA_REG_DIR`). `csa_on_exit` removes it on every
+     exit path, a declined plan included;
+   - needs `perl`, which ships with macOS, to bound its checks (below). Without it the audit is
+     skipped in one line;
+   - finds a Python: the first that is a real file and answers as 3.9 or later within 10 s, of
+     `python3` on `PATH`, `uv python find --system 3.14`, `/opt/homebrew/bin/python3`,
+     `/usr/local/bin/python3`, and `/usr/bin/python3` only when the Command Line Tools are
+     installed (without them it opens an install dialog);
+   - fetches the `.py` from `HEAD` into that directory, with `Cache-Control: no-cache` and a 60 s
+     limit. `CSA_REGISTRATIONS_PY=<path>` runs a local copy instead, for tests and branch runs;
+   - asks the file whether it is the audit, each question within 10 s. `--version` must print a
+     version of the form every script here declares. `--interface` must print exactly
+     `csa-mcp-registrations interface 1: plan apply verify`. The `.py` writes both lines itself,
+     not through argparse, whose usage lines Python 3.14 colours under `FORCE_COLOR` and wraps
+     at `COLUMNS`. A network sign-in page, or another file in its place, is skipped in one line;
+   - runs `plan --out <dir>/plan.json` and prints its rows under the block.
+
+   **The 10 s bound** is `perl -e 'alarm shift; exec { $ARGV[0] } @ARGV or exit 127' 10 …`
+   (`csa_registrations_bounded`). The command runs in the foreground, in perl's place. The alarm
+   outlives the `exec`, so `SIGALRM` ends the command itself, and a Ctrl-C reaches it with the
+   rest of the run. There is no background job, and nothing is left to kill. `or exit 127` is
+   there because a bare `exec` that fails lets perl exit 0. A child the command starts is not
+   stopped with it; neither question starts one.
+
+   A step that fails prints one line, `registration audit skipped: <why>; nothing will be
+   changed`, or `registration audit failed; nothing will be changed` when `plan` exits non-zero,
+   and the run goes on. Without CSA-Internal access only the two header lines show.
+2. **Consent** is the existing `confirm`. `NONINTERACTIVE=1` agrees, as it does for every step
+   (it is also set when `CI` is set or stdin is not a terminal). End of input at the prompt is a
+   no.
+3. **After the four gate setups,** as the last step of `setup_csa_internal_tools`:
+   `repair_csa_registrations` runs `apply --approved <dir>/plan.json`, then `verify` without
+   `--run`. So it is behind the same `gh` gate, and every standard binary has been installed or
+   rebuilt first. It finds the Python and checks the `.py` again, shows each `ok`, `info` and
+   `warn` line as the `.py` prints it, and never fails the run. With no plan file (the audit was
+   skipped or failed), `apply` is handed a plan marked `"audited": false` with no findings. That
+   plan approves nothing, so `apply` reports and changes nothing, and a dead entry it finds is
+   `found by the repair's own check, because the plan you agreed to could not audit the
+   registrations; not changed — run again`.
+4. **To-dos** go to `CSA_TODO_FILE`, which only the `*-ai-tools` installers set; the other
+   scripts print them as `info` lines. The orders:
+   - **10:** `Restart <client>` after a repair, `Quit Claude Desktop and run again`, and
+     `Claude Code's config is locked; …`;
+   - **40:** a registration left for somebody to fix;
+   - **45:** a server that did not answer.
+
+**Run time.** These steps are bounded. The `plan` and `apply` processes themselves are not run
+under a bound, nor are the `gh` gate calls, `uv python find` or `xcode-select -p`:
+- **Before the plan:** each Python candidate gets 10 s, the fetch 60 s, and each of the two
+  interface questions 10 s. Inside `plan`, `codex mcp list --json` gets 30 s, each distinct
+  interpreter probe 10 s, and `ps` 30 s (asked only when a Desktop entry would be re-pointed).
+- **After the setups:** the Python and interface checks again, then `apply` re-audits under the
+  same bounds. It adds up to 10 s waiting on Claude Code's lock, and two `codex mcp get --json`
+  calls of up to 30 s each per Codex entry it re-points.
+- **`verify` without `--run`** reads nothing and launches nothing.
+
+**How long this takes on a real machine is not measured yet;** Task 6's acceptance run records
+it. What a server check adds, once one runs, is under [the server check](#the-server-check-verify).
+
+#### What it reads
+
+| Client | Where | What |
+|---|---|---|
+| Claude Code | `~/.claude.json`, or `$CLAUDE_CONFIG_DIR/.claude.json` | user `mcpServers`, and each project's local `mcpServers`. A project whose directory is gone is skipped, and logged |
+| Claude Desktop | `~/Library/Application Support/Claude/claude_desktop_config.json`, when `Claude.app` is in `/Applications` or `~/Applications` | `mcpServers` |
+| Codex | `codex mcp list --json`, bounded at 30 s, because Apple's Python has no `tomllib` (A7). The file it edits is `$CODEX_HOME/config.toml`, else `~/.codex/config.toml` | the user's servers |
+| Gemini | `~/.gemini/settings.json`, when `gemini` is on `PATH` | `mcpServers` |
+
+- **Only the four names in `SERVERS`, and only stdio entries** (A9). Not read: `.mcp.json`, Codex's
+  and Gemini's project configs (checked into repositories, and shared), plugin-bundled servers,
+  Desktop extensions, and the hosted `csa-mcp`.
+- **Its own client calls run from a fresh empty directory** (A11), so a project config where the
+  installer stands cannot stand in for the user's.
+- **A client is `not installed`, `no config yet (#156)` or `not audited: <why>`, never "fine".**
+  A config that is unreadable, cut short, has comments (JSONC), a duplicate key, a byte-order
+  mark or an unexpected shape is `not audited`, and nothing is written to it. So is a Codex
+  whose CLI fails, times out or has no `--json`: a failing CLI is never read as "no
+  registrations".
+
+#### What it calls each registration
+
+- **standard:** `~/.local/bin/<entry>`, or a path to the same file. Nothing to do. If that binary
+  cannot start, its setup reinstalls it; it is never re-pointed at itself.
+- **dead:** its command, or the Python behind it, is gone or does not run.
+- **launcher:** it runs through `uv`, `uvx`, `npx` or another wrapper. Left, and never launched:
+  launching one can rebuild a venv, download Python or write into a checkout (A12).
+- **elsewhere:** it works, and is not the standard binary: usually a developer's checkout.
+
+**A direct executable** is a regular file whose first line names an absolute Python, either
+`#!<python>` or the `#!/bin/sh` + `'''exec' "<python>" "$0" "$@"` form installers write for long
+paths. A Python whose args are exactly `-m <the server's module>` is one too. Anything else is a
+launcher form, and so is a file whose name, or whose link target's name, is `uv`, `uvx`, `npx`,
+`pipx`, `poetry`, `pdm`, `hatch`, `conda`, `mamba`, `pixi`, `node`, `bun`, `bunx`, `deno` or
+`docker`.
+
+**A Python is dead** when it does not exist, when its venv's `pyvenv.cfg` `home` is gone or the
+venv has no `bin/python3`, or when `-I -B -c "import json, importlib.resources"` fails or takes
+over 10 s. A bare command name resolves on the installer's `PATH` for Claude Code, Codex and
+Gemini, which M3 measured passing their caller's `PATH` on. One that does not resolve there is
+dead.
+
+The reasons, verbatim; the plan prints each after `<name> in <client>:`. The Desktop row is
+reworded from the plan's text, as is `verify`'s held line, and the `.py` says why beside each.
+A dead registration's row then ends in one of two ways:
+- `; it will be re-pointed at ~/.local/bin/<entry>, keeping its settings (<keys>)`;
+- `; left as it is: <why>`, where the why is one of the rows below marked "dead, with", or D2's
+  to-do.
+
+| Reason | When |
+|---|---|
+| `its standard binary does not run yet; its setup reinstalls it` | standard, but that binary is missing, not executable, or its Python is dead |
+| `its command does not exist`, `its command is not executable` | dead |
+| `its Python no longer exists`, `its Python does not run` | dead |
+| `it runs through <name>, which this does not inspect; left as it is` | a launcher form |
+| `it points at <path>, not ~/.local/bin/<entry>; its Python runs, so it is left as it is` | elsewhere (D1) |
+| `its args run a module this does not recognise` | a Python `-m` naming another module |
+| `its args are not a form this re-points` | dead, with args other than the pinned `-m` form |
+| `its <KEY> setting would point the release binary at another tree` (`settings`, for more than one) | dead, with an interpreter-shaping key in its env: `PYTHONPATH`, `PYTHONHOME`, `PYTHONSTARTUP`, `PYTHONUSERBASE`, `PYTHONEXECUTABLE`, `VIRTUAL_ENV`, `CONDA_PREFIX` or any `UV_*` (A12) |
+| `its config is a link to <path>; not changed — edit it there` | dead, and the config, or a directory between it and `HOME`, is a symlink (A10) |
+| `not checked: Claude Desktop's PATH differs from machine to machine, so a bare command name can't be resolved here` | a bare-name Desktop entry (A8; reworded) |
+| `not checked: its command is a relative path, which depends on where the client starts` | a relative command |
+| `it is not a stdio registration, which is all this audits` | an HTTP or other transport |
+| warning: `it runs from a venv built on a Homebrew Cellar Python, which the next brew upgrade deletes` | elsewhere, Cellar-pinned (#179 item 5) |
+| warning: `<KEY> is set in this shell, and <client> passes it on to every server it starts, so the re-pointed binary would get it too` | a re-point in Claude Code or Gemini, which pass their own env on (M3) |
+
+The plan ends `<n> CSA registrations in <m> clients; <k> need nothing`.
+
+**The bare-name Desktop ruling** (the AI's, 2026-11-13, under P1). M3 recorded one Mac's Desktop
+`PATH`, but it holds nvm and pyenv directories of that machine, and Desktop's own log said its
+shell-environment extraction had timed out, so it may be a fallback. Applying it could call a
+working entry dead and re-point it, which D1 forbids. So `DESKTOP_PATH` is `None`, and a bare
+name in Desktop's config is left `not checked`, never re-pointed.
+
+#### What `apply` changes, and only that
+
+- **Only a re-point the plan showed, unchanged since** (A4; the CINO's rule of 2026-10-23, *"we
+  want to check state, make sure we are up to date before we reply."*). For each finding, the plan
+  file records the key `apply` matches on: its client, scope, project, name, config path, and a
+  fingerprint, the sha256 of the command, the args and the sorted env **key names**, never a
+  value. `apply` re-audits, and acts
+  only on a finding that is still a re-point under the same key. Otherwise it says
+  `found after you agreed to the plan; not changed — run again`,
+  `the plan you agreed to left it as it was; not changed — run again`, or, when the plan file
+  cannot be read, `not changed, because the plan you agreed to could not be read — run again`.
+  A plan marked `"audited": false`, which the entry scripts write when theirs could not audit,
+  approves nothing whatever it lists, and its reason is `found by the repair's own check, because
+  the plan you agreed to could not audit the registrations; not changed — run again`.
+- **Only when the standard binary runs.** Otherwise
+  `its standard binary is not installed yet; left as it is`, with a to-do to run again once its
+  setup has installed it.
+- **Only `command`,** set to the absolute `~/.local/bin/<entry>`, plus `args`, from
+  `["-m", "<module>"]` to `[]`, in that one interpreter form. Every env var and every other field
+  stays as parsed. That is checked in memory before the write
+  (`the edit could not be confined to its command; not changed`), and again on read-back.
+- **JSON** (Claude Code, Claude Desktop, Gemini) is parsed and written back keeping its key
+  order, its indent (tabs too), its trailing newline or none, and CRLF. Only spelling can change:
+  the whitespace between tokens, a `\u` escape of a printable character (written as the
+  character), and a number's form (`1.5e3` becomes `1500.0`). A config holding NaN or an infinity
+  is not rewritten. So the first repair of a file can change its bytes without changing a value:
+  in M2, a whole-file re-serialisation with identical values went from 4636 to 4637 bytes.
+- **Codex's `config.toml`** is edited line by line: only the `command` line, and for the
+  interpreter form the one-line `args` line. A table laid out any other way (its header not
+  exactly once, a multi-line string or array) is left with
+  `its Codex entry is laid out in a way this cannot edit safely; left as it is`. The result is
+  read back through `codex mcp get --json`.
+- **No client CLI ever writes** (A3). `claude mcp add -e` and `codex mcp add --env` put values on
+  a command line, which macOS shows to every account ([FRICTION-007](FRICTION.md)).
+- **A repair reaches what starts after it.** A running Claude Code session, or Claude Desktop,
+  keeps the command it started with (M1, M2). So the `ok` line for Claude Code ends
+  `Claude Code sessions started after this use it`, and every client repaired gets a
+  `Restart <client>` to-do.
+
+#### The decisions, at their safe defaults
+
+D1, D2, D4 and D5 are unanswered. Each is one constant at the top of the `.py`, pinned by a test
+(D5 by two); an answer changes the constant and its tests.
+
+| Decision | Constant | In force | Pinned by |
+|---|---|---|---|
+| D1. A registration that works but is not the standard binary | `REPOINT_WORKING_ELSEWHERE = False` | left byte-identical and warned, with the to-do `… points at <path>, not ~/.local/bin/<entry>; if that is not deliberate, re-point it` | `working_elsewhere_left_and_warned` |
+| D2. A dead Claude Code local-scope entry | `LOCAL_SCOPE_ACTION = "todo"` | left, with the to-do `rebuild that checkout's venv, or remove the local entry so your user entry applies there; removing it drops its settings (<keys>)` | `dead_local_scope_todo_names_rebuild_or_remove` |
+| D4. Claude Desktop is running | `WRITE_DESKTOP_WHILE_RUNNING = False` | Desktop's config is not written while Desktop runs, or while that cannot be told (below) | `desktop_running_skipped_with_quit_todo` |
+| D5. The server check on a rerun | `VERIFY_ON_RERUN = frozenset()` | a rerun launches no server, and the plan prints no check row | `verify_held_by_default`, `no_check_rows_while_held` |
+
+M5 has since measured each server's start: no token file changed and no connection was seen, for
+all four. That makes each a candidate for D5's option (c), but the answer is still the CINO's.
+M2 did not settle D4 (below).
+
+#### What is never touched
+
+- Token, OAuth-state and credential files: never opened, moved or deleted. No login, logout or
+  re-consent is run.
+- `.mcp.json`, and Codex's and Gemini's project configs.
+- A launcher form, a registration whose env shapes the interpreter, and a working one elsewhere
+  (D1).
+- A dead local-scope entry (D2), a bare-name Desktop entry (A8), and Desktop's config while
+  Desktop runs (D4).
+- A config that is a symlink (A10), or that has a second name, a hard link:
+  `its config has another name too (a hard link), which a replace would cut off; not changed — edit it by hand`.
+- The registration list itself: nothing is created or removed. A missing registration is its
+  setup's job.
+- Any backup it did not make, including Claude Code's own in `~/.claude/backups/`.
+
+#### Concurrency
+
+- **Claude Code's lock (M1).** Claude Code takes `<config>.lock`, a directory, around each write
+  of `.claude.json`, and waits for one somebody else holds. `apply` takes the same lock with
+  `mkdir`, and holds it across the read, the checks, the backup and the replace. It waits up to
+  10 s for a held lock, and **never breaks one**: the AI's ruling of 2026-11-12, under P1, because
+  breaking a live session's lock lets two writers race.
+  - Still locked after 10 s: `Claude Code's config stayed locked for 10s, so it was not changed;
+    the lock was left as it is`. The to-do is `Claude Code's config is locked; close Claude Code
+    and run again; if Claude Code is not running, remove <lock>`. A crashed session's lock blocks
+    Claude Code's repair until it is removed, and every other client is still repaired.
+  - A write that has held the lock for more than 5 s is abandoned (`… not written — run again`),
+    well before the 10 s after which Claude Code's bundled `proper-lockfile` may call it stale.
+  - A lock is removed only on proof that this run made it.
+- **Claude Desktop (D4).** Whether it runs is read from `ps -axo comm=`, by executable path:
+  `/Applications/Claude.app/Contents/MacOS/Claude`, or the same under `~/Applications`. Never by
+  process name, since `claude` is also Claude Code, and Claude Code's updater renames its running
+  image. It is asked when the plan is made, and again just before the write.
+  - When Desktop is running, or `ps` cannot tell, the row says
+    `Claude Desktop is running; <name> will not be re-pointed there this run — quit it and run again`
+    (or `could not tell whether Claude Desktop is running; …`), and the to-do is
+    `Quit Claude Desktop and run again`. It appears only when a Desktop entry would be re-pointed.
+  - M2 showed an outside edit of an entry's command survived 14 minutes of Desktop running, and
+    its quit. Whether a preference
+    change makes a running Desktop write its old copy back was **not measured**, so D4 keeps its
+    default.
+- **Any other writer.** The file's identity (device, inode, mtime, size, mode, link count) is
+  taken before the read, and checked before the backup and again before the replace. A change
+  abandons the write, leaving no backup: `changed while this ran; not written — run again`.
+
+#### Backups and temporary files
+
+- **Before each replace, `<config>.bak-<YYYYmmddHHMMSS>`** (local time). It has the same name, the
+  same match and the same three-generation prune as `csa-claude-connectors.py` (A13), so one cap
+  bounds both tools' copies. **Each backup holds the same secrets as its config,** at its mode,
+  and never looser: a looser one abandons the write.
+  - The prune matches only `<config name>.bak-` plus fourteen digits, the name both tools write,
+    so a backup named any other way is never touched. That also means Claude Code's own backups
+    in `~/.claude/backups/` are not counted in the cap.
+  - A backup is made only once the file is known unchanged since it was read, and is removed if
+    the write is then abandoned. Only a replace that reads back as written prunes.
+  - A read-back that differs restores the config from the backup:
+    `its config did not read back as written, so it was restored from its backup; not changed`.
+- **The write:** a temp file beside the config (`.csa-registrations-<pid>-<8 characters>`),
+  created `0600` and set to the config's mode before any byte is written, then fsync, then
+  `os.replace`. That keeps the
+  mode, but **drops the file's extended attributes and ACLs.**
+- **Stopped:** SIGTERM, SIGHUP or Ctrl-C runs the clean-ups (the temp file, an unused backup, the
+  lock). A run killed outright can leave a temp file holding the config's secrets; the next
+  `apply` removes this tool's temp files that are older than itself and whose run is gone, and
+  nothing else.
+
+#### The credential rule
+
+- Env **values** are held in memory only. They are never printed, logged, put on a command line,
+  or written to the plan file or the to-do ledger. Key names and counts may be shown.
+- A value is written only back into the config it came from and that config's backup, or into the
+  env of a server `verify --run` launches.
+
+#### Running it by hand
+
+The entry scripts delete their fetched copy at exit, so the held check's line names no command
+to run. From a checkout of this repo, current with `main` (`git pull`):
+
+```bash
+python3 -I scripts/csa-mcp-registrations.py plan             # read-only: what a run would show
+python3 -I scripts/csa-mcp-registrations.py verify --run     # check every registered server now
+python3 -I scripts/csa-mcp-registrations.py --interface      # the line the entry scripts expect
+```
+
+- `plan` writes nothing; with `--out FILE` it writes only that new file, at `0600`.
+- `verify --run` launches every registration it can check, one at a time and identical launches
+  once, under your real `HOME` with its registered env, as the next section says. M5 measured
+  that launch for all four servers on 2026-11-13: no token file changed and no connection was
+  seen.
+- `apply` without `--approved` re-plans, prints the plan, and applies it **without asking**:
+  running it is the consent. Run `plan` first.
+
+#### The server check: `verify`
+
+`verify --run` launches each registered CSA server with its registered command and settings, and
+sends it one MCP `initialize`
+([#179](https://github.com/CloudSecurityAlliance/DesktopSetup/issues/179), Plan 2 Task 3). It
+shows the server answers when launched that way, **not** that it works in a client: tool
+discovery and an authorised read in each client are
+[#177](https://github.com/CloudSecurityAlliance/DesktopSetup/issues/177)'s. A rerun runs
+`verify` without `--run`, which checks only the servers `VERIFY_ON_RERUN` names. That is none
+until the CINO answers D5, so a rerun prints one line and does nothing else, no audit and no
+launch: `server check held: this run launched no CSA server; whether a rerun should is not
+decided yet (#179, D5)`. To check by hand, see [Running it by hand](#running-it-by-hand).
+
+- **What it launches:** a registration whose command is a direct executable that works (A12).
+  It never launches these, and says why:
+  - a launcher form (`uv run`, `uvx`, `npx`, …, or a link to one under another name):
+    `not checked: launcher form`;
+  - a dead registration, or a dead standard binary: `does not start: <reason>`;
+  - a registration whose env holds an interpreter-shaping key, whose env or args use
+    `$`-expansion, or that sets its own working directory: `not checked: …`.
+
+  Identical launches are made once, and the line names every client that shares one.
+- **How:** one launch at a time, each in a fresh empty directory, in a session and process group
+  of its own. After the answer, or 20 s, its stdin is closed and it has 2 s to exit. Then its
+  group gets SIGTERM and 2 s, then SIGKILL, and the server is reaped. A child it leaves in its
+  group is stopped with it. A stop signal runs the same teardown. A process that leaves the group
+  (`setsid`) is outside it; no CSA server does that.
+- **Its launch env approximates each client's,** from M3 in
+  [the measurement record](plans/reviews/2026-11-12-registration-repair-measurements.md). So the
+  output says "launched with its registered command and settings", never "as <client> launches
+  it". Every client also gets the registration's env, and none gets the installer's own keys
+  (`CSA_TODO_FILE`, `CSA_LOG`, `CSA_DEBUG`, `CSA_NESTED`, `CSA_REGISTRATIONS_*`).
+  - **Claude Code:** the installer's whole env. Claude Code also adds keys of its own (a session
+    id, …); the check does not.
+  - **Codex:** only `HOME LANG LOGNAME PATH SHELL TERM TMPDIR USER`, and the keys its
+    registration names in `env_vars`. Those eight are a lower bound: only the keys in M3's input
+    were tested. The two directories Codex prepends to `PATH` hold no CSA binary, and are not
+    added.
+  - **Gemini:** the installer's env minus what looks secret, by Gemini CLI 0.67's own rule, read
+    from its installed bundle. Its settings' allow and block lists are not reproduced.
+  - **Claude Desktop:** `HOME LOGNAME PATH SHELL USER`. M3 also recorded `LC_CTYPE` and
+    `__CF_USER_TEXT_ENCODING`; Python and macOS add those to any process started without them
+    (inferred), so they are left to them. `PATH` is the installer's: M3's one-Mac Desktop `PATH`
+    is not applied (the A8 ruling of 2026-11-13). A Desktop entry the check launches has an
+    absolute command, so `PATH` does not choose the binary.
+- **What it prints: only fixed lines it composes itself.** None of a server's own text is
+  printed: not its stdout or stderr, its name or version, or an error's message.
+  - Only integers of the server's reach a line: an exit code or signal number, a JSON-RPC error
+    code in the range the spec reserves (any other code is not printed), and a count of stdout
+    lines that were not JSON, shown as "more than 1000" above that.
+  - A to-do for a server that did not answer names its command, never its args or env, to run
+    in a terminal to see its own messages. For the interpreter form it adds the pinned
+    `-m <module>` from the script's own table, since a bare Python would open a prompt.
+  - Masking the server's text was tried first. The review of `bbb6f82` got values past it four
+    ways: an arg, a value split over two lines, an escaped value, and a value cut at the end of
+    the stderr tail kept. A deny-list cannot be made complete, so nothing is shown.
+- **Run time:** M4 measured 0.35–0.61 s to an answer warm, and up to about 3 s cold. M5, with
+  real credentials, measured at most 1.84 s, and each server exited about 0.1 s after its stdin
+  closed.
+  - One launch is bounded at 24 s: 20 s, then 2 s and 2 s. A process that outlives SIGKILL adds
+    2 s more.
+  - The number of launches has no bound of its own. Per-client envs can defeat de-duplication,
+    and each Claude Code local-scope entry can add one. So the launches together are held to
+    `VERIFY_BUDGET`, 120 s. A launch that could run past it is not started, and is reported
+    `not checked`.
+  - While D5 holds, a rerun adds nothing.
 
 ---
 

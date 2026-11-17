@@ -11,7 +11,7 @@
 > |---|---|---|
 > | **Desktop AI apps:** Claude, ChatGPT, Gemini, Copilot desktop, and the wait before replacing a running app | [#168](https://github.com/CloudSecurityAlliance/DesktopSetup/issues/168) | [#163](https://github.com/CloudSecurityAlliance/DesktopSetup/issues/163): `check-all.sh` is red on a Windows host (the macOS half, #169, was fixed by #189 on 2026-11-11) |
 > | **Gemini CLI → Antigravity CLI:** Gemini CLI no longer accepts personal Google sign-in | [#172](https://github.com/CloudSecurityAlliance/DesktopSetup/issues/172) | [#171](https://github.com/CloudSecurityAlliance/DesktopSetup/issues/171): research Gemini CLI vs Antigravity CLI before changing any script |
-> | **Python 3.14 on Windows:** #179's Windows halves (the CSA Python resolver, the gate `.ps1` rebuild, document deps) | [#184](https://github.com/CloudSecurityAlliance/DesktopSetup/issues/184) | measure `Py_GIL_DISABLED` and uv's build preference on Windows before writing code (task 1 of #184) |
+> | **Python 3.14 on Windows:** #179's Windows halves (the CSA Python resolver, the gate `.ps1` rebuild, document deps), and Plan 2's registration audit and repair: tasks 1W, 4W, G1W, G2W and 6W in [`plans/2026-11-12-registration-repair-windows.md`](plans/2026-11-12-registration-repair-windows.md). macOS ships first by the CINO's D3, *"Ship macOS first (Recommended)"* (2026-11-13), so Windows has no registration repair until then (P1 below) | [#184](https://github.com/CloudSecurityAlliance/DesktopSetup/issues/184) | measure `Py_GIL_DISABLED` and uv's build preference on Windows before writing code (task 1 of #184) |
 > | **Everything that needs a Mac** | [#119](https://github.com/CloudSecurityAlliance/DesktopSetup/issues/119) | read its latest comment first |
 >
 > Before starting, run `git pull`, `gh issue list` and `gh pr list`: a handoff is a snapshot, and
@@ -103,6 +103,13 @@ than no citation because it looks right. A function name survives edits; a line 
 
 - [x] **M3 — `brew upgrade node` runs unconditionally** (both install scripts, `install_node`)
   Prints "Upgrading Node.js" even when Node is already current. Minor UX issue; `brew upgrade` on a current package just warns and exits cleanly.
+
+---
+
+## Platform gaps
+
+- [ ] **P1 — The CSA MCP registration audit and repair runs on macOS only** (`macos-ai-tools.sh`, `macos-update.sh`, `macos-plugins.sh`, `csa_registrations_preview`, `repair_csa_registrations`)
+  The three macOS entry points list every registration of the four CSA MCP servers in the plan, re-point a dead one after consent, and hold the server check until D5 is answered ([ENGINEERING.md → Registration audit and repair](ENGINEERING.md#registration-audit-and-repair)). **No Windows script runs any of it.** On Windows, a dead registration stays dead and unreported, as before Plan 2, and the `.py` answers `not audited: Windows support is #184 (Task 1W)` for every client there. This is a deliberate one-sided ship, the CINO's D3 of 2026-11-13, verbatim *"Ship macOS first (Recommended)"*. It is **not** declared `PLATFORM_ONLY`, and `check-parity.py` cannot see it, because the calls sit inside `setup_csa_internal_tools` rather than `main()`. What keeps it visible: this item, [#184](https://github.com/CloudSecurityAlliance/DesktopSetup/issues/184), and the per-case SKIP of `wiring_windows_twin_exists` in `tests/test_mcp_registrations.py`, which turns into a pass once all three `.ps1` define `Show-CsaRegistrationsPreview` and `Repair-CsaRegistrations`. The work is tasks 1W, 4W, G1W, G2W and 6W in [`plans/2026-11-12-registration-repair-windows.md`](plans/2026-11-12-registration-repair-windows.md), on a real Windows machine.
 
 ---
 

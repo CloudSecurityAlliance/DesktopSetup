@@ -26,7 +26,7 @@
 
 set -euo pipefail
 
-SCRIPT_VERSION="2026-11-13T00:12Z"
+SCRIPT_VERSION="2026-11-15T17:25Z"
 
 # ── Output helpers ──────────────────────────────────────────────────
 
@@ -179,9 +179,17 @@ csa_on_exit() {
       warn "no debug log was written — re-run with CSA_DEBUG=1 to get one."
     fi
   fi
+  # The registration audit's working directory (csa_registrations_dir) holds its plan file. It is
+  # removed on every exit path: a declined plan and a run stopped early as well as a finished one.
+  if [[ -n "${CSA_REG_DIR:-}" && -d "$CSA_REG_DIR" ]]; then
+    rm -rf "$CSA_REG_DIR" || true
+  fi
   csa_debug_hint
   return $status
 }
+# csa_on_exit removes CSA_REG_DIR with rm -rf, so it is never taken from the environment: only
+# csa_registrations_dir sets it, to a directory mktemp made for this run.
+unset CSA_REG_DIR
 trap csa_on_exit EXIT
 
 
@@ -260,7 +268,10 @@ get_version() {
 confirm() {
   if [[ -n "${NONINTERACTIVE-}" ]]; then return 0; fi
   local reply
-  read -r -p "$1 [Y/n] " reply
+  # End of input (Ctrl-D, or closed stdin) is not consent: without `|| return 1` the empty
+  # reply fell through to the default, yes, and a run went on to write configs (review of
+  # f18337c, M2). Confirm-Step in the .ps1 scripts answers no the same way.
+  read -r -p "$1 [Y/n] " reply || return 1
   case "${reply:-Y}" in
     [Yy]*) return 0 ;;
     *)     return 1 ;;
