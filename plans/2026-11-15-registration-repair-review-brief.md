@@ -108,7 +108,7 @@ mutation in `--self-test` that proves they can fail.
 | 5 | B | A client that cannot be read is `not audited`, never "fine"; one hostile config cannot fail the others; config text cannot forge a row | readers, `audit`, `clean` | cases `codex_list_failure_is_not_absence`, `client_absent_not_installed`, `client_failure_contained`, `hostile_input_contained`, `torn_claude_json_untouched`, `jsonc_gemini_not_audited`, `control_chars_cannot_forge_rows` | pass |
 | 6 | B | Its own client calls run from a fresh empty directory, bounded | `run_bounded`, `empty_dir` | cases `client_reads_run_in_empty_dir`, `codex_timeout_kills_its_group` | pass |
 | 7 | C | `apply` changes only the approved entry's `command` (and `args` from `["-m", <module>]` to `[]`); every env var and other field, and every other entry, is unchanged | `repointed`, `only_command_changed`, `edit_json_held`, `codex_line_edits` | cases `dead_user_scope_repointed_env_kept`, `json_format_preserved`, `codex_line_edit_keeps_other_fields`, `gemini_extra_fields_kept`, `interpreter_module_form_repairable`, `confinement_check_refuses_a_damaged_entry` | pass; the last one patches the edit four ways and each is refused |
-| 8 | C | Only what the agreed plan showed as a re-point, unchanged since, in the same file, is acted on (A4) | `load_approved`, `approval_key`, `apply` | cases `unapproved_finding_not_repaired`, `changed_since_plan_not_written`, `unreadable_plan_file_applies_nothing`, `approval_binds_config_path`, `duplicate_plan_row_resolves_to_leave`, `standard_binary_missing_no_repoint` | pass |
+| 8 | C | Only what the agreed plan showed as a re-point, unchanged since, in the same file, is acted on (A4) | `load_approved`, `approval_key`, `apply` | cases `unapproved_finding_not_repaired`, `changed_since_plan_not_written`, `unreadable_plan_file_applies_nothing`, `approval_binds_config_path`, `duplicate_plan_row_resolves_to_leave`, `standard_binary_missing_no_repoint`, `unaudited_plan_reason_is_honest` (a plan the scripts mark `"audited": false` approves nothing, and its reason is not "found after you agreed") | pass |
 | 9 | C | The mode is kept; each written config gets exactly one backup, at its mode, never looser; the prune touches only `<name>.bak-<14 digits>`, as `csa-claude-connectors.py` does | `make_backup`, `prune_backups`, `write_temp` | cases `desktop_mode_0600_kept`, `backup_same_mode_and_pruned_to_3`, `prune_spares_other_backup_names`, `backup_looser_than_file_abandons`, `backup_name_never_overwritten`, `backup_rule_matches_connectors` | pass |
 | 10 | C | Nothing is written through a symlink (the config or any directory up to `HOME`) or to a hard-linked config | `linked_config`, `other_names` | cases `symlinked_config_refused`, `linked_parent_dir_refused`, `codex_write_time_link_refused`, `hard_linked_config_refused`, `system_links_are_not_config_links` | pass |
 | 11 | C | Desktop's config is never written while Desktop runs, or while `ps` cannot tell (D4); Desktop is found by executable path, never by name; it is asked again just before the write | `desktop_running`, `decide`, `apply` | cases `desktop_running_skipped_with_quit_todo`, `desktop_started_after_plan_skipped`, `desktop_state_unknown_at_write_skipped`, `desktop_detected_by_path_not_name` | pass; the config's bytes, inode and mtime unchanged, no backup |
@@ -120,7 +120,7 @@ mutation in `--self-test` that proves they can fail.
 | 17 | C | A second `apply` writes nothing and makes no backup | everything | case `second_run_noop`; acceptance "Run 2 changed nothing" | inode, mtime, bytes unchanged; no new backup |
 | 18 | D | `verify` prints none of a server's own text: not its stdout or stderr, name, version or error message. Only fixed lines with a CSA name, a client, a bounded integer and the command | `report`, `exchange`, `answered`, the `F_*` and `OK_CHECK` strings | cases `no_server_text_printed`, `exits_before_answering_masked`, `junk_count_capped`, `interpreter_form_todo_names_its_module` | pass: every printed and ledger line matches `FIXED_LINES`, and no 4-character run of any value appears |
 | 19 | D | One launch at a time, each bounded at 24 s (20 + 2 + 2), its process group stopped and reaped, a child it leaves stopped too; all launches held to `VERIFY_BUDGET` 120 s; a stop signal stops the server | `run_check`, `end`, `verify` | cases `silent_server_times_out_and_is_killed`, `orphan_child_is_stopped`, `one_process_at_a_time`, `time_budget_bounds_the_launches`, `signal_during_check_leaves_no_server` | pass; no process of the stub's group survives |
-| 20 | D | Never launched: a dead registration, a dead standard binary, a launcher form, an interpreter-shaping key, `$`-expansion, an own `cwd`, a bare-name Desktop entry | `check_of` | cases `dead_registration_not_launched`, `dead_standard_binary_not_launched`, `launcher_form_not_launched`, `interpreter_keys_not_launched`, `dollar_env_not_checked`, `own_cwd_not_checked`. **Bare-name Desktop has no `verify` case:** read `check_of` (its state is `unchecked`, not in `LAUNCHED_STATES`), and the acceptance record's `verify --run` output | pass; for bare-name Desktop, the line `not checked: Claude Desktop's PATH differs …` and no launch |
+| 20 | D | Never launched: a dead registration, a dead standard binary, a launcher form, an interpreter-shaping key, `$`-expansion, an own `cwd`, a bare-name Desktop entry | `check_of`, `classify` | cases `dead_registration_not_launched`, `dead_standard_binary_not_launched`, `launcher_form_not_launched`, `interpreter_keys_not_launched`, `dollar_env_not_checked`, `own_cwd_not_checked`, `bare_name_desktop_never_launched` (under `verify --run`, with a stub server of the entry's name first on the installer's `PATH`; its mutation resolves Desktop on that `PATH`, and the stub is launched) | pass; for bare-name Desktop, the line `not checked: Claude Desktop's PATH differs …` and no launch |
 | 21 | D | D5 is held: `VERIFY_ON_RERUN` is empty, so `verify` without `--run` reads no config and launches nothing, and the plan prints no check row | `VERIFY_ON_RERUN`, `verify`, `render` | `grep -n '^VERIFY_ON_RERUN' scripts/csa-mcp-registrations.py`; cases `verify_held_by_default`, `no_check_rows_while_held`, `rerun_checks_only_allowed_servers`, `token_files_untouched` | `VERIFY_ON_RERUN = frozenset()`; pass |
 | 22 | E | The rows are shown in the plan, inside the `Internal MCP servers` block, before consent, and `apply` runs on exactly that plan file after the gate setups; `verify` runs without `--run` | `csa_registrations_preview`, `repair_csa_registrations`, `setup_csa_internal_tools` | cases `wiring_preview_rows_under_internal_mcp_servers`, `wiring_repair_uses_the_previewed_plan`, `wiring_verify_called_without_run`, `wiring_non_member_silent` | pass, for each of the three scripts |
 | 23 | E | End of input at the consent prompt is a no, on both platforms | `confirm`, `Confirm-Step` | `python3 tests/test_headless.py`; `tests/ConfirmStep.Tests.ps1` | end of input → DECLINED; each has a control that shows the old form answering yes |
@@ -132,14 +132,28 @@ mutation in `--self-test` that proves they can fail.
 | 29 | G | `ENGINEERING.md` → "Registration audit and repair" says what the code does: every reason string, constant and to-do it quotes comes from the `.py` or the scripts | `ENGINEERING.md` | Compare each backticked span of four or more words in that section with the `.py`'s string constants and `macos-ai-tools.sh`. Run on 2026-11-15: 60 spans; 46 matched verbatim. The other 14 were each traced by hand: a template filled at run time, two constants joined, a tuple shown space-separated, or a CLI command the section says is never used | every span traces to the code; anything the section labels unmeasured is unmeasured in the records |
 | 30 | G | The `.py` runs on Python 3.9 with the stdlib only, and its server list matches the six `CSA_INTERNAL_SETUPS` | `SERVERS` | cases `py39_syntax`, `servers_table_matches_spec`, `servers_match_internal_setups`, `no_invisible_characters_in_source`; the suite under `/usr/bin/python3` | pass |
 
-**No automated check** covers two claims, so they rest on reading:
-- **The `.py` never opens a token, OAuth-state or credential file.** Read its `open(` and `os.open(` calls: each
-  opens a client config, its backup or temp file, a plan file, a `pyvenv.cfg` or a script's first 4 KB (the
-  shebang). Case `token_files_untouched` covers the stub servers `verify` launches, and M5 covers the real ones
-  for that launch only.
-- **No value reaches the debug log through the shell.** The `.py` prints none, so none can. Case
-  `wiring_log_lines_to_debug_log_only` pins that `log` lines go through the redactor, and only when `CSA_DEBUG`
-  made a log.
+**Two claims that rested on reading now have automated checks** (final review of `fc9614d`). Each has a
+mutation in `--self-test` that it catches:
+- **The `.py` never opens a token, OAuth-state or credential file.**
+  - **The check:** case `token_file_never_opened`. It runs `plan`, `apply` (which re-points a registration
+    carrying a token path) and `verify --run` under a Python audit hook, which records any `open` of four
+    seeded token files. Two of the four are named by `CSA_ZENDESK_TOKEN_FILE` and `CSA_GW_TOKEN`, in the
+    registrations' env and in the installer's own. A control shows the hook records an open.
+  - **Its mutation** opens a token path named in a registration's env.
+  - **Still a matter of reading:** the hook sees only the `.py`'s own process. Its `open(` and `os.open(`
+    calls each open one of these: a client config, that config's backup or temp file, a plan file, a
+    `pyvenv.cfg`, a script's first 4 KB (the shebang), the `CSA_TODO_FILE` ledger (appended to, in
+    `Todos.flush`), or `/dev/null` (in `show`, once its stdout is lost).
+  - **The servers it launches:** case `token_files_untouched` covers the stub servers `verify` launches, and
+    M5 covers the real ones, for that launch only.
+- **No value reaches the screen or the debug log through the shell.**
+  - **The check:** case `wiring_no_value_reaches_the_screen_or_debug_log`. With the real `.py`, under
+    `CSA_DEBUG`, it audits a fixture `HOME` whose registrations carry secret values. It re-points the dead
+    one, logs a skipped local entry and repairs. It finds no value on the screen or in the log, and the
+    repaired config still holds them.
+  - **Its mutation** puts a registration's values into a log line.
+  - **Also:** case `wiring_log_lines_to_debug_log_only` pins that `log` lines go through the redactor, and
+    only when `CSA_DEBUG` made a log.
 
 ## 7. Review history
 
@@ -198,7 +212,19 @@ description and D6's attribution.
 **Task 6 Step 1, acceptance (`5389e97`):** 204 of 204. Two harness bugs and one seed error (a non-URL
 allowlist that csa-google-workspace refuses) are recorded under its "Harness corrections"; no code changed.
 
-**Mutation testing throughout:** the suite's `--self-test` applies 182 mutations, each caught by the case named
+**The whole branch (`fc9614d`, PR #201): approved,** with every promise held under test. Three changes came of
+it, in the commit after `fc9614d`:
+- **A minor.** `wiring_ctrl_c_stops_a_hung_probe` failed whenever the suite ran with SIGINT ignored (a `&` job,
+  `nohup`), because the shell it starts inherited the ignore. `Rig.start` now resets SIGINT. Verified under
+  `trap '' INT` on both Pythons: it fails at `fc9614d` and passes now.
+- **A nit.** When the audit was skipped before consent, a dead entry was reported "found after you agreed to
+  the plan". The scripts now mark the plan they hand `apply` `"audited": false`, and `apply` says
+  `found by the repair's own check, because the plan you agreed to could not audit the registrations; not
+  changed — run again` (case `unaudited_plan_reason_is_honest`).
+- **The brief's two hand-checked claims and claim 20's gap** now have automated cases, each with a mutation
+  (section 6).
+
+**Mutation testing throughout:** the suite's `--self-test` applies 188 mutations, each caught by the case named
 for it. Survivors kept by design: dropping `O_NOFOLLOW` (equivalent under `O_CREAT|O_EXCL`), and dropping the
 in-memory confinement assert (`repointed` cannot break it unless itself broken; case
 `confinement_check_refuses_a_damaged_entry` shows the assert catches a broken one).

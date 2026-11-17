@@ -25,7 +25,9 @@ at another tree, a config that is a symlink, or Claude Desktop running.
 
 `plan` writes nothing but the plan file it is asked for. `apply` re-audits, and re-points only
 what that plan file showed as a re-point and is unchanged since (same client, scope, project,
-name and fingerprint), and only when the standard binary is there. It edits the client's own
+name and fingerprint), and only when the standard binary is there. A plan file marked
+`"audited": false`, which the entry scripts hand it when their plan could not audit, approves
+nothing, and says so in its reason. It edits the client's own
 file, never through a client CLI (argv is visible to every account): `command`, plus `args` in
 the pinned `-m <module>` form, and nothing else. A write to Claude Code's config takes Claude
 Code's own lock (M1), never breaks one, abandons the write if it has held it 5 s, and removes
@@ -113,7 +115,7 @@ import tempfile
 import time
 import unicodedata
 
-SCRIPT_VERSION = "2026-11-15T18:17Z"
+SCRIPT_VERSION = "2026-11-17T15:41Z"
 
 # ── The plan's decisions (D1-D5). Each is pinned by one test; an answer changes the constant. ──
 
@@ -1319,6 +1321,11 @@ TODO_RESTART = 10
 TODO_LEFT = 40
 
 R_UNAPPROVED = "found after you agreed to the plan; not changed — run again"
+# When the plan agreed to could not audit (the entry scripts hand apply a plan marked
+# `"audited": false`), nothing was shown to agree to, so "after you agreed" would be untrue
+# (final review of fc9614d).
+R_NO_PREVIEW = ("found by the repair's own check, because the plan you agreed to could not "
+                "audit the registrations; not changed — run again")
 R_NOT_PLANNED = "the plan you agreed to left it as it was; not changed — run again"
 R_NO_PLAN = "not changed, because the plan you agreed to could not be read — run again"
 R_NO_STANDARD = "its standard binary is not installed yet"
@@ -1385,18 +1392,20 @@ def key_of(f):
 
 
 def load_approved(path):
-    """(the keys planned as re-points, every key planned, None), or (None, None, why). A key
-    the file lists both as a re-point and as anything else counts as left: the safe side."""
+    """(the keys planned as re-points, every key planned, None, audited), or (None, None, why,
+    True). A key the file lists both as a re-point and as anything else counts as left: the
+    safe side. `audited` is False only for a plan marked `"audited": false`, which the entry
+    scripts write when their plan could not audit; it approves nothing, whatever it lists."""
     try:
         with open(path, "rb") as fh:
             raw = fh.read()
     except OSError:
-        return None, None, "it could not be opened"
+        return None, None, "it could not be opened", True
     try:
         data, why = parse_json(raw.decode("utf-8"), "it")
     except UnicodeDecodeError:
         why = "not UTF-8"
-    foreign = (None, None, "it is not a plan this tool wrote")
+    foreign = (None, None, "it is not a plan this tool wrote", True)
     if why or not isinstance(data, dict) or data.get("tool") != "csa-mcp-registrations":
         return foreign
     findings = data.get("findings")
@@ -1415,7 +1424,9 @@ def load_approved(path):
         key = approval_key(fields[0], fields[1], project, fields[2], fields[3], fields[4])
         every.add(key)
         (repoint if f.get("action") == "re-point" else left).add(key)
-    return repoint - left, every, None
+    if data.get("audited") is False:
+        return set(), set(), None, False
+    return repoint - left, every, None, True
 
 
 class Change(object):
@@ -2221,9 +2232,9 @@ def apply(args):
             emit("row", row)
         repoint = {key_of(f) for f in findings if f.action == "re-point"}
         every = {key_of(f) for f in findings}
-        plan_why = None
+        plan_why, audited = None, True
     else:
-        repoint, every, plan_why = load_approved(args.approved)
+        repoint, every, plan_why, audited = load_approved(args.approved)
         if plan_why:
             emit("warn", f"the plan you agreed to ({tilde(args.approved)}) could not be read: "
                          f"{plan_why}; nothing is changed this run")
@@ -2246,7 +2257,8 @@ def apply(args):
         if plan_why:
             result = refused(change, R_NO_PLAN)
         elif key not in repoint:
-            result = refused(change, R_NOT_PLANNED if key in every else R_UNAPPROVED)
+            result = refused(change, R_NOT_PLANNED if key in every
+                             else R_UNAPPROVED if audited else R_NO_PREVIEW)
         elif standard_dead(change.command, SERVERS[f.reg.name], ctx):
             # Never launched: only its Python is probed, as the audit does.
             result = refused(change, R_NO_STANDARD + "; left as it is",

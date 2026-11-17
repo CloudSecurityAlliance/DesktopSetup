@@ -2159,6 +2159,8 @@ def windows_not_audited():
 
 # Verbatim from the plan, Task 2.
 R_UNAPPROVED = "found after you agreed to the plan; not changed — run again"
+R_NO_PREVIEW = ("found by the repair's own check, because the plan you agreed to could not audit "
+                "the registrations; not changed — run again")
 R_NO_STANDARD = "its standard binary is not installed yet"
 R_CHANGED = "changed while this ran; not written — run again"
 R_CODEX_LAYOUT = "its Codex entry is laid out in a way this cannot edit safely; left as it is"
@@ -2843,6 +2845,31 @@ def todo_printed_without_ledger():
         for client in ("Claude Code", "Claude Desktop", "Codex", "Gemini"):
             expect(f"Restart {client}" in a.infos, f"no info line for {client}: {a.infos}")
         expect(not w.ledger.exists(), "a ledger was written though none was set")
+
+
+@case
+def unaudited_plan_reason_is_honest():
+    """The entry scripts hand apply a plan marked `"audited": false` when theirs could not audit
+    (no Python, a fetch that failed). A dead entry apply then finds is said to be found by the
+    repair's own check, never "found after you agreed to the plan", since nothing was shown; and
+    it is not changed, whatever such a plan lists (final review of fc9614d)."""
+    with world() as w:
+        w.std("csa-zendesk")
+        w.claude(user={"csa-zendesk": reg(gone(w, "csa-zendesk"))})
+        r = w.run()
+        r.ok()
+        listed = json.loads(r.plan_text)
+        listed["audited"] = False  # and a re-point listed in it, which must still approve nothing
+        unaudited = w.tmp / "unaudited.json"
+        unaudited.write_text(json.dumps(listed), encoding="utf-8")
+        cfg = w.home / ".claude.json"
+        before = state(cfg)
+        a = w.apply(approved=unaudited)
+        a.ok()
+        expect(a.warned(R_NO_PREVIEW) and not a.warned(R_UNAPPROVED),
+               f"not the reason for a plan that could not audit: {a.warns}")
+        expect(state(cfg) == before and not a.oks, "a plan that could not audit approved a write")
+        expect([t for t in a.todo_titles() if R_NO_PREVIEW in t], f"no to-do: {a.todos}")
 
 
 @case
@@ -4341,6 +4368,107 @@ def token_files_untouched():
         expect(stats() == before, "a token file changed")
 
 
+# Runs the .py the way `python3 -I <script> ...` does, but with an audit hook in front that
+# records every `open` (builtin open, io.open and os.open all raise it) of the files named in
+# AUDIT_WATCHED. The record file is opened before the hook is added, and written with os.write,
+# so recording opens nothing.
+AUDIT_WRAPPER = r'''import os, runpy, sys
+watched = {os.path.realpath(p) for p in os.environ.pop("AUDIT_WATCHED").split(os.pathsep)}
+record = os.open(os.environ.pop("AUDIT_RECORD"), os.O_WRONLY | os.O_APPEND)
+def hook(event, args):
+    if event != "open" or not args or not isinstance(args[0], (str, bytes)):
+        return
+    try:
+        path = os.fsdecode(args[0])
+        if os.path.realpath(path) in watched:
+            os.write(record, ("opened " + path + "\n").encode("utf-8", "replace"))
+    except Exception:
+        pass
+sys.addaudithook(hook)
+script = sys.argv[1]
+sys.argv = sys.argv[1:]
+runpy.run_path(script, run_name="__main__")
+'''
+
+
+@case
+def token_file_never_opened():
+    """The .py never opens a token or credential file: not by its default path, and not when a
+    registration's env, and the installer's own, point CSA_ZENDESK_TOKEN_FILE and CSA_GW_TOKEN at
+    one. plan, apply (which re-points a registration carrying one) and verify --run each run under
+    an audit hook that records any open of those files. Stub servers only, which run as their own
+    processes, outside the hook (final review of fc9614d; the brief's first hand-checked claim)."""
+    with world() as w:
+        tokens = [w.home / ".config" / "csa-zendesk" / "tokens.json",
+                  w.tmp / "elsewhere" / "zendesk-token.json",
+                  w.tmp / "elsewhere" / "gw-token.json",
+                  w.home / ".csa_google_workspace" / "token.json"]
+        for t in tokens:
+            t.parent.mkdir(parents=True, exist_ok=True)
+            t.write_text('{"access_token": "fake-token-not-real"}', encoding="utf-8")
+            t.chmod(0o600)
+        w.extra_env.update({"CSA_ZENDESK_TOKEN_FILE": str(tokens[1]),
+                            "CSA_GW_TOKEN": str(tokens[2])})
+        w.std_server("csa-zendesk")
+        w.std_server("csa-google-workspace")
+        w.claude(user={
+            "csa-zendesk": reg(gone(w, "csa-zendesk"),
+                               env={"CSA_ZENDESK_TOKEN_FILE": str(tokens[1]), "K": SECRET_A}),
+            "csa-google-workspace": reg(std_bin(w, "csa-google-workspace"),
+                                        env={"CSA_GW_TOKEN": str(tokens[2])})})
+        record = w.tmp / "opened.log"
+
+        def hooked(argv, script=SCRIPT):
+            record.write_text("")
+            env = w.apply_env(True)
+            env.update(AUDIT_WATCHED=os.pathsep.join(str(t) for t in tokens),
+                       AUDIT_RECORD=str(record))
+            r = subprocess.run([sys.executable, "-I", "-c", AUDIT_WRAPPER, str(script)] + argv,
+                               env=env, cwd=str(w.tmp), capture_output=True, text=True,
+                               timeout=300)
+            return r, record.read_text()
+
+        # Control: the hook records an open, so an empty record means none happened.
+        opener = w.tmp / "opener.py"
+        opener.write_text(f"open({str(tokens[1])!r}, 'rb').close()\n", encoding="utf-8")
+        r, opened = hooked([], script=opener)
+        expect(r.returncode == 0 and str(tokens[1]) in opened,
+               f"control: the hook did not record an open: {opened!r} {r.stderr[-300:]}")
+
+        before = [state(t) for t in tokens]
+        if w.out.exists():
+            w.out.unlink()
+        steps = (("plan", ["plan", "--out", str(w.out), "--system-applications", str(w.apps)]),
+                 ("apply", w.apply_argv("plan", [])), ("verify --run", w.verify_argv(True, [])))
+        for what, argv in steps:
+            r, opened = hooked(argv)
+            expect(r.returncode == 0, f"{what} exited {r.returncode}: {r.stderr[-300:]}")
+            expect(opened == "", f"{what} opened a token file: {opened}")
+            if what == "apply":
+                expect([ln for ln in r.stdout.splitlines() if ln.startswith("ok\t")],
+                       f"apply re-pointed nothing, so it proved nothing: {r.stdout}")
+            if what == "verify --run":
+                expect(len([ln for ln in r.stdout.splitlines() if ln.startswith("ok\t")]) == 2,
+                       f"verify --run checked fewer than both servers: {r.stdout}")
+        expect([state(t) for t in tokens] == before, "a token file changed")
+
+
+@case
+def bare_name_desktop_never_launched():
+    """A bare-name Claude Desktop entry is never launched by verify --run, even when a binary of
+    that name, which would answer, is first on the installer's PATH: Desktop's own PATH differs
+    from machine to machine (A8, AI ruling 2026-11-13), so it is said to be not checked (final
+    review of fc9614d; the brief's claim 20)."""
+    with world() as w:
+        w.server(w.stubs / "csa-zendesk-mcp", name="bare-name-stub")  # on PATH; logs any start
+        w.desktop({"csa-zendesk": reg("csa-zendesk-mcp", env={"K": SECRET_A})})
+        a = w.verify()
+        a.ok()
+        expect(not w.starts(), f"a bare-name Desktop entry was launched: {w.starts()}")
+        expect([i for i in a.infos if i.endswith(R_DESKTOP_PATH)],
+               f"not said to be not checked: {a.infos}")
+
+
 @case
 def verify_held_by_default():
     with world() as w:
@@ -4818,9 +4946,13 @@ class Rig(object):
         e = dict(self.env)
         e["PATH"] = ":".join(str(p) for p in list(path_first) + self.path)
         e.update(env or {})
+        # SIGINT back to its default: a suite run as a `&` job or under nohup inherits it ignored,
+        # bash cannot undo an ignore it starts with, and a case's Ctrl-C would never land (final
+        # review of fc9614d).
         return subprocess.Popen([SHELL, str(prog)], stdin=subprocess.PIPE,
                                 stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=e,
-                                cwd=str(self.root), text=True, start_new_session=True)
+                                cwd=str(self.root), text=True, start_new_session=True,
+                                preexec_fn=lambda: signal.signal(signal.SIGINT, signal.SIG_DFL))
 
     def run(self, script, body, stdin="", env=None, timeout=60, path_first=(), **kw):
         p = self.start(script, body, env=env, path_first=path_first, **kw)
@@ -5255,8 +5387,8 @@ def wiring_py_failure_survives_set_e():
         except ValueError:
             agreed = None
         expect(Path(approved).name != "plan.json"
-               and agreed == {"tool": "csa-mcp-registrations", "findings": []},
-               f"{name}: apply was not handed a plan with no findings: {calls[1]}")
+               and agreed == {"tool": "csa-mcp-registrations", "audited": False, "findings": []},
+               f"{name}: apply was not handed a plan marked as not audited: {calls[1]}")
         expect(err.count("exited 2") == 2, f"{name}: the two failures were not said: {err}")
 
 
@@ -5452,6 +5584,42 @@ def wiring_log_lines_to_debug_log_only():
                f"{name}: a log line reached the debug log without the redactor")
         expect(rc == 0 and rc2 == 0 and not written,
                f"{name}: a log line was written with no debug log asked for")
+
+
+@case
+def wiring_no_value_reaches_the_screen_or_debug_log():
+    """End to end, with the real .py: a run under CSA_DEBUG audits a fixture HOME whose
+    registrations carry secret values, re-points the dead one and logs a skipped local entry,
+    and no value reaches the screen or the debug log, though the repaired config still holds
+    them (final review of fc9614d; the brief's second hand-checked claim)."""
+    for name in MAC_ENTRY:
+        with rig_dir() as t:
+            rig = Rig(t)
+            std = write_exec(rig.home / ".local" / "bin" / "csa-zendesk-mcp",
+                             f"#!{sys.executable}\nimport sys\nsys.exit(0)\n")
+            secrets_env = {"CSA_ZENDESK_API_TOKEN": SECRET_A, "CSA_ZD_ALLOWLIST_WRITE": SECRET_B}
+            cfg = rig.home / ".claude.json"
+            cfg.write_text(json.dumps({"mcpServers": {"csa-zendesk": reg(
+                rig.root / "gone" / "csa-zendesk-mcp", env=secrets_env)},
+                "projects": {str(rig.root / "no-such-project"): {"mcpServers": {
+                    "csa-skilljar": reg("/nowhere/csa-skilljar-mcp", env={"K": SECRET_C})}}}},
+                indent=2), encoding="utf-8")
+            cfg.chmod(0o600)
+            rc, out, err = rig.run(name, "csa_registrations_preview\nrepair_csa_registrations",
+                                   env={"CSA_REGISTRATIONS_PY": str(SCRIPT), "CSA_DEBUG": "1",
+                                        "CSA_LOG": str(rig.debug_log)}, timeout=180)
+            logged = rig.debug_log.read_text(encoding="utf-8") if rig.debug_log.exists() else ""
+            after = json.loads(cfg.read_text(encoding="utf-8"))["mcpServers"]["csa-zendesk"]
+        expect(rc == 0, f"{name}: exited {rc}: {err[-300:]}")
+        expect([ln for ln in out.split("\n") if "csa-zendesk" in ln and "re-point" in ln],
+               f"{name}: the plan showed no re-point, so the run proved little: {out}")
+        expect("OK csa-zendesk re-pointed" in out and after["command"] == str(std),
+               f"{name}: the dead entry was not re-pointed: {out} {after}")
+        expect("its project directory no longer exists" in logged,
+               f"{name}: no log line reached the debug log, so it proved little: {logged}")
+        for value in SECRETS:
+            expect(value not in out + err + logged, f"{name}: a value reached the screen or log")
+        expect(after["env"] == secrets_env, f"{name}: the repaired entry lost its settings")
 
 
 @case
@@ -5827,6 +5995,24 @@ MUTATIONS = [
      "        p.parse_args(given)\n"),
     ("wiring_real_py_passes_the_probe", "print --version through argparse, which wraps at COLUMNS",
      '    if given == ["--version"]:\n        return fixed_line(SCRIPT_VERSION)\n', ""),
+    # ── the final review of fc9614d ──
+    ("unaudited_plan_reason_is_honest", "approve what a plan that could not audit lists",
+     '    if data.get("audited") is False:\n        return set(), set(), None, False\n', ""),
+    ("unaudited_plan_reason_is_honest", "say 'after you agreed' when nothing was shown",
+     "                             else R_UNAPPROVED if audited else R_NO_PREVIEW)",
+     "                             else R_UNAPPROVED)"),
+    ("token_file_never_opened", "read the token file a registration's env names",
+     '            "token_keys": sorted(k for k in f.reg.env if k in TOKEN_PATH_KEYS),',
+     '            "token_keys": sorted(k for k in f.reg.env if k in TOKEN_PATH_KEYS\n'
+     '                                 and open(f.reg.env[k], "rb").close() is None),'),
+    ("bare_name_desktop_never_launched", "resolve a bare-name Desktop entry on the installer's PATH",
+     "INHERITS_PATH = (CLAUDE_CODE, CODEX, GEMINI)",
+     "INHERITS_PATH = (CLAUDE_CODE, DESKTOP, CODEX, GEMINI)"),
+    ("wiring_no_value_reaches_the_screen_or_debug_log", "put a registration's values in a log line",
+     '                    ctx.logs.append(f"{reg.label()}: its project directory no longer exists; "\n'
+     '                                    "skipped")',
+     '                    ctx.logs.append(f"{reg.label()}: its project directory no longer exists; "\n'
+     '                                    "skipped " + " ".join(reg.env.values()))'),
 ]
 
 # Task 4 Step 1's guards, each broken on purpose in the entry scripts (ADR-005): (the case that
@@ -5921,7 +6107,10 @@ WIRING_MUTATIONS = [
      "    # No plan file, so the repair acts on nothing it finds (repair_csa_registrations).\n"
      '    rm -f "$CSA_REG_DIR/plan.json"\n', "", MAC_ENTRY),
     ("wiring_py_failure_survives_set_e", "hand apply an empty file, not a plan with no findings",
-     "'{\"tool\": \"csa-mcp-registrations\", \"findings\": []}'", "''", MAC_ENTRY),
+     "'{\"tool\": \"csa-mcp-registrations\", \"audited\": false, \"findings\": []}'", "''",
+     MAC_ENTRY),
+    ("wiring_py_failure_survives_set_e", "hand apply a plan with no findings, not marked unaudited",
+     '"audited": false, "findings": []', '"findings": []', MAC_ENTRY),
     ("wiring_py_failure_survives_set_e", "say nothing when a step fails",
      " </dev/null || printf 'exit\\t%s\\n' \"$?\")", " </dev/null || true)", MAC_ENTRY),
     ("wiring_no_fixed_temp_path", "use one fixed directory name",

@@ -957,8 +957,10 @@ The measurements behind the figures and rulings below (M0–M7) are in
    `--run`. So it is behind the same `gh` gate, and every standard binary has been installed or
    rebuilt first. It finds the Python and checks the `.py` again, shows each `ok`, `info` and
    `warn` line as the `.py` prints it, and never fails the run. With no plan file (the audit was
-   skipped or failed), `apply` is handed a plan with no findings, so it reports and changes
-   nothing.
+   skipped or failed), `apply` is handed a plan marked `"audited": false` with no findings. That
+   plan approves nothing, so `apply` reports and changes nothing, and a dead entry it finds is
+   `found by the repair's own check, because the plan you agreed to could not audit the
+   registrations; not changed — run again`.
 4. **To-dos** go to `CSA_TODO_FILE`, which only the `*-ai-tools` installers set; the other
    scripts print them as `info` lines. The orders:
    - **10:** `Restart <client>` after a repair, `Quit Claude Desktop and run again`, and
@@ -1064,6 +1066,9 @@ name in Desktop's config is left `not checked`, never re-pointed.
   `found after you agreed to the plan; not changed — run again`,
   `the plan you agreed to left it as it was; not changed — run again`, or, when the plan file
   cannot be read, `not changed, because the plan you agreed to could not be read — run again`.
+  A plan marked `"audited": false`, which the entry scripts write when theirs could not audit,
+  approves nothing whatever it lists, and its reason is `found by the repair's own check, because
+  the plan you agreed to could not audit the registrations; not changed — run again`.
 - **Only when the standard binary runs.** Otherwise
   `its standard binary is not installed yet; left as it is`, with a to-do to run again once its
   setup has installed it.

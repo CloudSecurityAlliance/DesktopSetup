@@ -32,7 +32,7 @@
 
 set -euo pipefail
 
-SCRIPT_VERSION="2026-11-15T18:17Z"
+SCRIPT_VERSION="2026-11-17T15:41Z"
 
 # ── CSA plugin marketplaces ─────────────────────────────────────────
 # Plugin marketplaces to register with Claude Code. Each entry is an
@@ -2930,8 +2930,10 @@ repair_csa_registrations() {
     info "CSA MCP registrations: re-pointing what the plan showed, if anything (csa-mcp-registrations.py)"
     approved="$CSA_REG_DIR/plan.json"
     if [[ ! -f "$approved" ]]; then
+      # The preview could not audit, so nothing was shown to agree to: "audited": false makes
+      # apply approve nothing, and say why it found a dead entry only now.
       approved="$CSA_REG_DIR/plan-with-no-findings.json"
-      printf '%s\n' '{"tool": "csa-mcp-registrations", "findings": []}' > "$approved" 2>/dev/null || true
+      printf '%s\n' '{"tool": "csa-mcp-registrations", "audited": false, "findings": []}' > "$approved" 2>/dev/null || true
     fi
     for step in apply verify; do
       if [[ "$step" == apply ]]; then
