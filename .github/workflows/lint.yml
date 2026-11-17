@@ -250,6 +250,12 @@ jobs:
     # second; here neither is, and CSA_TEST_REQUIRE_REAL_UV turns a skip into a failure.
     name: venv on macOS (BSD mv, real uv)
     runs-on: macos-latest
+    # A hang fails here, with its log, rather than running to the 6-hour default. It took about
+    # 6 minutes at fc9614d, and tests/test_mcp_registrations.py also stops any one case at 120 s
+    # and names it (PR #201). This limit does not cover a job that never starts: on bfa2aa6 none
+    # did, twice, "not acquired by Runner of type hosted" for macOS arm64 capacity, and GitHub
+    # cancelled each after 15 minutes in the queue.
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
 

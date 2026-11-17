@@ -6152,6 +6152,22 @@ WIRING_MUTATIONS = [
 ]
 
 
+# Each case's bound, in seconds. A case that hangs fails fast and by name, and the run goes on,
+# rather than a CI job running to its limit with nothing to say where (PR #201). The slowest
+# case, wiring_interface_probe_bounded, took 20.7 s on Apple's Python 3.9 with no terminal.
+# CSA_TEST_CASE_TIMEOUT overrides it.
+CASE_TIMEOUT = int(os.environ.get("CSA_TEST_CASE_TIMEOUT") or 120)
+
+
+class CaseTimeout(BaseException):
+    """Raised by the per-case alarm. A BaseException, so no `except Exception` in a case or in
+    the code under test can swallow it."""
+
+
+def on_case_alarm(signum, frame):
+    raise CaseTimeout()
+
+
 def run_cases(only=None):
     if not SCRIPT.exists():
         print(f"FAIL  {SCRIPT.relative_to(ROOT) if ROOT in SCRIPT.parents else SCRIPT} does not exist")
@@ -6162,21 +6178,40 @@ def run_cases(only=None):
     if only and not selected:
         print(f"no case named {only}")
         return 1
-    for c in selected:
-        try:
-            c()
-            print(f"  ok    {c.__name__}")
-        except Skipped as e:
-            # Not a pass: named on every run, and counted apart from the passes.
-            skipped.append(c.__name__)
-            print(f"  SKIP  {c.__name__} ({e})")
-        except Failed as e:
-            failed.append(c.__name__)
-            print(f"  FAIL  {c.__name__}: {e}")
-        except Exception:
-            failed.append(c.__name__)
-            print(f"  FAIL  {c.__name__}: unexpected error")
-            print("        " + traceback.format_exc().replace("\n", "\n        "))
+    # SIGALRM ends a case that overruns, even one blocked in a wait or a read: a handler that
+    # raises is not retried past (PEP 475). Nothing under test uses SIGALRM.
+    previous = signal.signal(signal.SIGALRM, on_case_alarm)
+    try:
+        for c in selected:
+            # Its name first, on stderr and flushed, so a hang shows where it is even in a log
+            # that is cut off.
+            sys.stderr.write(f"  ...   {c.__name__}\n")
+            sys.stderr.flush()
+            started = time.monotonic()
+            try:
+                signal.alarm(CASE_TIMEOUT)
+                try:
+                    c()
+                finally:
+                    signal.alarm(0)
+                print(f"  ok    {c.__name__}  ({time.monotonic() - started:.1f}s)")
+            except CaseTimeout:
+                failed.append(c.__name__)
+                print(f"  FAIL  {c.__name__}: did not finish within {CASE_TIMEOUT}s, so it was "
+                      "stopped (CSA_TEST_CASE_TIMEOUT)")
+            except Skipped as e:
+                # Not a pass: named on every run, and counted apart from the passes.
+                skipped.append(c.__name__)
+                print(f"  SKIP  {c.__name__} ({e})")
+            except Failed as e:
+                failed.append(c.__name__)
+                print(f"  FAIL  {c.__name__}: {e}")
+            except Exception:
+                failed.append(c.__name__)
+                print(f"  FAIL  {c.__name__}: unexpected error")
+                print("        " + traceback.format_exc().replace("\n", "\n        "))
+    finally:
+        signal.signal(signal.SIGALRM, previous)
     print()
     if failed:
         print(f"FAILED: {len(failed)} of {len(selected)} case(s): {', '.join(failed)}")
@@ -6215,9 +6250,30 @@ def self_test():
         else:
             print(f"  ok    {what}: caught by {name}\n          {why[:150]}")
     ok = wiring_self_test() and ok
+    ok = case_timeout_self_test() and ok
     print()
     print("self-test " + ("passed" if ok else "FAILED"))
     return 0 if ok else 1
+
+
+def case_timeout_self_test():
+    """The per-case bound, broken on purpose: a case that takes about 10 s, run under a 2 s
+    bound, must fail by name within seconds, its name already on stderr before it started."""
+    print("\nthe runner's per-case bound\n")
+    name = "wiring_python_probe_bounded"
+    started = time.monotonic()
+    r = subprocess.run([sys.executable, str(Path(__file__).resolve()), "--only", name],
+                       env=dict(os.environ, CSA_TEST_CASE_TIMEOUT="2"), capture_output=True,
+                       text=True, timeout=120)
+    took = time.monotonic() - started
+    said = f"FAIL  {name}: did not finish within 2s" in r.stdout
+    named = f"...   {name}" in r.stderr
+    if r.returncode == 1 and said and named and took < 20:
+        print(f"  ok    a {name} past a 2 s bound failed by name in {took:.1f}s")
+        return True
+    print(f"  FAIL  the per-case bound: exit {r.returncode}, named {named}, said {said}, "
+          f"{took:.1f}s\n{r.stdout[-400:]}")
+    return False
 
 
 def wiring_self_test():
@@ -6259,6 +6315,9 @@ def main():
     if sys.platform == "win32":
         print("skipped: these fixtures need POSIX symlinks and /bin/sh (Windows: #184, Task 1W)")
         return 77
+    # A line at a time, even into a CI log's pipe: a run that is stopped keeps what it printed.
+    if hasattr(sys.stdout, "reconfigure"):
+        sys.stdout.reconfigure(line_buffering=True)
     if "--self-test" in sys.argv:
         return self_test()
     only = None
